@@ -66,7 +66,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      actions: write  # To upload artifacts
+      actions: write # To upload artifacts
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -85,7 +85,7 @@ jobs:
       - name: Generate initial baselines
         run: bun generate-baselines
         env:
-          CI: "true"
+          CI: 'true'
 
       - name: Run visual regression tests
         run: bun test:visual
