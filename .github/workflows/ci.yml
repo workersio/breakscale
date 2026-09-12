@@ -58,6 +58,46 @@ jobs:
       - name: Format
         run: bun run format:check
 
+  # Visual regression tests. Must run on every OS to catch renderer or
+  # CSS-specific layout bugs. These tests produce screenshots that are
+  # uploaded as artifacts for review on PRs.
+  visual:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write  # To upload artifacts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: bunx playwright install --with-deps chromium
+
+      - name: Generate initial baselines
+        run: bun generate-baselines
+        env:
+          CI: "true"
+
+      - name: Run visual regression tests
+        run: bun test:visual
+
+      - name: Upload visual regression baselines
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-regression-baselines
+          path: playwright-baselines/
+          retention-days: 7
+
   # The suite and the build run on every OS the project supports. Linux alone
   # missed a path bug that broke the whole suite on Windows (#16): the code the
   # matrix actually exercises differently is drive letters and path separators.

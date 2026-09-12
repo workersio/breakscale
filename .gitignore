@@ -30,3 +30,7 @@ worker/.wrangler/
 extension/media/
 extension/dist/
 extension/*.vsix
+
+# Playwright test artifacts and baselines
+.playwright/
+playwright-baselines/
