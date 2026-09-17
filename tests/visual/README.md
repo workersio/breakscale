@@ -1,92 +1,111 @@
-# Visual Regression Tests
+# Visual regression tests
 
-This directory contains visual regression tests using Playwright to ensure UI elements render correctly on the canvas.
+Screenshot comparison over the three examples whose layout keeps regressing,
+in both themes. Catches the class of bug the 800-odd unit tests cannot see:
+a panel rendering in the wrong place, annotation plates colliding in stacked
+rows, a scrollbar squaring off a corner.
 
-## Tests focused on layout geometry bugs:
+## What is covered
 
-- **Floating panels clearing islands** - panels shouldn't overlap canvas islands
-- **Annotation plates in stacked rows** - plates should stack without overlapping
-- **Scrollbar corner geometry** - scrollbars shouldn't break panel corners
+| Example       | Why this one                                                                                              |
+| ------------- | --------------------------------------------------------------------------------------------------------- |
+| single-server | The three-node baseline: floating panels and the annotation note must clear the canvas islands.           |
+| cache-aside   | Four nodes with side panels open: scrollbar corner geometry.                                              |
+| multi-region  | The only example with stacked section frames: catches two label plates colliding (the lane-gap geometry). |
 
-## Running the tests
+Each runs light and dark. The dark palette is generated and has its own
+failure modes, so it is tested rather than assumed.
 
-### Run all visual regression tests
+## Determinism
 
-```bash
-bun test:visual
+A pixel diff is only meaningful if the pixels would otherwise be identical.
+Every test boots:
+
+```
+/?preset=<id>&theme=<light|dark>&paused=1&warmup=3000
 ```
 
-### Update baseline screenshots
+which loads the example, advances the seeded engine exactly 3.0 simulated
+seconds in fixed steps before first paint, and then leaves it paused. Same
+URL, same rendered frame. The tests also assert before diffing: the on-canvas
+ledger must show the expected component and connection counts, and the clock
+must read exactly `3.0s`. If the preset did not load or the sim is running,
+the test fails with a readable message instead of an opaque pixel diff.
 
-If you've made intentional visual changes or need to refresh baselines:
+## Running
+
+```bash
+bun test:visual            # run (starts the dev server itself)
+bun test:visual:update     # refresh baselines
+bun test:visual:ui         # interactive mode
+```
+
+On failure, `test-results/` holds the actual, expected and diff images plus a
+Playwright trace; the HTML report is in `playwright-report/`. Both are
+gitignored, and CI uploads them as artifacts when the job fails.
+
+## Baselines are committed, per platform
+
+Playwright suffixes snapshot names with the platform, so `light-single-server-chromium-win32.png`
+and `light-single-server-chromium-linux.png` are two independent baselines in
+one folder. Both sets are committed: a change only ever refreshes the
+platform you ran it on, which keeps local runs honest and keeps the other
+platform's reference stable.
+
+### Refreshing baselines
 
 ```bash
 bun test:visual:update
 ```
 
-This will capture new screenshots and save them as baselines. The next run will compare against these new baselines.
+Then commit the changed PNGs. Refresh ONLY the platform you actually ran on,
+and expect the other platform's CI leg to compare against its own unchanged
+baselines. A baseline refresh should be its own commit, never mixed with a
+code change: a reviewer must be able to tell a layout change from a rebase
+of reference pixels.
 
-### UI mode (interactive view)
+### Adding a new platform leg (e.g. macOS)
 
-Run tests with a visual interface to see exactly what's failing:
+Commit a set of `-darwin` baselines generated on that platform, then add the
+Playwright project for it in CI. Linux is the leg CI runs; Windows baselines
+exist because the primary maintainer develops there.
 
-```bash
-bun test:visual:ui
-```
+### Generating Linux baselines from Windows (WSL2)
 
-### Bisect failed tests
+The Linux baselines have to come from a Linux renderer. On a Windows machine
+with WSL2, three things bite; all three were hit building the committed set.
 
-Use Playwright's built-in bisect to find which commit broke the visual test:
+1. WSL's PATH inherits Windows programs, so `bun` inside WSL resolves to the
+   Windows bun.exe and any "Linux" run silently uses the Windows node
+   modules. Pin the PATH:
+   `export PATH=/usr/local/bin:/usr/bin:/bin`.
+2. bun installs only the Windows native bindings, so vite cannot start in
+   WSL (`Cannot find native binding ... @rolldown/binding-linux-x64-gnu`).
+   Drop the missing binding in by hand:
 
-```bash
-bun test:visual:bisect
-```
+   ```bash
+   curl -fSL -o /tmp/binding.tgz \
+     https://registry.npmjs.org/@rolldown/binding-linux-x64-gnu/-/binding-linux-x64-gnu-<rolldown version>.tgz
+   mkdir -p node_modules/@rolldown/binding-linux-x64-gnu
+   tar xzf /tmp/binding.tgz -C node_modules/@rolldown/binding-linux-x64-gnu --strip-components=1
+   ```
 
-### Generate initial baselines
+3. Without sudo, `playwright install` cannot apt-install chromium's runtime
+   libraries. Download and unpack them as your user, then point
+   `LD_LIBRARY_PATH` at them:
 
-Capture screenshots from scratch for a clean baseline:
+   ```bash
+   mkdir -p ~/debs ~/libs && cd ~/debs
+   apt-get download libnspr4 libnss3 libasound2t64
+   for f in *.deb; do dpkg -x "$f" ~/libs; done
+   ```
 
-```bash
-bun generate-baselines
-```
-
-This runs directly against the dev server at http://localhost:5173 and saves screenshots to `playwright-baselines/`.
-
-## What are baselines?
-
-**Baseline images** are the reference screenshots stored in `playwright-baselines/`. They represent what "correct" rendering looks like.
-
-On each test run play:
-
-1. The test opens the page at the defined viewport (1920×1080)
-2. Takes a screenshot
-3. Compares it pixel-by-pixel to the corresponding baseline
-4. If the difference exceeds `threshold` (currently 15%), the test FAILS
-
-## Threshold and tolerance
-
-The visual regression uses:
-
-- **Threshold**: 15% maximum pixel difference
-- **Max diff pixels**: 5000 (arbitrary soft cap for noise)
-- **Animations disabled**: Screenshots are captured with CSS animations turned off
-
-This handles:
-
-- Subtle animation micro-adjustments
-- Antialiasing differences between platforms
-- Small lighting changes in dark mode shaders
-
-## CI integration
-
-These tests run on PRs. If any visual regression fails:
-
-1. The test suite fails
-2. GitHub Actions shows the visual comparison
-3. Developers must approve the visual change or fix the rendering bug
-
-To disable the automated failure:
+Then, in one WSL session (the server dies with it otherwise):
 
 ```bash
-# In a PR, comment "visual regression tests" to skip
+export PATH=/usr/local/bin:/usr/bin:/bin
+export LD_LIBRARY_PATH=$HOME/libs/usr/lib/x86_64-linux-gnu
+node node_modules/vite/bin/vite.js --port 5173 --strictPort &
+node node_modules/@playwright/test/cli.js test
+git add tests/visual/layout.test.ts-snapshots/*-linux.png
 ```
