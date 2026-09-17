@@ -114,6 +114,9 @@ import { usePathProgress } from './learn/pathProgress';
 import { Tour } from './learn/Tour';
 import { useTour } from './learn/useTour';
 import { togglePreference, usePreference } from './content/preferences';
+import type { ThemeChoice } from './content/preferences';
+import { EMPTY_BOOT_PARAMS, parseBootParams } from './urlParams';
+import type { BootParams } from './urlParams';
 import { Settings } from './components/Settings';
 import { MainMenu } from './components/MainMenu';
 import { Designs } from './components/Designs';
@@ -142,6 +145,14 @@ import './App.css';
  * ------------------------------------------------------------------ */
 
 const STORAGE_KEY = 'breakscale.session.v1';
+
+/**
+ * Fixed step for the `?warmup=` boot advances. One simulated frame, so the
+ * engine crosses the warmup in the same granularity it would have run at
+ * live, and a deterministic seed replays identically at any dt summing to
+ * the same total.
+ */
+const WARMUP_STEP_MS = 1000 / 60;
 
 /* ------------------------------------------------------------------ *
  * Layout persistence
@@ -733,6 +744,27 @@ interface Boot {
   notice: string | null;
 }
 
+/** What URL boot parameters a read gives, or none when there is no DOM
+ * (a test importing the app) or the location object is a stub. */
+function readBootParams(): BootParams {
+  try {
+    return parseBootParams(window.location.search, window.location.hash);
+  } catch {
+    return EMPTY_BOOT_PARAMS;
+  }
+}
+
+/** A session set to the named example. Deep copied: presets are module-level
+ * constants and must never be mutated by editing the loaded system. The id
+ * is known to exist, because parseBootParams only returns ids matched against
+ * PRESETS; the fall-back is for the impossible miss alone. */
+function presetSessionFor(id: string): Session {
+  const preset = PRESETS.find((p) => p.id === id);
+  if (!preset) return loadSession();
+  const topology = structuredClone(preset.topology);
+  return { topology, rps: clientRps(topology), presetId: preset.id };
+}
+
 /**
  * Choose the workspace to open.
  *
@@ -765,6 +797,22 @@ function bootWorkspace(): Boot {
   const id = linked && challengeById(linked) ? linked : store.active;
   const challenge = id ? challengeById(id) : undefined;
   if (!challenge) {
+    // A ?preset= deep link names a specific example to open: it replaces
+    // the whole stored design, exactly what clicking the example in the
+    // palette does, rather than only relabelling the last session. It
+    // loses to a share link and to a challenge route, which carry a more
+    // specific thing to open than "show me an example", and it does not
+    // reach inside a brief that a reopening of the app would resume.
+    const link = readBootParams();
+    if (link.presetId !== null && !id) {
+      return {
+        session: presetSessionFor(link.presetId),
+        challengeId: null,
+        aside: null,
+        store: withActive(store, null),
+        notice: null,
+      };
+    }
     return {
       session: own,
       challengeId: null,
@@ -798,10 +846,41 @@ function bootWorkspace(): Boot {
  * ------------------------------------------------------------------ */
 
 export default function App() {
-  // Read storage once, before the first paint, so the app never flashes a
-  // preset and then swaps to the restored session.
+  /*
+   * Deep-link parameters (?preset, ?theme, ?paused, ?warmup), parsed once
+   * before the first paint alongside the stored session. A preset parameter
+   * replaces the whole stored design — exactly what clicking the example in
+   * the palette does — rather than only relabelling whatever session was
+   * last on screen, which is what made /?preset=load-balanced show three
+   * nodes and no load balancer.
+   */
+  const [params] = useState(() => {
+    try {
+      return parseBootParams(window.location.search, window.location.hash);
+    } catch {
+      // No DOM (a test importing App) or a locked-down location object:
+      // boot from storage alone, like any plain visit.
+      return EMPTY_BOOT_PARAMS;
+    }
+  });
+
   const [boot] = useState(bootWorkspace);
   const initial = boot.session;
+
+  /**
+   * "The URL named an example and the reader has not edited it yet."
+   *
+   * On the same policy as a share link below, the session write is held
+   * while this is true: opening /?preset=netflix must not silently replace
+   * the reader's own saved design before they have touched anything.
+   * Released by the first history entry, exactly like sharePending.
+   *
+   * Not armed inside a brief: there the canvas is the brief's and saving
+   * goes to the attempt store; the hold protects the reader's own design.
+   */
+  const [urlPreset, setUrlPreset] = useState(
+    () => params.presetId !== null && boot.challengeId === null,
+  );
 
   /**
    * "A share link is on the URL and has not been dealt with yet."
@@ -811,6 +890,10 @@ export default function App() {
    * actually change something on the shared one, which is the whole of the
    * read-only promise this feature makes.
    */
+  /* A share hash outranks a preset param when a URL carries both: the share
+     payload is the more specific thing to open. The async decode below
+     overwrites the synchronously loaded preset when it lands, so both flags
+     start true and the persistence hold covers either. */
   const [sharePending, setSharePending] = useState(shareHashPresent);
 
   /**
@@ -841,7 +924,9 @@ export default function App() {
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(
     () => new Set<string>(),
   );
-  const [running, setRunning] = useState(true);
+  // `?paused=1` boots frozen. The screenshot suite needs a frame that does
+  // not move between load and capture; a human reads it as a paused player.
+  const [running, setRunning] = useState(!params.paused);
 
   /**
    * The glossary side sheet.
@@ -851,10 +936,22 @@ export default function App() {
    * rather than resuming wherever the last "see also" link happened to go.
    */
   /* The theme is applied to <html>, which is outside React, so this is a
-     genuine external-system synchronisation rather than derived state. */
+     genuine external-system synchronisation rather than derived state.
+
+     A `theme` boot parameter is a one-shot override for this page view: it
+     wins on mount and is then dropped the moment the reader picks a theme
+     in Settings, which persists their choice as normal. It therefore never
+     writes the stored preference, and a reload without the parameter boots
+     the reader's own theme. `#theme=` is parsed from the hash, which share
+     payloads (d1./d2.) cannot collide with: they carry no '=' at all. */
   const themeChoice = usePreference('theme');
-  useEffect(() => {
-    applyTheme(themeChoice);
+  const themeOverrideRef = useRef<ThemeChoice | null>(params.theme);
+  const lastThemeChoiceRef = useRef(themeChoice);
+
+  useLayoutEffect(() => {
+    if (lastThemeChoiceRef.current !== themeChoice) themeOverrideRef.current = null;
+    lastThemeChoiceRef.current = themeChoice;
+    applyTheme(themeOverrideRef.current ?? themeChoice);
   }, [themeChoice]);
   const [glossaryOpen, setGlossaryOpen] = useState(false);
   const [glossaryFocusId, setGlossaryFocusId] = useState<string | undefined>(undefined);
@@ -1210,7 +1307,19 @@ export default function App() {
    * value is never replaced, so it behaves as a stable instance —
    * StrictMode's double render reuses the same engine.
    */
-  const [engine] = useState(() => new Engine(initial.topology));
+  const [engine] = useState(() => {
+    const e = new Engine(initial.topology);
+    /* `?warmup=` advances the simulation deterministically: fixed-size steps
+       from the engine's own seed, no wall clock involved, so a deep link
+       lands on a busy-but-stable frame. Same URL, same frame — the
+       screenshot suite is built on this. */
+    if (params.warmupMs > 0) {
+      const steps = Math.ceil(params.warmupMs / WARMUP_STEP_MS);
+      const stepMs = params.warmupMs / steps;
+      for (let i = 0; i < steps; i += 1) e.advance(stepMs);
+    }
+    return e;
+  });
 
   /**
    * Seeded from the engine's initial state rather than set by an effect, so
@@ -1344,8 +1453,9 @@ export default function App() {
   useEffect(() => {
     // A share link is still being decoded, or has just been opened and not
     // yet edited. Writing here would overwrite the recipient's own saved
-    // design with someone else's before they had touched anything.
-    if (sharePending && challengeId === null) return;
+    // design with someone else's before they had touched anything. A URL
+    // preset (?preset=...) holds the write on the same policy.
+    if ((sharePending || urlPreset) && challengeId === null) return;
     // Debounced: dragging a node or a slider must not write on every frame.
     // Between a change and the write, the work genuinely is not saved yet,
     // and the indicator says so rather than reassuring early.
@@ -1359,7 +1469,7 @@ export default function App() {
       setSaveState('saved');
     }, 400);
     return () => window.clearTimeout(id);
-  }, [topology, rps, presetId, sharePending, challengeId, updateStore]);
+  }, [topology, rps, presetId, sharePending, challengeId, urlPreset, updateStore]);
 
   /* ---------------- undo / redo ---------------- */
 
@@ -1378,10 +1488,13 @@ export default function App() {
           setHistVersion((v) => v + 1);
           // An entry landing is the definition of "the reader changed
           // something", so it is also the moment a design opened from a
-          // share link stops being someone else's and starts being theirs.
-          // Saving resumes from here; see sharePending. An Undo with
-          // nothing to undo changed nothing, so it must not.
-          if (edited) setSharePending((p) => (p ? false : p));
+          // share link or a URL preset stops being someone else's and
+          // starts being theirs. Saving resumes from here; see both flags.
+          // An Undo with nothing to undo changed nothing, so it must not.
+          if (edited) {
+            setSharePending((p) => (p ? false : p));
+            setUrlPreset(false);
+          }
         },
       }),
   );

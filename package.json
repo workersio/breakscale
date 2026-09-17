@@ -18,11 +18,9 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc -b --noEmit",
     "prepare": "husky",
-    "test:visual": "bunx playwright test",
-    "test:visual:update": "bunx playwright test --update-snapshots",
-    "test:visual:ui": "bunx playwright test --ui",
-    "test:visual:bisect": "bunx playwright test --bisect",
-    "generate-baselines": "bun tests/visual/setup.ts"
+    "test:visual": "playwright test",
+    "test:visual:update": "playwright test --update-snapshots",
+    "test:visual:ui": "playwright test --ui"
   },
   "dependencies": {
     "@vercel/analytics": "^2.0.1",
