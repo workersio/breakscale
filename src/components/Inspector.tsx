@@ -2447,140 +2447,6 @@ function AutoscalerPanel({ stats }: { stats: NodeStats }) {
 }
 
 /**
- * Per-unit truth for the kinds that are genuinely several things.
- *
- * The headline is the SPREAD, not the mean, and for a shard that is the whole
- * lesson: measured at hotKeyFraction 0.85 across 8 partitions, the hottest
- * sat at 100% while the node mean read 17%. A student reading only the mean
- * concludes there is plenty of headroom at the exact moment one partition is
- * shedding. Printing hottest and coldest side by side makes the gap
- * unmissable.
- */
-/**
- * The replica set's split between the primary and the read pool.
- *
- * Both of its signals are noisy: stale reads come and go with every lagging
- * read, and the primary hovers around the bottleneck threshold. So nothing
- * here is added or removed as they change. The stale-read row always shows
- * (0% is a real reading), and the two hints share one slot sized to the
- * taller of them, like the queue hint. When both apply, the bottleneck
- * warning wins: the stale share is still on the row above it.
- */
-function ReplicaSetSection({ per, stats }: { per: number[]; stats: NodeStats }) {
-  // Index 0 is the primary and reports the WRITE pool; the rest share the
-  // read pool. Averaging them together is what hides a write bottleneck.
-  const primary = per[0] ?? 0;
-  const reads = per.slice(1);
-  const readAvg = reads.length ? reads.reduce((a, b) => a + b, 0) / reads.length : 0;
-  // Lingering keeps the slot from flicking between messages, not just from
-  // moving: a hint swaps only after its signal has settled.
-  const writeBound = useLingering(primary - readAvg > 0.4);
-  const stale = useLingering(stats.staleReadRate > 0);
-  const hint = writeBound ? 'write-bound' : stale ? 'stale' : null;
-  return (
-    <Section title="Across the set">
-      <div className="ins-stats">
-        <StatRow
-          label="Primary (writes)"
-          value={formatPct(primary)}
-          tone={toneClass(healthOfLoad(primary))}
-        />
-        <StatRow
-          label="Read replicas"
-          term="read-replica"
-          value={formatCount(reads.length)}
-        />
-        <StatRow
-          label="Read replicas, average"
-          value={formatPct(readAvg)}
-          tone={toneClass(healthOfLoad(readAvg))}
-        />
-        <StatRow
-          label="Reads served stale"
-          term="stale-read"
-          value={formatPct(stats.staleReadRate)}
-          tone={toneClass(healthOfErr(stats.staleReadRate))}
-        />
-      </div>
-      <div className="ins-hint-stack">
-        <p className="ins-hint is-warn" data-active={hint === 'write-bound'}>
-          The primary is the bottleneck, not the replicas. Adding more read replicas
-          will not help; every write still goes through the one primary.
-        </p>
-        <p className="ins-hint" data-active={hint === 'stale'}>
-          Some reads are answered by a replica that has not caught up with the latest
-          write yet. Lower the replication lag to reduce this.
-        </p>
-      </div>
-    </Section>
-  );
-}
-
-function UnitsPanel({ node, stats }: { node: SimNode; stats: NodeStats }) {
-  const per = stats.perInstance;
-  if (!per || per.length === 0) return null;
-
-  if (node.kind === 'shard') {
-    const hot = stats.maxShardUtilization;
-    const cold = stats.minShardUtilization;
-    // A hot key is not "one shard is busier"; it is one shard pinned while
-    // the rest idle. The gap is the signature, so it is named as one.
-    const skewed = hot - cold > 0.5;
-    return (
-      <Section title="Across the partitions">
-        <div className="ins-stats">
-          <StatRow label="Partitions" term="shard" value={formatCount(per.length)} />
-          <StatRow
-            label="Busiest one"
-            value={formatPct(hot)}
-            tone={toneClass(healthOfLoad(hot))}
-          />
-          <StatRow label="Quietest one" value={formatPct(cold)} />
-          <StatRow label="Average" value={formatPct(stats.utilization)} />
-        </div>
-        {skewed && (
-          <p className="ins-hint is-warn">
-            Badly uneven. One partition is doing most of the work while the others sit
-            idle. Adding shards will not help until the keys spread out.
-          </p>
-        )}
-      </Section>
-    );
-  }
-
-  if (node.kind === 'replica') return <ReplicaSetSection per={per} stats={stats} />;
-
-  // service / worker / db / cache / lb / cdn: interchangeable machines.
-  const booting = stats.instancesPending ?? 0;
-  if (per.length <= 1 && booting === 0) return null;
-  return (
-    <Section title="The fleet">
-      <div className="ins-stats">
-        <StatRow label="Instances serving" value={formatCount(per.length)} />
-        {booting > 0 && (
-          <StatRow label="Booting now" value={formatCount(booting)} tone="is-warn" />
-        )}
-      </div>
-      {booting > 0 && (
-        <p className="ins-hint is-warn">
-          These are not serving traffic yet. Requests can still fail while they boot;
-          that gap is why capacity always lags a spike.
-        </p>
-      )}
-    </Section>
-  );
-}
-
-/**
- * A queue's backlog against the limit it sheds at.
- *
- * A queue reports zero utilisation by construction — it holds work, it does
- * not serve it — so the standard busy-meter is pinned empty while the backlog
- * runs away. Measured on async-workers at 2.5x: depth climbed 369 -> 946 ->
- * 2478 with utilisation at 0.00 throughout. Depth against limit is the only
- * reading that moves.
- */
-/**
  * How long a calmer state must hold before a hint reflecting a worse one
  * changes. Long enough to ride out a signal that flips on every 10Hz
  * snapshot, short enough that a hint does not outstay what it describes.
@@ -2648,6 +2514,140 @@ function useQueueHint(
   return escalating ? { state, shedRate } : held;
 }
 
+/**
+ * The replica set's split between the primary and the read pool.
+ *
+ * Both of its signals are noisy: stale reads come and go with every lagging
+ * read, and the primary hovers around the bottleneck threshold. So nothing
+ * here is added or removed as they change. The stale-read row always shows
+ * (0% is a real reading), and the two hints share one slot sized to the
+ * taller of them, like the queue hint. When both apply, the bottleneck
+ * warning wins: the stale share is still on the row above it.
+ */
+function ReplicaSetSection({ per, stats }: { per: number[]; stats: NodeStats }) {
+  // Index 0 is the primary and reports the WRITE pool; the rest share the
+  // read pool. Averaging them together is what hides a write bottleneck.
+  const primary = per[0] ?? 0;
+  const reads = per.slice(1);
+  const readAvg = reads.length ? reads.reduce((a, b) => a + b, 0) / reads.length : 0;
+  // Lingering keeps the slot from flicking between messages, not just from
+  // moving: a hint swaps only after its signal has settled.
+  const writeBound = useLingering(primary - readAvg > 0.4);
+  const stale = useLingering(stats.staleReadRate > 0);
+  const hint = writeBound ? 'write-bound' : stale ? 'stale' : null;
+  return (
+    <Section title="Across the set">
+      <div className="ins-stats">
+        <StatRow
+          label="Primary (writes)"
+          value={formatPct(primary)}
+          tone={toneClass(healthOfLoad(primary))}
+        />
+        <StatRow
+          label="Read replicas"
+          term="read-replica"
+          value={formatCount(reads.length)}
+        />
+        <StatRow
+          label="Read replicas, average"
+          value={formatPct(readAvg)}
+          tone={toneClass(healthOfLoad(readAvg))}
+        />
+        <StatRow
+          label="Reads served stale"
+          term="stale-read"
+          value={formatPct(stats.staleReadRate)}
+          tone={toneClass(healthOfErr(stats.staleReadRate))}
+        />
+      </div>
+      <div className="ins-hint-stack">
+        <p className="ins-hint is-warn" data-active={hint === 'write-bound'}>
+          The primary is the bottleneck, not the replicas. Adding more read replicas
+          will not help; every write still goes through the one primary.
+        </p>
+        <p className="ins-hint" data-active={hint === 'stale'}>
+          Some reads are answered by a replica that has not caught up with the latest
+          write yet. Lower the replication lag to reduce this.
+        </p>
+      </div>
+    </Section>
+  );
+}
+
+/**
+ * Per-unit truth for the kinds that are genuinely several things.
+ *
+ * The headline is the SPREAD, not the mean, and for a shard that is the whole
+ * lesson: measured at hotKeyFraction 0.85 across 8 partitions, the hottest
+ * sat at 100% while the node mean read 17%. A student reading only the mean
+ * concludes there is plenty of headroom at the exact moment one partition is
+ * shedding. Printing hottest and coldest side by side makes the gap
+ * unmissable.
+ */
+function UnitsPanel({ node, stats }: { node: SimNode; stats: NodeStats }) {
+  const per = stats.perInstance;
+  if (!per || per.length === 0) return null;
+
+  if (node.kind === 'shard') {
+    const hot = stats.maxShardUtilization;
+    const cold = stats.minShardUtilization;
+    // A hot key is not "one shard is busier"; it is one shard pinned while
+    // the rest idle. The gap is the signature, so it is named as one.
+    const skewed = hot - cold > 0.5;
+    return (
+      <Section title="Across the partitions">
+        <div className="ins-stats">
+          <StatRow label="Partitions" term="shard" value={formatCount(per.length)} />
+          <StatRow
+            label="Busiest one"
+            value={formatPct(hot)}
+            tone={toneClass(healthOfLoad(hot))}
+          />
+          <StatRow label="Quietest one" value={formatPct(cold)} />
+          <StatRow label="Average" value={formatPct(stats.utilization)} />
+        </div>
+        {skewed && (
+          <p className="ins-hint is-warn">
+            Badly uneven. One partition is doing most of the work while the others sit
+            idle. Adding shards will not help until the keys spread out.
+          </p>
+        )}
+      </Section>
+    );
+  }
+
+  if (node.kind === 'replica') return <ReplicaSetSection per={per} stats={stats} />;
+
+  // service / worker / db / cache / lb / cdn: interchangeable machines.
+  const booting = stats.instancesPending ?? 0;
+  if (per.length <= 1 && booting === 0) return null;
+  return (
+    <Section title="The fleet">
+      <div className="ins-stats">
+        <StatRow label="Instances serving" value={formatCount(per.length)} />
+        {booting > 0 && (
+          <StatRow label="Booting now" value={formatCount(booting)} tone="is-warn" />
+        )}
+      </div>
+      {booting > 0 && (
+        <p className="ins-hint is-warn">
+          These are not serving traffic yet. Requests can still fail while they boot;
+          that gap is why capacity always lags a spike.
+        </p>
+      )}
+    </Section>
+  );
+}
+
+/**
+ * A queue's backlog against the limit it sheds at.
+ *
+ * A queue reports zero utilisation by construction — it holds work, it does
+ * not serve it — so the standard busy-meter is pinned empty while the backlog
+ * runs away. Measured on async-workers at 2.5x: depth climbed 369 -> 946 ->
+ * 2478 with utilisation at 0.00 throughout. Depth against limit is the only
+ * reading that moves.
+ */
 function QueuePanel({ stats }: { stats: NodeStats }) {
   const limit = stats.queueLimit > 0 ? stats.queueLimit : 1;
   const depth = stats.queued;
