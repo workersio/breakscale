@@ -1,4 +1,4 @@
-import { useCallback, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 /*
  * Transport glyphs. The top-level entry, not the per-icon deep paths the
@@ -2456,6 +2456,66 @@ function AutoscalerPanel({ stats }: { stats: NodeStats }) {
  * shedding. Printing hottest and coldest side by side makes the gap
  * unmissable.
  */
+/**
+ * The replica set's split between the primary and the read pool.
+ *
+ * Both of its signals are noisy: stale reads come and go with every lagging
+ * read, and the primary hovers around the bottleneck threshold. So nothing
+ * here is added or removed as they change. The stale-read row always shows
+ * (0% is a real reading), and the two hints share one slot sized to the
+ * taller of them, like the queue hint. When both apply, the bottleneck
+ * warning wins: the stale share is still on the row above it.
+ */
+function ReplicaSetSection({ per, stats }: { per: number[]; stats: NodeStats }) {
+  // Index 0 is the primary and reports the WRITE pool; the rest share the
+  // read pool. Averaging them together is what hides a write bottleneck.
+  const primary = per[0] ?? 0;
+  const reads = per.slice(1);
+  const readAvg = reads.length ? reads.reduce((a, b) => a + b, 0) / reads.length : 0;
+  // Lingering keeps the slot from flicking between messages, not just from
+  // moving: a hint swaps only after its signal has settled.
+  const writeBound = useLingering(primary - readAvg > 0.4);
+  const stale = useLingering(stats.staleReadRate > 0);
+  const hint = writeBound ? 'write-bound' : stale ? 'stale' : null;
+  return (
+    <Section title="Across the set">
+      <div className="ins-stats">
+        <StatRow
+          label="Primary (writes)"
+          value={formatPct(primary)}
+          tone={toneClass(healthOfLoad(primary))}
+        />
+        <StatRow
+          label="Read replicas"
+          term="read-replica"
+          value={formatCount(reads.length)}
+        />
+        <StatRow
+          label="Read replicas, average"
+          value={formatPct(readAvg)}
+          tone={toneClass(healthOfLoad(readAvg))}
+        />
+        <StatRow
+          label="Reads served stale"
+          term="stale-read"
+          value={formatPct(stats.staleReadRate)}
+          tone={toneClass(healthOfErr(stats.staleReadRate))}
+        />
+      </div>
+      <div className="ins-hint-stack">
+        <p className="ins-hint is-warn" data-active={hint === 'write-bound'}>
+          The primary is the bottleneck, not the replicas. Adding more read replicas
+          will not help; every write still goes through the one primary.
+        </p>
+        <p className="ins-hint" data-active={hint === 'stale'}>
+          Some reads are answered by a replica that has not caught up with the latest
+          write yet. Lower the replication lag to reduce this.
+        </p>
+      </div>
+    </Section>
+  );
+}
+
 function UnitsPanel({ node, stats }: { node: SimNode; stats: NodeStats }) {
   const per = stats.perInstance;
   if (!per || per.length === 0) return null;
@@ -2488,55 +2548,7 @@ function UnitsPanel({ node, stats }: { node: SimNode; stats: NodeStats }) {
     );
   }
 
-  if (node.kind === 'replica') {
-    // Index 0 is the primary and reports the WRITE pool; the rest share the
-    // read pool. Averaging them together is what hides a write bottleneck.
-    const primary = per[0] ?? 0;
-    const reads = per.slice(1);
-    const readAvg = reads.length ? reads.reduce((a, b) => a + b, 0) / reads.length : 0;
-    const writeBound = primary - readAvg > 0.4;
-    return (
-      <Section title="Across the set">
-        <div className="ins-stats">
-          <StatRow
-            label="Primary (writes)"
-            value={formatPct(primary)}
-            tone={toneClass(healthOfLoad(primary))}
-          />
-          <StatRow
-            label="Read replicas"
-            term="read-replica"
-            value={formatCount(reads.length)}
-          />
-          <StatRow
-            label="Read replicas, average"
-            value={formatPct(readAvg)}
-            tone={toneClass(healthOfLoad(readAvg))}
-          />
-          {stats.staleReadRate > 0 && (
-            <StatRow
-              label="Reads served stale"
-              term="stale-read"
-              value={formatPct(stats.staleReadRate)}
-              tone={toneClass(healthOfErr(stats.staleReadRate))}
-            />
-          )}
-        </div>
-        {writeBound && (
-          <p className="ins-hint is-warn">
-            The primary is the bottleneck, not the replicas. Adding more read replicas
-            will not help; every write still goes through the one primary.
-          </p>
-        )}
-        {stats.staleReadRate > 0 && (
-          <p className="ins-hint">
-            Some reads are answered by a replica that has not caught up with the latest
-            write yet. Lower the replication lag to reduce this.
-          </p>
-        )}
-      </Section>
-    );
-  }
+  if (node.kind === 'replica') return <ReplicaSetSection per={per} stats={stats} />;
 
   // service / worker / db / cache / lb / cdn: interchangeable machines.
   const booting = stats.instancesPending ?? 0;
@@ -2568,10 +2580,82 @@ function UnitsPanel({ node, stats }: { node: SimNode; stats: NodeStats }) {
  * 2478 with utilisation at 0.00 throughout. Depth against limit is the only
  * reading that moves.
  */
+/**
+ * How long a calmer state must hold before a hint reflecting a worse one
+ * changes. Long enough to ride out a signal that flips on every 10Hz
+ * snapshot, short enough that a hint does not outstay what it describes.
+ */
+const HINT_HOLD_MS = 1500;
+
+/**
+ * `on`, but turning off only after it has stayed off for HINT_HOLD_MS.
+ *
+ * For a hint that appears when a noisy signal crosses a line: it shows the
+ * moment the signal does, and does not blink out each time the signal dips
+ * back for a single snapshot.
+ */
+function useLingering(on: boolean): boolean {
+  const [held, setHeld] = useState(on);
+  // Turning on takes effect during render, so it shows this pass.
+  if (on && !held) setHeld(true);
+  useEffect(() => {
+    if (on) return;
+    const t = setTimeout(() => setHeld(false), HINT_HOLD_MS);
+    return () => clearTimeout(t);
+  }, [on]);
+  return on || held;
+}
+
+type QueueHintState = 'idle' | 'queued' | 'shedding';
+
+const QUEUE_HINT_RANK: Record<QueueHintState, number> = {
+  idle: 0,
+  queued: 1,
+  shedding: 2,
+};
+
+/**
+ * The queue hint state, escalating at once but calming only reluctantly.
+ *
+ * A queue whose consumers roughly match its producers flips between 0 and 1
+ * waiting item on every 10Hz snapshot, and a full one flips in and out of
+ * shedding the same way. Following that directly makes the hint flicker. A
+ * worse state shows immediately; a better one waits until it has held for a
+ * continuous HINT_HOLD_MS. The shed rate is held with the state so a
+ * lingering "turning away" message keeps the last real rate instead of 0/s.
+ */
+function useQueueHint(
+  state: QueueHintState,
+  shedRate: number,
+): { state: QueueHintState; shedRate: number } {
+  const [held, setHeld] = useState({ state, shedRate });
+  const escalating = QUEUE_HINT_RANK[state] >= QUEUE_HINT_RANK[held.state];
+
+  // A same-or-worse state takes over during render, so it shows this pass
+  // and the rate stays live; React re-runs the render before committing.
+  if (escalating && (held.state !== state || held.shedRate !== shedRate)) {
+    setHeld({ state, shedRate });
+  }
+
+  // A calmer state only lands after holding for HINT_HOLD_MS. The
+  // timer restarts only when the target state changes, not on a new rate.
+  useEffect(() => {
+    if (escalating) return;
+    const t = setTimeout(() => setHeld({ state, shedRate: 0 }), HINT_HOLD_MS);
+    return () => clearTimeout(t);
+  }, [escalating, state]);
+
+  return escalating ? { state, shedRate } : held;
+}
+
 function QueuePanel({ stats }: { stats: NodeStats }) {
   const limit = stats.queueLimit > 0 ? stats.queueLimit : 1;
   const depth = stats.queued;
   const fill = Math.min(1, depth / limit);
+  const hint = useQueueHint(
+    stats.shedRate > 0 ? 'shedding' : depth > 0 ? 'queued' : 'idle',
+    stats.shedRate,
+  );
   return (
     <Section title="The line">
       <div className="ins-util">
@@ -2585,10 +2669,19 @@ function QueuePanel({ stats }: { stats: NodeStats }) {
         </div>
         <Meter value={fill} tone={toneClass(healthOfLoad(fill))} />
       </div>
-      <p className="ins-hint">
-        Work is processed when consumers keep up, waits when they fall behind and is
-        turned away when the queue is full.
-      </p>
+      {/* Every message is rendered in one grid cell so the stack always holds
+          the tallest one's height at the current panel width. Only the active
+          message is visible; switching states never moves the panel below. */}
+      <div className="ins-hint-stack">
+        <p className="ins-hint is-danger" data-active={hint.state === 'shedding'}>
+          Full. It is turning away {formatRate(hint.shedRate)}. Work arriving now is
+          being destroyed, not delayed. The consumers cannot keep up.
+        </p>
+        <p className="ins-hint" data-active={hint.state === 'queued'}>
+          Work is waiting here because the consumers are slower than the producers. It
+          drains once they catch up.
+        </p>
+      </div>
     </Section>
   );
 }

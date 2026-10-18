@@ -269,6 +269,22 @@
   text-wrap: pretty;
 }
 
+/* Stacks state-dependent hints in one cell so the reserved height follows
+   the tallest message at whatever width the panel has, instead of a fixed
+   min-height that only fits one width. `visibility` (not `display`) keeps the
+   hidden ones in layout and drops them from the accessibility tree. */
+.ins-hint-stack {
+  display: grid;
+}
+
+.ins-hint-stack > .ins-hint {
+  grid-area: 1 / 1;
+}
+
+.ins-hint-stack > [data-active='false'] {
+  visibility: hidden;
+}
+
 .ins-field-row .row-k {
   min-width: 0;
   font-size: var(--fs-sm);
