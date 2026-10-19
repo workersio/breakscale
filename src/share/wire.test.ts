@@ -574,6 +574,39 @@ describe('determinism', () => {
 });
 
 /* ------------------------------------------------------------------ *
+ * Links written by earlier builds. The tables are append only, so bytes
+ * an older generation-3 encoder produced must keep opening as the same
+ * design after a field is added.
+ * ------------------------------------------------------------------ */
+
+describe('links written by earlier builds', () => {
+  // Packed by the generation-3 encoder before the bulkhead had its
+  // acquisition fields: a client, a bulkhead with bulkheadMax 4, serviceMs 5,
+  // queueLimit 200, instances 3 and timeoutMs 800, then a service carrying
+  // lockMs 40, a field outside its kind's schema.
+  const BEFORE_ACQUIRE_FIELDS =
+    '03020000000000001b90030000ba0140502530850102a0060000010136800500020104';
+
+  it('opens a bulkhead and an out-of-schema field as they were written', () => {
+    const bytes = Uint8Array.from(BEFORE_ACQUIRE_FIELDS.match(/../g) ?? [], (h) =>
+      Number.parseInt(h, 16),
+    );
+    const t = unpackTopology(bytes);
+    expect(t).not.toBeNull();
+    const [, bulkhead, service] = (t as Topology).nodes;
+    expect(bulkhead?.config).toEqual({
+      ...defaultConfig('bulkhead'),
+      bulkheadMax: 4,
+      serviceMs: 5,
+      queueLimit: 200,
+      instances: 3,
+      timeoutMs: 800,
+    });
+    expect(service?.config).toEqual({ ...defaultConfig('service'), lockMs: 40 });
+  });
+});
+
+/* ------------------------------------------------------------------ *
  * Hostile bytes. None of these may throw; all must return null.
  * ------------------------------------------------------------------ */
 

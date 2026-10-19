@@ -199,9 +199,6 @@ const FIELDS = [
   'intervalMs',
   'batchSize',
   'bulkheadMax',
-  'bulkheadMode',
-  'acquireQueueMax',
-  'acquireTimeoutMs',
   'flushDelayMs',
   'edgeShare',
   'lowPriorityShare',
@@ -210,6 +207,9 @@ const FIELDS = [
   'prefixRps',
   'renditions',
   'cpuMsCap',
+  'bulkheadMode',
+  'acquireQueueMax',
+  'acquireTimeoutMs',
 ] as const satisfies readonly ConfigField[];
 
 /** Every field the wire can carry; exported so a test can prove it is complete. */
@@ -290,12 +290,15 @@ const SCHEMA: Record<NodeKind, readonly ConfigField[]> = {
   sidecar: ['outlierAfter', 'openMs', ...COMMON],
   lambda: ['coldStartMs', 'keepWarmMs', 'maxConcurrency', ...COMMON],
   cron: ['intervalMs', 'batchSize', ...COMMON],
+  // Appended after COMMON: a mask bit is the field's position here, so
+  // fields added to a kind go at the end or an older link's bits land on
+  // the wrong knobs.
   bulkhead: [
     'bulkheadMax',
+    ...COMMON,
     'bulkheadMode',
     'acquireQueueMax',
     'acquireTimeoutMs',
-    ...COMMON,
   ],
   retryqueue: COMMON,
   transcoder: ['renditions', ...COMMON],
