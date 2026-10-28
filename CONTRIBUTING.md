@@ -48,7 +48,7 @@ Work on a branch rather than on `main`, and point `main` at this repository so y
 current without your fork drifting:
 
 ```bash
-git remote add upstream https://github.com/xevrion/breakscale.git
+git remote add upstream https://github.com/workersio/breakscale.git
 git fetch upstream
 git branch --set-upstream-to=upstream/main main
 git checkout -b your-branch-name

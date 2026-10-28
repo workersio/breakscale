@@ -2733,7 +2733,7 @@ export default function App() {
           */}
           <a
             className={`btn btn-icon app-source-link${stars !== null ? ' has-stars' : ''}`}
-            href="https://github.com/xevrion/breakscale"
+            href="https://github.com/workersio/breakscale"
             target="_blank"
             rel="noreferrer noopener"
             aria-label={
