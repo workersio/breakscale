@@ -31,17 +31,6 @@
 </p>
 
 <p align="center">
-  <sub>Title sponsor</sub><br>
-  <a href="https://workers.io">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/sponsors/workersio-dark.svg">
-      <img src="docs/sponsors/workersio.svg" alt="Workers IO" height="56">
-    </picture>
-  </a><br>
-  <sub><a href="https://workers.io">Workers IO</a> (YC F26) sponsors Breakscale. Simulation environments for verifying mission-critical software.</sub>
-</p>
-
-<p align="center">
   <a href="https://vercel.com/open-source-program">
     <img alt="Vercel OSS Program" src="https://vercel.com/oss/program-badge-2026.svg" height="56" />
   </a>
