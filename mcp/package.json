@@ -7,11 +7,11 @@
   "homepage": "https://breakscale.tech",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xevrion/breakscale.git",
+    "url": "git+https://github.com/workersio/breakscale.git",
     "directory": "mcp"
   },
   "bugs": {
-    "url": "https://github.com/xevrion/breakscale/issues"
+    "url": "https://github.com/workersio/breakscale/issues"
   },
   "keywords": [
     "mcp",

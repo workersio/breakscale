@@ -46,7 +46,7 @@
   "description": "Build a system, load it until it breaks, and watch why",
   "repository": {
     "type": "git",
-    "url": "https://github.com/xevrion/breakscale.git"
+    "url": "https://github.com/workersio/breakscale.git"
   },
   "lint-staged": {
     "*.{ts,tsx,css,json,md}": "prettier --write"

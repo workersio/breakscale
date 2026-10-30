@@ -18,10 +18,10 @@
 </div>
 
 <p align="center">
-  <a href="https://github.com/xevrion/breakscale/actions/workflows/ci.yml"><img src="https://github.com/xevrion/breakscale/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/workersio/breakscale/actions/workflows/ci.yml"><img src="https://github.com/workersio/breakscale/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://www.npmjs.com/package/breakscale-mcp"><img src="https://img.shields.io/npm/v/breakscale-mcp?label=MCP%20server&color=blue" alt="MCP server on npm" /></a>
   <a href="https://marketplace.visualstudio.com/items?itemName=xevrion.breakscale"><img src="https://img.shields.io/badge/VS%20Code-extension-blue" alt="VS Code extension" /></a>
-  <a href="https://github.com/xevrion/breakscale/stargazers"><img src="https://img.shields.io/github/stars/xevrion/breakscale?style=flat&color=blue" alt="Stars" /></a>
+  <a href="https://github.com/workersio/breakscale/stargazers"><img src="https://img.shields.io/github/stars/workersio/breakscale?style=flat&color=blue" alt="Stars" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT licensed" /></a>
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs welcome" /></a>
 </p>
@@ -183,7 +183,7 @@ stays in bounds, and that no snapshot field is ever `NaN` or infinite.
 You need [Bun](https://bun.sh).
 
 ```bash
-git clone https://github.com/xevrion/breakscale.git
+git clone https://github.com/workersio/breakscale.git
 cd breakscale
 bun install
 bun dev
@@ -214,7 +214,7 @@ console.log(engine.snapshot().system);
 
 ## Contributing
 
-- Found a bug, or a number that looks wrong? [Open an issue](https://github.com/xevrion/breakscale/issues).
+- Found a bug, or a number that looks wrong? [Open an issue](https://github.com/workersio/breakscale/issues).
 - Want to add a component, an example or a better explanation? Start with
   [CONTRIBUTING.md](CONTRIBUTING.md), which covers how the project fits together and the bar a
   change has to clear.
@@ -230,11 +230,11 @@ rendering predictable.
 
 ## Star history
 
-<a href="https://star-history.com/#xevrion/breakscale&Date">
+<a href="https://star-history.com/#workersio/breakscale&Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=xevrion/breakscale&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=xevrion/breakscale&type=Date" />
-    <img alt="Star history for xevrion/breakscale" src="https://api.star-history.com/svg?repos=xevrion/breakscale&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=workersio/breakscale&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=workersio/breakscale&type=Date" />
+    <img alt="Star history for workersio/breakscale" src="https://api.star-history.com/svg?repos=workersio/breakscale&type=Date" />
   </picture>
 </a>
 
