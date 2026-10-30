@@ -1463,9 +1463,15 @@ export class Engine implements BehaviourCtx {
         if (anyCut && cut.has(out[i].id)) continue;
         const target = this.nodes.get(out[i].to);
         if (!target) continue;
-        const depth = target.busy + (target.waiting.length - target.waitHead);
-        const cap = target.config.capacity > 0 ? target.config.capacity : 1;
-        const load = depth / cap;
+        const own = target.behaviour.load;
+        let load: number;
+        if (own) {
+          load = own(this, target);
+        } else {
+          const depth = target.busy + (target.waiting.length - target.waitHead);
+          const cap = target.config.capacity > 0 ? target.config.capacity : 1;
+          load = depth / cap;
+        }
         if (load < bestLoad) {
           bestLoad = load;
           best = out[i];

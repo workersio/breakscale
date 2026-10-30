@@ -191,6 +191,16 @@ const replica: ComponentBehaviour = {
     ctx.reportInstances(state, out, 0);
   },
 
+  load(_ctx: BehaviourCtx, state: NodeStateLike): number {
+    const ext = replicaExt(state);
+    const work =
+      ext.readBusy +
+      ext.writeBusy +
+      (ext.readQueue.length - ext.readHead) +
+      (ext.writeQueue.length - ext.writeHead);
+    return work / (readCapacity(state) + writeCapacity(state));
+  },
+
   onTick(ctx: BehaviourCtx, state: NodeStateLike, _dtMs: number): void {
     // Publish occupancy on the engine's clock. Reads and writes draw from two
     // different pools held in `ext`, so state.busy stays 0 and the engine
@@ -451,6 +461,18 @@ const shard: ComponentBehaviour = {
     if (q.length - ext.heads[idx] >= ctx.effectiveQueueLimit(state)) return 'shed';
     q.push(req);
     return 'handled';
+  },
+
+  load(_ctx: BehaviourCtx, state: NodeStateLike): number {
+    // Not ensureSized(): this must be a pure read, and a pending resize is
+    // applied on the next admit anyway.
+    const ext = shardExt(state);
+    let work = 0;
+    for (let i = 0; i < ext.sized; i++) {
+      work += ext.busy[i] + (ext.queues[i].length - ext.heads[i]);
+    }
+    const capacity = clampInt(state.config.shardCapacity, 1, MAX_SHARD_CAPACITY);
+    return work / (ext.sized * capacity);
   },
 
   onTick(ctx: BehaviourCtx, state: NodeStateLike, _dtMs: number): void {

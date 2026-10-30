@@ -136,6 +136,16 @@ export interface ComponentBehaviour {
   noRouteReason?: FailureReason;
 
   /**
+   * How full this node is, as (in service + waiting) / slots, for a kind that
+   * runs its own slot pool in `ext`. The least-loaded edge picker reads
+   * `state.busy` and the engine's waiting list, which such a kind leaves at
+   * zero, so without this every one of them looks idle and a load balancer
+   * sends all traffic to the first. Absent for kinds the engine already
+   * measures. Must be a pure read: no RNG, no state change.
+   */
+  load?(ctx: BehaviourCtx, state: NodeStateLike): number;
+
+  /**
    * Which NodeConfig knob a controller moves to make this kind BIGGER, and
    * which the engine reads back to say how big it currently is.
    *
