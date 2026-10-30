@@ -1223,7 +1223,13 @@ const FIELD_GROUPS: { title: string; fields: ReadonlySet<Field> }[] = [
   },
   {
     title: 'How much it can handle',
-    fields: new Set<Field>(['capacity', 'serviceMs', 'serviceCv', 'queueLimit']),
+    fields: new Set<Field>([
+      'instances',
+      'capacity',
+      'serviceMs',
+      'serviceCv',
+      'queueLimit',
+    ]),
   },
   {
     title: 'When things go wrong',
