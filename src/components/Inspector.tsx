@@ -31,6 +31,12 @@ import {
 } from './format';
 import { Term } from './Tooltip';
 import { VendorPanel } from './VendorPanel';
+import {
+  EdgeFaultControls,
+  LinkLossControls,
+  NodeFaultControls,
+} from './FaultControls';
+import type { InspectorFaults } from './faultWiring';
 import './Inspector.css';
 
 /* ------------------------------------------------------------------ *
@@ -2248,7 +2254,19 @@ export interface InspectorProps {
   onChangeMany?: (ids: readonly string[], patch: Partial<NodeConfig>) => void;
   /** Delete the whole selection. Falls back to per-node `onDelete`. */
   onDeleteMany?: (ids: readonly string[]) => void;
+  /**
+   * Breaking things on purpose. Optional: without it the panel shows no
+   * fault controls at all, which is how every caller before them renders.
+   */
+  faults?: InspectorFaults;
+  /**
+   * Set the packet loss on the one selected connection. Optional: without
+   * it, or without `faults`, a connection shows no loss control.
+   */
+  onEdgeLoss?: (edgeId: string, lossRate: number) => void;
 }
+
+export type { InspectorFaults };
 
 export function Inspector({
   node,
@@ -2261,6 +2279,8 @@ export function Inspector({
   selectedEdgeCount = 0,
   onChangeMany,
   onDeleteMany,
+  faults,
+  onEdgeLoss,
 }: InspectorProps) {
   /**
    * The selection this panel is actually describing. `selectedNodes` wins
@@ -2287,9 +2307,38 @@ export function Inspector({
                   ? '1 connection selected.'
                   : `${selectedEdgeCount} connections selected.`}
               </p>
-              <p className="ins-empty ins-empty-hint">
-                Connections have nothing to configure. Press Delete to remove them.
-              </p>
+              {faults?.edge && selectedEdgeCount === 1 ? (
+                <>
+                  <p className="ins-empty ins-empty-hint">
+                    {faults.edge.label}. Press Delete to remove it.
+                  </p>
+                  {onEdgeLoss ? (
+                    <Section title="Packet loss">
+                      <LinkLossControls
+                        key={faults.edge.id}
+                        lossRate={faults.edge.lossRate}
+                        onLoss={(rate) => {
+                          if (faults.edge) onEdgeLoss(faults.edge.id, rate);
+                        }}
+                      />
+                    </Section>
+                  ) : null}
+                  <Section title="Break it on purpose">
+                    <EdgeFaultControls
+                      cable={faults.edge}
+                      cutBy={faults.edge.cutBy}
+                      onCut={faults.onCut}
+                      onRestore={faults.onRestore}
+                      recorded={faults.recorded}
+                      onForget={faults.onForget}
+                    />
+                  </Section>
+                </>
+              ) : (
+                <p className="ins-empty ins-empty-hint">
+                  Connections have nothing to configure. Press Delete to remove them.
+                </p>
+              )}
             </>
           ) : (
             <p className="ins-empty">
@@ -2322,6 +2371,7 @@ export function Inspector({
       onDelete={onDelete}
       onRename={onRename}
       lockedFields={lockedFields}
+      faults={faults}
     />
   );
 }
@@ -2697,6 +2747,7 @@ function SingleInspector({
   onDelete,
   onRename,
   lockedFields,
+  faults,
 }: {
   node: SimNode;
   stats: NodeStats | null;
@@ -2704,6 +2755,7 @@ function SingleInspector({
   onDelete: (id: string) => void;
   onRename: (id: string, label: string) => void;
   lockedFields?: readonly string[];
+  faults?: InspectorFaults;
 }) {
   const fields = FIELDS_BY_KIND[node.kind];
   const cfg = node.config;
@@ -2902,6 +2954,25 @@ function SingleInspector({
         {suggestion && (
           <Section title="Suggested fix">
             <p className="ins-suggestion">{suggestion}</p>
+          </Section>
+        )}
+
+        {/* Placed above "Right now" so the readings a fault moves sit
+            directly under the button that caused it. */}
+        {faults && (
+          <Section title="Break it on purpose">
+            <NodeFaultControls
+              fault={faults.fault}
+              cables={faults.cables}
+              onCrash={() => faults.onInject(node.id, 'crash')}
+              onSlow={(factor) => faults.onInject(node.id, 'slow', { factor })}
+              onGlitch={(rate) => faults.onInject(node.id, 'errors', { rate })}
+              onFix={() => faults.onFix(node.id)}
+              onCut={faults.onCut}
+              onRestore={faults.onRestore}
+              recorded={faults.recorded}
+              onForget={faults.onForget}
+            />
           </Section>
         )}
 

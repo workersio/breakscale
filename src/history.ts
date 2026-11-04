@@ -122,7 +122,8 @@ function edgesEqual(a: Topology, b: Topology): boolean {
       d.from !== e.from ||
       d.to !== e.to ||
       d.weight !== e.weight ||
-      d.control !== e.control
+      d.control !== e.control ||
+      d.lossRate !== e.lossRate
     ) {
       return false;
     }
