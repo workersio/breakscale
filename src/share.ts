@@ -1,5 +1,7 @@
 import { isTopology } from './clipboard';
 import { sanitizeAnnotations } from './sim/annotations';
+import { sanitizeFaults } from './sim/faults';
+import { sanitizeSeed } from './sim/seed';
 import type { Topology, NodeKind } from './sim/types';
 import { defaultConfig } from './sim/presets';
 import { packTopology, unpackTopology } from './share/wire';
@@ -312,8 +314,10 @@ export async function encodeBytes(topology: Topology): Promise<Bytes> {
  * Only the design travels: the offered-load slider value is derived from
  * the client nodes on the other side, and the preset id is a fact about
  * the SENDER's session rather than about the design, so neither is worth
- * the characters. Simulation state (queues, percentiles, injected
- * failures) is not design and is never sent.
+ * the characters. Live simulation state (queues, percentiles, a fault in
+ * force right now) is never sent. What does travel, when the topology
+ * carries them, is its seed and fault schedule, because those are what
+ * make a run replay the same on the other side.
  */
 export async function encodeTopology(topology: Topology): Promise<string> {
   return PREFIX + toBase64Url(await encodeBytes(topology));
@@ -457,6 +461,10 @@ function validate(parsed: Parsed | null): ShareResult {
   // cross the boundary through their own sanitizer, which is also what
   // strips a colour crafted to break out of a style attribute.
   const annotations = sanitizeAnnotations(parsed.annotations);
+  // A fault schedule names nodes and edges, so it is checked against the
+  // graph that just passed, and an entry pointing at nothing is dropped.
+  const faults = sanitizeFaults(parsed.faults, candidate);
+  const seed = sanitizeSeed(parsed.seed);
 
   return {
     status: 'ok',
@@ -464,6 +472,8 @@ function validate(parsed: Parsed | null): ShareResult {
       nodes: candidate.nodes,
       edges: candidate.edges,
       ...(annotations.length > 0 ? { annotations } : {}),
+      ...(faults.length > 0 ? { faults } : {}),
+      ...(seed !== undefined ? { seed } : {}),
     },
   };
 }
@@ -473,6 +483,8 @@ interface Parsed {
   nodes?: unknown;
   edges?: unknown;
   annotations?: unknown;
+  faults?: unknown;
+  seed?: unknown;
 }
 
 /**

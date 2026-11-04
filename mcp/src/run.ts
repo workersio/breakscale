@@ -1,4 +1,5 @@
 import { Engine } from '../../src/sim/engine';
+import { sanitizeSeed } from '../../src/sim/seed';
 import type { FailureReason, SimSnapshot, Topology } from '../../src/sim/types';
 
 /* ------------------------------------------------------------------ *
@@ -34,6 +35,8 @@ export interface RunResult {
   snapshot: SimSnapshot;
   /** How far the simulation actually got, which is less than asked when it ran out of budget. */
   simulatedMs: number;
+  /** The seed the run used: the design's own when it carries one, else the option's. */
+  seed?: number;
 }
 
 /*
@@ -52,7 +55,11 @@ export function runDesign(
   topology: Topology,
   opts: RunOptions = DEFAULT_RUN,
 ): RunResult {
-  const engine = new Engine(topology, opts.seed);
+  // A design that carries a seed is asking to be replayed, so its seed wins
+  // over the default. Its fault schedule needs nothing here: the engine
+  // plays it from the topology.
+  const seed = sanitizeSeed(topology.seed) ?? opts.seed;
+  const engine = new Engine(topology, seed);
   const target = opts.seconds * 1000;
   const start = performance.now();
   let simulatedMs = 0;
@@ -60,7 +67,7 @@ export function runDesign(
     engine.advance(STEP_MS);
     simulatedMs += STEP_MS;
   }
-  return { snapshot: engine.snapshot(), simulatedMs };
+  return { snapshot: engine.snapshot(), simulatedMs, seed };
 }
 
 const REASON_WORDS: Record<FailureReason, string> = {
@@ -79,6 +86,7 @@ const REASON_WORDS: Record<FailureReason, string> = {
   'bulkhead-full': 'were refused by a full bulkhead',
   'acquire-timeout': 'gave up waiting for a pool slot',
   deprioritized: 'were dropped by a load shedder',
+  'packet-loss': 'were lost on a lossy network link (lossRate)',
 };
 
 const ms = (v: number) =>
@@ -100,7 +108,7 @@ export function describeRun(
     run.simulatedMs < opts.seconds * 1000
       ? ` (stopped at ${secs}s of ${opts.seconds}s: the design is too heavy to simulate further here)`
       : '';
-  lines.push(`Simulated ${secs}s with seed ${opts.seed}${short}.`);
+  lines.push(`Simulated ${secs}s with seed ${run.seed ?? opts.seed}${short}.`);
   lines.push(
     `Offered ${perSec(system.offeredRps)}, served ${perSec(system.goodputRps)}, ` +
       `${pct(system.errorRate)} failed. ` +
