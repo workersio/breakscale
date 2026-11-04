@@ -203,6 +203,25 @@ keeping node ids and positions so the canvas does not jump. If the user
 edited the design on the canvas, their latest version is in your context;
 start from that one.
 
+## Breaking it on a schedule
+
+A design can carry \`faults\`, a list of things that go wrong at set times,
+so a run shows what happens when a part fails and then recovers. \`atMs\`
+is simulated time in milliseconds from the start of the run.
+
+- \`{ "atMs": 10000, "action": "inject", "nodeId": "db", "kind": "crash" }\`
+  takes a node down. Other kinds: \`slow\` with \`"opts": { "factor": 3 }\`
+  (three times slower), \`errors\` with \`"opts": { "rate": 0.2 }\` (20% of
+  requests fail), and \`partition\` (its outgoing edges stop carrying
+  requests).
+- \`{ "atMs": 20000, "action": "clear", "nodeId": "db" }\` heals it.
+- \`{ "atMs": 5000, "action": "cut", "edgeId": "api->db" }\` cuts one edge
+  and \`restore\` reconnects it. An edge's id is \`from->to\` unless you gave
+  it one.
+
+\`seed\` (a whole number, default 1) picks the random draws. The same
+design, seed and faults always give the same numbers.
+
 ## Saving to a file
 
 A \`.breakscale\` file can be opened in the Breakscale app and in its VS

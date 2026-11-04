@@ -1211,7 +1211,7 @@ const circuitBreaker: Topology = {
       'cb-note-trip',
       40,
       320,
-      'Right click the payments API and inject a crash. Once half the calls in a four second window fail, the breaker opens and the rest fail in microseconds instead of waiting out a timeout. After three seconds it closes and probes again.',
+      'Select the payments API and press Crash in the inspector. Once half the calls in a four second window fail, the breaker opens and the rest fail in microseconds instead of waiting out a timeout. After three seconds it closes and probes again.',
       340,
     ),
   ],
@@ -1988,7 +1988,7 @@ const resilientDelivery: Topology = {
       'rd-note-bulkhead',
       1320,
       40,
-      "Right click recommendations and inject slow. The bulkhead in front fills within one round trip, and after that the extra calls fail in microseconds instead of queueing. One slow feature stops being everyone else's problem.",
+      "Select recommendations and press Slow in the inspector. The bulkhead in front fills within one round trip, and after that the extra calls fail in microseconds instead of queueing. One slow feature stops being everyone else's problem.",
       300,
     ),
     note(
@@ -3444,7 +3444,7 @@ const stripe: Topology = {
       'sr-note-breaker',
       1840,
       40,
-      'Right click the card networks and inject errors. The breaker beside them opens, and charges start failing immediately instead of hanging. A payment that fails cleanly can be retried; one left in the air while a slow network times out is the one nobody can account for.',
+      'Select the card networks and press Glitch in the inspector. The breaker beside them opens, and charges start failing immediately instead of hanging. A payment that fails cleanly can be retried; one left in the air while a slow network times out is the one nobody can account for.',
       300,
     ),
     note(

@@ -1,7 +1,18 @@
 import type { Annotation, AnnotationFont, Note, Section } from '../sim/annotations';
 import { ANNOTATION_FONTS, SECTION_TONE_COUNT } from '../sim/annotations';
+import { sanitizeFaults } from '../sim/faults';
 import { defaultConfig } from '../sim/presets';
-import type { NodeConfig, NodeKind, SimEdge, SimNode, Topology } from '../sim/types';
+import { MAX_SEED, sanitizeSeed } from '../sim/seed';
+import type {
+  FailureKind,
+  FailureOpts,
+  FaultEvent,
+  NodeConfig,
+  NodeKind,
+  SimEdge,
+  SimNode,
+  Topology,
+} from '../sim/types';
 import { TRAFFIC_PATTERNS } from '../sim/types';
 
 /* ------------------------------------------------------------------ *
@@ -39,6 +50,12 @@ import { TRAFFIC_PATTERNS } from '../sim/types';
  *   - Node coordinates are rounded to whole pixels, as generation 2 did;
  *     half a pixel is not visible layout.
  *   - Optional edge fields and note styling are presence bits.
+ *   - A run's seed and fault schedule ride in an optional tail after the
+ *     annotations. A design without either writes no tail, so its bytes
+ *     are exactly what this generation wrote before the tail existed, and
+ *     every link built then still decodes the same. A reader from before
+ *     the tail rejects trailing bytes, so it reports a link carrying one
+ *     as unreadable rather than opening it without its faults.
  *
  * The byte layout is a PROTOCOL. The tables below (`KINDS`, `FIELDS`,
  * `SCHEMA`) are frozen for generation 3: append only, never reorder, and
@@ -345,6 +362,36 @@ const SECTION_TONE_SHIFT = 1; // four bits, 0..12
 const SECTION_COLOR = 1 << 5;
 const SECTION_KNOWN = (1 << 6) - 1;
 
+/* ---------------- run tail ---------------- */
+
+/** Tail header bits: which of the optional run fields follow, in this order. */
+const TAIL_SEED = 1 << 0;
+const TAIL_FAULTS = 1 << 1;
+const TAIL_KNOWN = TAIL_SEED | TAIL_FAULTS;
+
+/**
+ * Fault operations. Index is the wire value. The four injections come first,
+ * one per failure kind, so an entry's action and kind cost one value
+ * together. Append only.
+ */
+const FAULT_OPS = [
+  'crash',
+  'slow',
+  'errors',
+  'partition',
+  'clear',
+  'cut',
+  'restore',
+] as const;
+
+type FaultOp = (typeof FAULT_OPS)[number];
+
+// Presence bits for an injection's options, below the op in the same varint.
+const FAULT_FACTOR = 1 << 0;
+const FAULT_RATE = 1 << 1;
+const FAULT_EDGES = 1 << 2;
+const FAULT_OPT_BITS = 3;
+
 /* ---------------- numbers ---------------- */
 
 /**
@@ -565,8 +612,70 @@ export function packTopology(topology: Topology): Uint8Array<ArrayBuffer> {
   for (const node of topology.nodes) packNode(w, node);
   for (const edge of topology.edges) packEdge(w, edge, index);
   for (const a of annotations) packAnnotation(w, a);
+  packTail(w, topology, index);
 
   return w.bytes();
+}
+
+/**
+ * The seed and the fault schedule, or nothing at all when there are
+ * neither. Schedule entries keep their list order, which decides the order
+ * of entries sharing a time, and name nodes and edges by index like edges
+ * do. An entry naming something the design does not hold is left out: it
+ * would do nothing when it came due, and every reader drops it anyway.
+ */
+function packTail(w: Writer, topology: Topology, nodeIndex: Map<string, number>): void {
+  const seed = sanitizeSeed(topology.seed);
+  const faults = sanitizeFaults(topology.faults, topology);
+  let h = 0;
+  if (seed !== undefined) h |= TAIL_SEED;
+  if (faults.length > 0) h |= TAIL_FAULTS;
+  if (h === 0) return;
+  w.varint(h);
+  if (seed !== undefined) w.varint(seed);
+  if (faults.length === 0) return;
+
+  const edgeIndex = new Map<string, number>();
+  topology.edges.forEach((e, i) => {
+    if (!edgeIndex.has(e.id)) edgeIndex.set(e.id, i);
+  });
+  w.varint(faults.length);
+  for (const f of faults) packFault(w, f, nodeIndex, edgeIndex);
+}
+
+function packFault(
+  w: Writer,
+  f: FaultEvent,
+  nodeIndex: Map<string, number>,
+  edgeIndex: Map<string, number>,
+): void {
+  // sanitizeFaults checked every id against this topology, so each lookup
+  // below finds its index.
+  const indexOf = (map: Map<string, number>, id: string): number => map.get(id) ?? -1;
+  if (f.action !== 'inject') {
+    w.varint(FAULT_OPS.indexOf(f.action) << FAULT_OPT_BITS);
+    w.num(f.atMs);
+    w.varint(
+      f.action === 'clear'
+        ? indexOf(nodeIndex, f.nodeId)
+        : indexOf(edgeIndex, f.edgeId),
+    );
+    return;
+  }
+  const opts = f.opts ?? {};
+  let bits = 0;
+  if (opts.factor !== undefined) bits |= FAULT_FACTOR;
+  if (opts.rate !== undefined) bits |= FAULT_RATE;
+  if (opts.edgeIds !== undefined) bits |= FAULT_EDGES;
+  w.varint((FAULT_OPS.indexOf(f.kind) << FAULT_OPT_BITS) | bits);
+  w.num(f.atMs);
+  w.varint(indexOf(nodeIndex, f.nodeId));
+  if (opts.factor !== undefined) w.num(opts.factor);
+  if (opts.rate !== undefined) w.num(opts.rate);
+  if (opts.edgeIds !== undefined) {
+    w.varint(opts.edgeIds.length);
+    for (const id of opts.edgeIds) w.varint(indexOf(edgeIndex, id));
+  }
 }
 
 function packNode(w: Writer, node: SimNode): void {
@@ -737,9 +846,10 @@ const MAX_ITEMS = 10_000;
 /**
  * Parse generation-3 bytes back into a topology, or null if the bytes do
  * not describe one. This is a structural parse only: the result still
- * goes through `isTopology` and `sanitizeAnnotations` in share.ts, the
- * same gates every other untrusted input passes, so there is no second
- * validator here to drift out of step with them.
+ * goes through `isTopology`, `sanitizeAnnotations`, `sanitizeFaults` and
+ * `sanitizeSeed` in share.ts, the same gates every other untrusted input
+ * passes, so there is no second validator here to drift out of step with
+ * them.
  */
 export function unpackTopology(bytes: Uint8Array): Topology | null {
   try {
@@ -768,19 +878,96 @@ export function unpackTopology(bytes: Uint8Array): Topology | null {
       annotations.push(a);
     }
 
-    // Trailing bytes mean the link is not what it claims to be.
+    const tail = r.done() ? null : unpackTail(r, nodes, edges);
+
+    // Bytes after the tail mean the link is not what it claims to be.
     if (!r.done()) return null;
 
     return {
       nodes,
       edges,
       ...(annotations.length > 0 ? { annotations } : {}),
+      ...(tail?.faults !== undefined ? { faults: tail.faults } : {}),
+      ...(tail?.seed !== undefined ? { seed: tail.seed } : {}),
     };
   } catch (e) {
     if (e instanceof WireError) return null;
     // A TextDecoder or DataView failure is the same thing: bad bytes.
     return null;
   }
+}
+
+function unpackTail(
+  r: Reader,
+  nodes: readonly SimNode[],
+  edges: readonly SimEdge[],
+): { seed?: number; faults?: FaultEvent[] } {
+  const h = r.varint();
+  // An empty tail is never written, so one here is not a link of ours.
+  if (h === 0 || h & ~TAIL_KNOWN) throw new WireError('bad tail header');
+  const out: { seed?: number; faults?: FaultEvent[] } = {};
+  if (h & TAIL_SEED) {
+    const seed = r.varint();
+    if (seed > MAX_SEED) throw new WireError('seed out of range');
+    out.seed = seed;
+  }
+  if (h & TAIL_FAULTS) {
+    const count = r.varint();
+    if (count === 0 || count > MAX_ITEMS) throw new WireError('bad fault count');
+    const faults: FaultEvent[] = [];
+    for (let i = 0; i < count; i++) faults.push(unpackFault(r, nodes, edges));
+    out.faults = faults;
+  }
+  return out;
+}
+
+function unpackFault(
+  r: Reader,
+  nodes: readonly SimNode[],
+  edges: readonly SimEdge[],
+): FaultEvent {
+  const head = r.varint();
+  // Division rather than a shift: a varint can exceed 32 bits, and a shift
+  // would wrap a hostile value round onto a real op.
+  const bits = head % (1 << FAULT_OPT_BITS);
+  const op: FaultOp | undefined = FAULT_OPS[(head - bits) / (1 << FAULT_OPT_BITS)];
+  if (op === undefined) throw new WireError('unknown fault op');
+  const atMs = r.num();
+  const nodeId = (): string => {
+    const n = nodes[r.varint()];
+    if (!n) throw new WireError('fault names a missing node');
+    return n.id;
+  };
+  const edgeId = (): string => {
+    const e = edges[r.varint()];
+    if (!e) throw new WireError('fault names a missing edge');
+    return e.id;
+  };
+
+  if (op === 'clear' || op === 'cut' || op === 'restore') {
+    if (bits !== 0) throw new WireError('options on a fault that takes none');
+    if (op === 'clear') return { atMs, action: 'clear', nodeId: nodeId() };
+    return { atMs, action: op, edgeId: edgeId() };
+  }
+  const kind: FailureKind = op;
+  const target = nodeId();
+  const opts: FailureOpts = {};
+  if (bits & FAULT_FACTOR) opts.factor = r.num();
+  if (bits & FAULT_RATE) opts.rate = r.num();
+  if (bits & FAULT_EDGES) {
+    const count = r.varint();
+    if (count > edges.length) throw new WireError('too many fault edges');
+    const ids: string[] = [];
+    for (let i = 0; i < count; i++) ids.push(edgeId());
+    opts.edgeIds = ids;
+  }
+  return {
+    atMs,
+    action: 'inject',
+    nodeId: target,
+    kind,
+    ...(bits !== 0 ? { opts } : {}),
+  };
 }
 
 function unpackNode(r: Reader, perKind: Map<NodeKind, number>): SimNode {

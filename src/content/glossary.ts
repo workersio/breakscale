@@ -895,6 +895,15 @@ export const GLOSSARY: GlossaryEntry[] = [
     see: ['crashed', 'region'],
   },
   {
+    id: 'packet-loss',
+    term: 'Packet loss',
+    short: 'The connection loses some of the requests sent across it',
+    why: 'Both components are running and the connection is up, but a share of what crosses it never arrives. Retries hide a little loss well, because each try gets a fresh chance, but every retry is extra load on the caller.',
+    category: 'failure',
+    aliases: ['lossy link', 'loss rate'],
+    see: ['partitioned', 'retry-storm'],
+  },
+  {
     id: 'conn-refused',
     term: 'Connection refused',
     short: 'Turned away because every connection slot was held',

@@ -34,6 +34,13 @@ import Canvas, {
   sourceBacklogs,
 } from './components/Canvas';
 import { Inspector, TrafficControl } from './components/Inspector';
+import {
+  asReplacement,
+  faultActionsFor,
+  faultViewFor,
+  withEdgeLoss,
+  withSchedule,
+} from './components/faultWiring';
 import { Metrics } from './components/Metrics';
 import { Palette } from './components/Palette';
 import { Glossary } from './components/Glossary';
@@ -56,6 +63,8 @@ import {
   sanitizeAnnotations,
 } from './sim/annotations';
 import type { Annotation, AnnotationFont, Note } from './sim/annotations';
+import { sanitizeFaults } from './sim/faults';
+import { sanitizeSeed } from './sim/seed';
 import { NEW_NOTE_TEXT } from './components/annotationLayout';
 import type { AnnotationTool } from './components/Palette';
 import { TooltipLayer, setGlossaryNavigate } from './components/Tooltip';
@@ -70,19 +79,14 @@ import { applyTheme } from './theme/applyTheme';
 import { usePresence } from './components/presence';
 import { SessionHistory, syncEngine } from './history';
 import type { HistoryEntry, HistorySnapshot } from './history';
+import { ShareLinkTooLargeError, decodeTopology, hasShareHash } from './share';
+import { ShareStoreError, fetchStored, hasStoredLink } from './share/store';
 import {
-  ShareLinkTooLargeError,
-  buildShareUrl,
-  decodeTopology,
-  hasShareHash,
-} from './share';
-import {
-  ShareStoreError,
-  fetchStored,
-  hasStore,
-  hasStoredLink,
-  storeTopology,
-} from './share/store';
+  buildLink,
+  designTopology,
+  hasReplay,
+  replayTopology,
+} from './share/replayLink';
 import { Share, type ShareState } from './components/Share';
 import { DESIGN_FILE_ACCEPT, downloadDesign, readDesignFile } from './designFile';
 import { downloadBlob, svgToPng } from './imageExport';
@@ -527,11 +531,20 @@ function loadSession(): Session {
     const annotations = sanitizeAnnotations(
       (s.topology as { annotations?: unknown }).annotations,
     );
+    const faults = sanitizeFaults(
+      (s.topology as { faults?: unknown }).faults,
+      s.topology,
+    );
+    // The seed goes with the faults: the same faults on another seed land in
+    // a different run from the one that was recorded or shared.
+    const seed = sanitizeSeed((s.topology as { seed?: unknown }).seed);
     return {
       topology: {
         nodes: s.topology.nodes,
         edges: s.topology.edges,
         ...(annotations.length > 0 ? { annotations } : {}),
+        ...(faults.length > 0 ? { faults } : {}),
+        ...(seed !== undefined ? { seed } : {}),
       },
       rps: Math.min(5000, Math.max(0, rps)),
       presetId: typeof s.presetId === 'string' ? s.presetId : null,
@@ -1130,8 +1143,17 @@ export default function App() {
       // The engine first, via the same non-resetting paths a forward edit
       // uses: updateNodeConfig for a config-only difference, setTopology for
       // structure. Nothing here resets the simulation or its metrics.
-      syncEngine(engine, snapRef.current.topology, entry.topology);
-      setTopology(entry.topology);
+      // The fault schedule is what happened during the run, not part of the
+      // design, so undo and redo carry the live one forward rather than
+      // rolling recordings back to whatever the entry was captured with.
+      const live = topoLiveRef.current.faults;
+      const target: Topology = live
+        ? { ...entry.topology, faults: live }
+        : entry.topology;
+      syncEngine(engine, snapRef.current.topology, target);
+      const synced = withSchedule(target, engine.faultSchedule());
+      topoLiveRef.current = synced;
+      setTopology(synced);
       setSelectedIds(new Set(entry.selectedIds));
       setRps(entry.rps);
       setPresetId(entry.presetId);
@@ -1159,10 +1181,11 @@ export default function App() {
    * it already knows, so editing the graph does not disturb in-flight work.
    */
   const applyTopology = useCallback(
-    (next: Topology) => {
+    (edit: Topology) => {
+      engine.setTopology(edit);
+      const next = withSchedule(edit, engine.faultSchedule());
       topoLiveRef.current = next;
       setTopology(next);
-      engine.setTopology(next);
       // Refresh the snapshot immediately so a topology edit made while PAUSED
       // shows the new node's readouts at once, instead of blank rows sitting
       // next to headline numbers from the previous run until the next tick.
@@ -1170,6 +1193,24 @@ export default function App() {
       setPresetId(null);
     },
     [engine],
+  );
+
+  /**
+   * Packet loss on one connection. A setting, like a node's config, so the
+   * example stays selected; but edges live in the topology, so the engine
+   * takes the whole graph.
+   */
+  const handleEdgeLoss = useCallback(
+    (edgeId: string, lossRate: number) => {
+      const next = withEdgeLoss(topoLiveRef.current, edgeId, lossRate);
+      if (!next) return;
+      history.commit('packet loss', snapRef.current);
+      topoLiveRef.current = next;
+      setTopology(next);
+      engine.setTopology(next);
+      setSnapshot(engine.snapshot());
+    },
+    [engine, history],
   );
 
   const handleMoveNode = useCallback(
@@ -1926,7 +1967,7 @@ export default function App() {
       setPresetId(nextPresetId);
       setSelectedIds(new Set<string>());
       topoLiveRef.current = fresh;
-      engine.setTopology(fresh);
+      engine.setTopology(asReplacement(fresh));
       engine.reset();
       resetLostRate();
       setSnapshot(engine.snapshot());
@@ -2250,13 +2291,20 @@ export default function App() {
         setPresetId(null);
         setSelectedIds(new Set<string>());
         topoLiveRef.current = result.topology;
-        engine.setTopology(result.topology);
+        engine.setTopology(asReplacement(result.topology));
         engine.reset();
         resetLostRate();
         setSnapshot(engine.snapshot());
         setFitNonce((n) => n + 1);
         toastSeq.current += 1;
-        setToast({ text: 'Opened a shared design', id: toastSeq.current });
+        // A replay opens like any shared design, at t=0 with the clock
+        // running, and its faults land at the moments they were recorded.
+        setToast({
+          text: hasReplay(result.topology)
+            ? 'Opened a replay. It plays from the start, and each fault lands at the same moment it did in the original run.'
+            : 'Opened a shared design',
+          id: toastSeq.current,
+        });
         return;
       }
       // Not ours, or ours and broken. Either way the stored session that
@@ -2289,49 +2337,42 @@ export default function App() {
    * Build the link. Goes to the store first, which is what keeps the URL
    * short whatever the design; where there is no store, or it cannot be
    * reached, the fragment format still carries the whole design.
+   *
+   * A plain link is the design alone. A replay link is the run: the design
+   * with the engine's seed and fault schedule, so whoever opens it watches
+   * the same faults land at the same simulated moments.
    */
-  const handleCopyLink = useCallback(() => {
-    setShareState({ status: 'working' });
-    void (async () => {
-      // The store first, because it is what keeps a link short enough to
-      // survive being pasted. Where there is no store configured, or it
-      // cannot be reached, the fragment format still carries the design
-      // and is the better answer than no link at all.
-      if (hasStore()) {
+  const handleCopyLink = useCallback(
+    (replay: boolean) => {
+      setShareState({ status: 'working', replay });
+      const shared = replay
+        ? replayTopology(topology, engine)
+        : designTopology(topology);
+      void (async () => {
         try {
           setShareState({
             status: 'ready',
-            url: await storeTopology(topology, window.location.href),
+            replay,
+            url: await buildLink(shared, window.location.href),
           });
-          return;
         } catch (e) {
-          if (e instanceof ShareStoreError) {
-            setShareState({ status: 'failed', message: e.message });
-            return;
-          }
-          // Anything else came from encoding rather than the network, and
-          // the fragment path below would hit it too.
+          // A design that does not fit is told about, never trimmed to fit.
+          // The file export carries any size.
+          setShareState({
+            status: 'failed',
+            replay,
+            message:
+              e instanceof ShareStoreError
+                ? e.message
+                : e instanceof ShareLinkTooLargeError
+                  ? `This ${replay ? 'replay' : 'design'} is too big for a link (${e.chars} characters; links stop working past ${e.limit}). Save it to a file instead.`
+                  : 'Could not build the link.',
+          });
         }
-      }
-
-      try {
-        setShareState({
-          status: 'ready',
-          url: await buildShareUrl(topology, window.location.href),
-        });
-      } catch (e) {
-        // A design that does not fit is told about, never trimmed to fit.
-        // The file export carries any size.
-        setShareState({
-          status: 'failed',
-          message:
-            e instanceof ShareLinkTooLargeError
-              ? `This design is too big for a link (${e.chars} characters; links stop working past ${e.limit}). Save it to a file instead.`
-              : 'Could not build the link.',
-        });
-      }
-    })();
-  }, [topology]);
+      })();
+    },
+    [engine, topology],
+  );
 
   const handleReset = useCallback(() => {
     engine.reset();
@@ -2530,6 +2571,52 @@ export default function App() {
 
   const selectedStats =
     selectedNode && snapshot ? (snapshot.nodes[selectedNode.id] ?? null) : null;
+
+  /* ---------------- fault controls ----------------
+   *
+   * Every action goes through the engine's record* calls, so it lands in the
+   * fault schedule at the current simulated time and Reset replays it. The
+   * schedule is then mirrored into the topology state. That is what keeps
+   * the next edit from wiping it: setTopology with a `faults` list that
+   * differs from the engine's replaces the engine's, so the list the shell
+   * hands back has to be the one the engine already holds.
+   */
+  const recordedFault = useCallback(() => {
+    // A functional update rather than a write through topoLiveRef: these
+    // run from a button press, never inside a canvas gesture, and the
+    // layout effect brings the mirror up to date on the commit.
+    const faults = engine.faultSchedule();
+    setTopology((t) => ({ ...t, faults }));
+    // Paused or not, the canvas and the panel show the fault at once.
+    setSnapshot(engine.snapshot());
+  }, [engine]);
+
+  const faultActions = useMemo(
+    () => faultActionsFor(engine, recordedFault),
+    [engine, recordedFault],
+  );
+
+  const inspectorFaults = useMemo(
+    () => ({
+      ...faultViewFor(engine, topology, snapshot, {
+        node: selectedNode,
+        nodeCount: selectedNodes.length,
+        edgeCount: selectedEdgeCount,
+        ids: selectedIds,
+      }),
+      ...faultActions,
+    }),
+    [
+      engine,
+      topology,
+      snapshot,
+      selectedNode,
+      selectedNodes.length,
+      selectedEdgeCount,
+      selectedIds,
+      faultActions,
+    ],
+  );
 
   /**
    * The header's offered load, derived from the topology's client nodes (the
@@ -3045,6 +3132,8 @@ export default function App() {
             onChangeMany={handleConfigChangeMany}
             onDeleteMany={handleDeleteMany}
             lockedFields={challenge ? FIXED_DURING_CHALLENGE : undefined}
+            faults={inspectorFaults}
+            onEdgeLoss={handleEdgeLoss}
           />
           <PanelResizer
             edge="right"
@@ -3142,7 +3231,9 @@ export default function App() {
         open={shareOpen}
         state={shareState}
         onClose={() => setShareOpen(false)}
-        onShare={handleCopyLink}
+        replayable={hasReplay(topology)}
+        onShare={() => handleCopyLink(false)}
+        onShareReplay={() => handleCopyLink(true)}
         onExport={() => {
           setShareOpen(false);
           handleExport();

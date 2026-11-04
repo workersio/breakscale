@@ -115,6 +115,54 @@ describe('buildTopology', () => {
     expect(r.ok).toBe(true);
   });
 
+  it('carries a fault schedule through', () => {
+    const faults = [
+      { atMs: 2000, action: 'inject', nodeId: 'db', kind: 'slow', opts: { factor: 4 } },
+      { atMs: 5000, action: 'cut', edgeId: 'api->db' },
+    ];
+    const r = buildTopology({ ...chain, faults });
+    if (!r.ok) throw new Error(r.errors.join('\n'));
+    expect(r.topology.faults).toEqual(faults);
+    const plain = buildTopology(chain);
+    expect(plain.ok && 'faults' in plain.topology).toBe(false);
+  });
+
+  it('names every fault entry it cannot play', () => {
+    const r = buildTopology({
+      ...chain,
+      faults: [
+        { atMs: 100, action: 'inject', nodeId: 'cache', kind: 'crash' },
+        { atMs: -5, action: 'clear', nodeId: 'api' },
+        { atMs: 100, action: 'inject', nodeId: 'api', kind: 'boom' },
+        { atMs: 100, action: 'cut', edgeId: 'users->db' },
+      ],
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.errors).toEqual([
+      "faults[0] names node 'cache', but there is no such node.",
+      'faults[1] has atMs -5; use a time in milliseconds, 0 or more.',
+      'faults[2] has kind "boom"; use crash, slow, errors, partition.',
+      "faults[3] names edge 'users->db', but there is no such edge.",
+    ]);
+    expect(buildTopology({ ...chain, faults: 'crash it' }).ok).toBe(false);
+  });
+
+  it('keeps a seed and refuses one the engine would fold', () => {
+    const r = buildTopology({ ...chain, seed: 42 });
+    expect(r.ok && r.topology.seed).toBe(42);
+    const plain = buildTopology(chain);
+    expect(plain.ok && 'seed' in plain.topology).toBe(false);
+    for (const seed of [-1, 1.5, 2 ** 32, '7']) {
+      const bad = buildTopology({ ...chain, seed });
+      expect(bad.ok).toBe(false);
+      if (bad.ok) continue;
+      expect(bad.errors[0]).toMatch(
+        /^`seed` is .*; use a whole number from 0 to 4294967295\.$/,
+      );
+    }
+  });
+
   it('rejects an empty design', () => {
     expect(buildTopology({ nodes: [] }).ok).toBe(false);
     expect(buildTopology('nodes').ok).toBe(false);

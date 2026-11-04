@@ -278,6 +278,16 @@ describe('note text edits', () => {
 });
 
 describe('syncEngine', () => {
+  it('pushes an edge lossRate undo into the engine', () => {
+    const t0 = makeTopology();
+    const lossy = structuredClone(t0);
+    lossy.edges[0]!.lossRate = 0.25;
+    const engine = new Engine(lossy);
+    const setTopo = vi.spyOn(engine, 'setTopology');
+    syncEngine(engine, lossy, t0);
+    expect(setTopo).toHaveBeenCalledWith(t0);
+  });
+
   it('applies a config-only undo through updateNodeConfig, without reset', () => {
     const t0 = makeTopology();
     const svcId = t0.nodes[1]!.id;

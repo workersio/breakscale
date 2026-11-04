@@ -1,14 +1,18 @@
 import { behaviourFor, type ComponentBehaviour } from './behaviour';
 import type { BehaviourCtx, NodeStateLike, ReqLike } from './engine-types';
 import { MinHeap, type Timed } from './heap';
+import { sanitizeFaults } from './faults';
 import { Rng } from './random';
+import { DEFAULT_SEED, sanitizeSeed } from './seed';
 import { DEFAULT_TRAFFIC_PERIOD_S } from './types';
 import type {
   ActiveFailure,
   EdgeState,
+  FailureCounts,
   FailureKind,
   FailureOpts,
   FailureReason,
+  FaultEvent,
   HistoryPoint,
   NodeConfig,
   NodeStats,
@@ -530,7 +534,7 @@ export class Engine implements BehaviourCtx {
   private sysFailed = new RateCounter();
   private totalRequests = 0;
   private totalFailed = 0;
-  private failures: Record<FailureReason, number> = {
+  private failures: FailureCounts = {
     error: 0,
     shed: 0,
     timeout: 0,
@@ -558,6 +562,30 @@ export class Engine implements BehaviourCtx {
   private cutEdges = new Set<string>();
   /** Reused snapshot array for active failures. */
   private snapFailures: ActiveFailure[] = [];
+  /**
+   * Edges severed one at a time by cutEdge(), independent of any node fault.
+   * Folded into `cutEdges` with the partitions, so the send path still asks
+   * one Set and never learns which of the two cut the wire.
+   */
+  private severed = new Set<string>();
+
+  /**
+   * The fault schedule, sorted by `atMs` (stable, so entries sharing a time
+   * keep their list order). Everything before `scheduleNext` has been applied
+   * this run; `nextFaultMs` caches the time of the entry at `scheduleNext`, or
+   * Infinity, so the event loop pays one number comparison per event for it
+   * and nothing more when the schedule is empty.
+   */
+  private schedule: FaultEvent[] = [];
+  private scheduleNext = 0;
+  private nextFaultMs = Infinity;
+  /**
+   * Simulated time through which the schedule has been played. An entry at
+   * or before it is in the past. Separate from `now` because a fresh engine
+   * at t=0 has played nothing yet, while one that has just advanced TO some
+   * time has already applied the entries due at it.
+   */
+  private scheduleThroughMs = -Infinity;
 
   private history: HistoryPoint[] = [];
   private lastHistoryMs = 0;
@@ -593,12 +621,18 @@ export class Engine implements BehaviourCtx {
    */
   private authoredInstances = new Map<string, number | undefined>();
 
-  constructor(topology: Topology, seed = 1) {
-    this.seed = seed >>> 0;
+  /**
+   * `seed`, when given, wins over the topology's own. Without either the run
+   * uses DEFAULT_SEED, which is what every engine did before a topology could
+   * carry one.
+   */
+  constructor(topology: Topology, seed?: number) {
+    this.seed = (seed ?? sanitizeSeed(topology.seed) ?? DEFAULT_SEED) >>> 0;
     this.rng = new Rng(this.seed);
     this.topology = cloneTopology(topology);
     this.recordAuthoredCapacity();
     this.buildNodes(null);
+    this.loadSchedule(sortedSchedule(topology.faults));
   }
 
   /**
@@ -645,11 +679,78 @@ export class Engine implements BehaviourCtx {
     this.buildNodes(previous);
     // Faults survive a topology edit, but a whole-node partition names its
     // edges implicitly, so the flattened set has to be recomputed against the
-    // new wiring. A fault on a node that no longer exists is dropped.
+    // new wiring. A fault on a node that no longer exists is dropped, and so
+    // is a cut on an edge that no longer exists.
+    const droppedNodes: string[] = [];
+    const droppedEdges: string[] = [];
     for (const nodeId of [...this.faults.keys()]) {
-      if (!this.nodes.has(nodeId)) this.faults.delete(nodeId);
+      if (!this.nodes.has(nodeId)) {
+        this.faults.delete(nodeId);
+        droppedNodes.push(nodeId);
+      }
+    }
+    if (this.severed.size > 0) {
+      const edgeIds = new Set(this.topology.edges.map((e) => e.id));
+      for (const id of [...this.severed]) {
+        if (!edgeIds.has(id)) {
+          this.severed.delete(id);
+          droppedEdges.push(id);
+        }
+      }
     }
     this.rebuildCutEdges();
+
+    // The schedule follows the same rule as everything else here: an edit
+    // changes what happens next, never what already happened.
+    //
+    //   faults absent    the schedule is kept as it is, recordings included,
+    //                    so a shell that does not know about schedules can
+    //                    keep calling this on every edit.
+    //   the same list    nothing changes, so a shell that does carry the
+    //                    schedule in its topology does not replay it per edit.
+    //   a new list       it replaces the schedule. Entries at or before the
+    //                    time already played are treated as past and skipped,
+    //                    not applied late; faults in force stay in force.
+    //
+    // An entry naming a node or edge that this edit removed stays in the
+    // schedule and does nothing when it comes due.
+    if (t.faults !== undefined) {
+      const next = sortedSchedule(t.faults);
+      if (JSON.stringify(next) !== JSON.stringify(this.schedule)) {
+        this.loadSchedule(next);
+        let i = 0;
+        while (
+          i < this.schedule.length &&
+          this.schedule[i].atMs <= this.scheduleThroughMs
+        ) {
+          i++;
+        }
+        this.scheduleNext = i;
+        this.nextFaultMs = i < this.schedule.length ? this.schedule[i].atMs : Infinity;
+      }
+    }
+
+    // Dropping a fault with its node, or a cut with its edge, heals it live.
+    // Where the schedule played that fault, it also gets the entry that heals
+    // it, or a node or edge added back under the same id would come back
+    // healthy here and broken in every replay of the schedule.
+    for (const nodeId of droppedNodes) {
+      if (this.playedLast(nodeId, 'node') === 'inject') {
+        this.appendRecorded({ atMs: this.now, action: 'clear', nodeId });
+      }
+    }
+    for (const edgeId of droppedEdges) {
+      if (this.playedLast(edgeId, 'edge') === 'cut') {
+        this.appendRecorded({ atMs: this.now, action: 'restore', edgeId });
+      }
+    }
+
+    // A seed in the topology is the seed the NEXT run starts from. The run in
+    // progress has already drawn from the old one, and reseeding it halfway
+    // would give a trajectory no single seed reproduces, so it takes effect
+    // at reset(). Absent means keep the current seed, as with faults.
+    const seed = sanitizeSeed(t.seed);
+    if (seed !== undefined) this.seed = seed;
   }
 
   updateNodeConfig(id: string, patch: Partial<NodeConfig>): void {
@@ -730,6 +831,169 @@ export class Engine implements BehaviourCtx {
     if (state) this.pumpQueue(state);
   }
 
+  /**
+   * Sever one edge, request or control, without faulting either end. Returns
+   * false when there is no such edge or it is already severed. This is the
+   * single-cable case a node's 'partition' cannot express cleanly: that one
+   * occupies the node's only fault slot, so it would evict a 'slow' already
+   * there, and its edges heal together when the fault clears.
+   */
+  cutEdge(edgeId: string): boolean {
+    if (this.severed.has(edgeId)) return false;
+    if (!this.topology.edges.some((e) => e.id === edgeId)) return false;
+    this.severed.add(edgeId);
+    this.rebuildCutEdges();
+    return true;
+  }
+
+  /**
+   * Reconnect an edge severed by cutEdge(). Returns false when it was not. An
+   * edge also cut by a node's 'partition' stays cut until that fault clears,
+   * because the two are separate faults and healing one is not healing both.
+   */
+  restoreEdge(edgeId: string): boolean {
+    if (!this.severed.delete(edgeId)) return false;
+    this.rebuildCutEdges();
+    return true;
+  }
+
+  /** Edges severed by cutEdge() right now, in the order they were cut. */
+  activeCuts(): string[] {
+    return [...this.severed];
+  }
+
+  /* ---------------- recording ---------------- *
+   *
+   * The same four operations, applied now AND written into the schedule at
+   * the current simulated time, so a run the student broke by hand can be
+   * exported with exportTopology() and replayed exactly. An operation that
+   * changes nothing (clearing a healthy node, cutting a cut edge) is not
+   * recorded, so the schedule stays a list of things that happened.
+   *
+   * The entry is placed after every entry already played and before every
+   * one still to come, so reset() replays it in the same position relative
+   * to the authored schedule as it happened live.
+   * ------------------------------------------- */
+
+  /** injectFailure(), recorded. */
+  recordFailure(nodeId: string, kind: FailureKind, opts: FailureOpts = {}): void {
+    if (!this.nodes.has(nodeId)) return;
+    this.applyOverdueFaults();
+    this.injectFailure(nodeId, kind, opts);
+    const copy: FailureOpts = {};
+    if (opts.factor !== undefined) copy.factor = opts.factor;
+    if (opts.rate !== undefined) copy.rate = opts.rate;
+    if (opts.edgeIds !== undefined) copy.edgeIds = opts.edgeIds.slice();
+    this.appendRecorded({
+      atMs: this.now,
+      action: 'inject',
+      nodeId,
+      kind,
+      ...(Object.keys(copy).length > 0 ? { opts: copy } : {}),
+    });
+  }
+
+  /** clearFailure(), recorded. */
+  recordClearFailure(nodeId: string): void {
+    this.applyOverdueFaults();
+    if (!this.faults.has(nodeId)) return;
+    this.clearFailure(nodeId);
+    this.appendRecorded({ atMs: this.now, action: 'clear', nodeId });
+  }
+
+  /** cutEdge(), recorded. Returns what cutEdge() returned. */
+  recordCutEdge(edgeId: string): boolean {
+    this.applyOverdueFaults();
+    if (!this.cutEdge(edgeId)) return false;
+    this.appendRecorded({ atMs: this.now, action: 'cut', edgeId });
+    return true;
+  }
+
+  /** restoreEdge(), recorded. Returns what restoreEdge() returned. */
+  recordRestoreEdge(edgeId: string): boolean {
+    this.applyOverdueFaults();
+    if (!this.restoreEdge(edgeId)) return false;
+    this.appendRecorded({ atMs: this.now, action: 'restore', edgeId });
+    return true;
+  }
+
+  /** The whole schedule, authored and recorded, as a copy the caller owns. */
+  faultSchedule(): FaultEvent[] {
+    return sanitizeFaults(this.schedule);
+  }
+
+  /**
+   * Forget the schedule. Faults already in force stay in force; reset() after
+   * this starts a healthy run.
+   */
+  clearFaultSchedule(): void {
+    this.schedule = [];
+    this.scheduleNext = 0;
+    this.nextFaultMs = Infinity;
+  }
+
+  /**
+   * The topology this engine was given, with its authored scale (not what a
+   * controller grew it to), with the schedule and the seed attached, ready to
+   * save or share and replay. Entries whose node or edge has since been
+   * removed are left out, so the result passes the same validation an import
+   * does.
+   * Annotations are not engine state: a caller that has them spreads its own
+   * topology under this one.
+   */
+  exportTopology(): Topology {
+    const t = cloneTopology(this.topology);
+    for (const n of t.nodes) {
+      const authored = this.authoredCapacity.get(n.id);
+      if (authored !== undefined) n.config.capacity = authored;
+      const authoredShard = this.authoredShardCapacity.get(n.id);
+      if (authoredShard !== undefined) n.config.shardCapacity = authoredShard;
+      if (this.authoredInstances.has(n.id)) {
+        n.config.instances = this.authoredInstances.get(n.id);
+      }
+    }
+    const faults = sanitizeFaults(this.schedule, t);
+    return {
+      ...t,
+      ...(faults.length > 0 ? { faults } : {}),
+      // Left out at the default, so a design that never chose a seed exports
+      // exactly as it did before seeds were saved.
+      ...(this.seed !== DEFAULT_SEED ? { seed: this.seed } : {}),
+    };
+  }
+
+  /** The seed reset() replays from. */
+  runSeed(): number {
+    return this.seed;
+  }
+
+  private appendRecorded(entry: FaultEvent): void {
+    this.schedule.splice(this.scheduleNext, 0, entry);
+    this.scheduleNext++;
+  }
+
+  /**
+   * Play the entries already due. Only an advance() that ran out of its event
+   * budget leaves any, and a recording made then has to land after them, the
+   * way the sorted schedule will replay it.
+   */
+  private applyOverdueFaults(): void {
+    while (this.nextFaultMs <= this.now) this.applyDueFaults();
+  }
+
+  /** The action of the last entry already played on a node or an edge. */
+  private playedLast(id: string, target: 'node' | 'edge'): FaultEvent['action'] | null {
+    for (let i = this.scheduleNext - 1; i >= 0; i--) {
+      const f = this.schedule[i];
+      if (f.action === 'inject' || f.action === 'clear') {
+        if (target === 'node' && f.nodeId === id) return f.action;
+      } else if (target === 'edge' && f.edgeId === id) {
+        return f.action;
+      }
+    }
+    return null;
+  }
+
   /** Every fault in force, for the UI. */
   activeFailures(): ActiveFailure[] {
     const out: ActiveFailure[] = [];
@@ -773,6 +1037,7 @@ export class Engine implements BehaviourCtx {
 
   private rebuildCutEdges(): void {
     this.cutEdges.clear();
+    for (const id of this.severed) this.cutEdges.add(id);
     for (const [nodeId, fault] of this.faults) {
       if (fault.kind !== 'partition') continue;
       if (fault.edgeIds.length > 0) {
@@ -798,6 +1063,14 @@ export class Engine implements BehaviourCtx {
 
     for (;;) {
       const next = this.heap.peek();
+      // A scheduled fault lands after every event due at its own millisecond
+      // and before the first one after it. One due exactly at `target` waits
+      // for the tail below instead, which is where a fault the student clicks
+      // between two frames lands, so a recording and its replay agree.
+      if (this.nextFaultMs < target && (!next || this.nextFaultMs < next.time)) {
+        this.applyDueFaults();
+        continue;
+      }
       if (!next || next.time > target) break;
       if (budget-- <= 0) break;
       const ev = this.heap.pop()!;
@@ -811,6 +1084,43 @@ export class Engine implements BehaviourCtx {
     this.integrateAll();
     if (this.tickNodes.length > 0) this.runTicks(dt);
     this.maybeRecordHistory();
+    // Skipped when the event budget ran out: events are still owed before
+    // `target`, and a fault applied now would jump ahead of them.
+    if (budget > 0) {
+      while (this.nextFaultMs <= target) this.applyDueFaults();
+      this.scheduleThroughMs = target;
+    }
+  }
+
+  /**
+   * Apply every schedule entry due at `nextFaultMs`, in list order, as one
+   * batch, so two faults at the same millisecond are not split by the work
+   * the first one sets off.
+   */
+  private applyDueFaults(): void {
+    const atMs = this.nextFaultMs;
+    if (atMs > this.now) this.now = atMs;
+    const schedule = this.schedule;
+    while (
+      this.scheduleNext < schedule.length &&
+      schedule[this.scheduleNext].atMs <= atMs
+    ) {
+      const f = schedule[this.scheduleNext++];
+      if (f.action === 'inject') this.injectFailure(f.nodeId, f.kind, f.opts);
+      else if (f.action === 'clear') this.clearFailure(f.nodeId);
+      else if (f.action === 'cut') this.cutEdge(f.edgeId);
+      else this.restoreEdge(f.edgeId);
+    }
+    this.scheduleThroughMs = atMs;
+    this.nextFaultMs =
+      this.scheduleNext < schedule.length ? schedule[this.scheduleNext].atMs : Infinity;
+  }
+
+  /** Install a schedule from sortedSchedule() and rewind it to its first entry. */
+  private loadSchedule(schedule: FaultEvent[]): void {
+    this.schedule = schedule;
+    this.scheduleNext = 0;
+    this.nextFaultMs = this.schedule.length > 0 ? this.schedule[0].atMs : Infinity;
   }
 
   snapshot(): SimSnapshot {
@@ -1088,10 +1398,15 @@ export class Engine implements BehaviourCtx {
     for (const counter of this.edgeFlow.values()) counter.reset();
     // Chaos is part of the run, not of the topology: reset() must reproduce
     // the original trajectory from t=0, which it cannot do while a fault
-    // injected mid-run is still in force.
+    // injected mid-run is still in force. What WAS scheduled, or recorded,
+    // is replayed from its first entry instead.
     this.faults.clear();
+    this.severed.clear();
     this.cutEdges.clear();
     this.snapFailures.length = 0;
+    this.scheduleNext = 0;
+    this.nextFaultMs = this.schedule.length > 0 ? this.schedule[0].atMs : Infinity;
+    this.scheduleThroughMs = -Infinity;
     // The trace belongs to the run that produced it. Keeping it across a
     // reset would show a journey through a system that no longer exists.
     this.tracing = null;
@@ -1516,6 +1831,23 @@ export class Engine implements BehaviourCtx {
       return;
     }
 
+    // A lossy link drops the crossing, and like a cut it fails at the caller
+    // with the target untouched, so the caller's retries draw again. Nothing
+    // is drawn unless lossRate is set, which keeps a lossless design's random
+    // stream, and so its whole run, exactly what it was.
+    const loss = edge.lossRate;
+    if (loss !== undefined && loss > 0 && this.rng.next() < loss) {
+      parentState.errors.add(this.now, 1);
+      parentState.totalFailed++;
+      const stub = this.acquireReq();
+      stub.attempt = attempt;
+      stub.retryTarget = edge.id;
+      stub.resolved = true;
+      this.childResolvedFrom(stub, parent, false, 'packet-loss', 0);
+      this.recycle(stub);
+      return;
+    }
+
     const child = this.acquireReq();
     child.nodeId = target.id;
     child.parent = parent;
@@ -1540,8 +1872,8 @@ export class Engine implements BehaviourCtx {
 
     // Link propagation delay. Absent (the case for every topology today) this
     // is a plain synchronous admission and the event stream is unchanged.
-    // bandwidthRps and lossRate are declared on SimEdge but not yet applied;
-    // the networking phase adds them alongside this delay.
+    // bandwidthRps is declared on SimEdge but not yet applied; the networking
+    // phase adds it alongside this delay.
     const linkMs = edge.latencyMs;
     if (linkMs !== undefined && linkMs > 0) {
       this.push(this.now + linkMs, EV_LINK_ARRIVE, target.id, child, child.token);
@@ -2044,7 +2376,7 @@ export class Engine implements BehaviourCtx {
       } else {
         this.sysFailed.add(this.now, 1);
         this.totalFailed++;
-        this.failures[reason]++;
+        this.failures[reason] = (this.failures[reason] ?? 0) + 1;
         if (client) {
           client.totalFailed++;
           // No timeout arm. `onTimeout` already attributed it to whichever
@@ -2827,6 +3159,16 @@ function describeFault(nodeId: string, f: Fault): ActiveFailure {
   else if (f.kind === 'errors') out.rate = f.rate;
   else if (f.kind === 'partition') out.edgeIds = f.edgeIds.slice();
   return out;
+}
+
+/**
+ * A schedule as the engine plays it: shape-checked (targets are checked when
+ * an entry comes due, since an edit may add or remove them) and sorted by
+ * time. Array.prototype.sort is stable, so entries sharing a time keep their
+ * list order, which is the order `FaultEvent` promises they apply in.
+ */
+function sortedSchedule(input: unknown): FaultEvent[] {
+  return sanitizeFaults(input).sort((a, b) => a.atMs - b.atMs);
 }
 
 function clamp01(v: number): number {

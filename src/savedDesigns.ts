@@ -1,5 +1,7 @@
 import { isTopology } from './clipboard';
 import { sanitizeAnnotations } from './sim/annotations';
+import { sanitizeFaults } from './sim/faults';
+import { sanitizeSeed } from './sim/seed';
 import type { Topology } from './sim/types';
 
 /* ------------------------------------------------------------------ *
@@ -79,6 +81,11 @@ function parseEntry(raw: unknown): SavedDesign | null {
   const annotations = sanitizeAnnotations(
     (e.topology as { annotations?: unknown }).annotations,
   );
+  const faults = sanitizeFaults(
+    (e.topology as { faults?: unknown }).faults,
+    e.topology,
+  );
+  const seed = sanitizeSeed((e.topology as { seed?: unknown }).seed);
   return {
     id: e.id,
     name:
@@ -88,11 +95,13 @@ function parseEntry(raw: unknown): SavedDesign | null {
     savedAt:
       typeof e.savedAt === 'number' && Number.isFinite(e.savedAt) ? e.savedAt : 0,
     // Rebuilt field by field, so nothing the entry carried beyond these
-    // three reaches the engine.
+    // fields reaches the engine.
     topology: {
       nodes: e.topology.nodes,
       edges: e.topology.edges,
       ...(annotations.length > 0 ? { annotations } : {}),
+      ...(faults.length > 0 ? { faults } : {}),
+      ...(seed !== undefined ? { seed } : {}),
     },
   };
 }
