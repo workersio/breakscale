@@ -598,9 +598,9 @@ export interface SimEdge {
   control?: boolean;
 
   /* ---- link characteristics (networking phase) ---------------------- *
-   * All optional and absent from every topology today, so nothing changes
-   * until one is set. Only latencyMs is implemented; the other two are
-   * declared now so the shape does not have to churn later.
+   * All optional and absent from every preset, so nothing changes until one
+   * is set. latencyMs and lossRate are implemented; bandwidthRps is declared
+   * now so the shape does not have to churn later.
    * ------------------------------------------------------------------- */
 
   /**
@@ -616,9 +616,12 @@ export interface SimEdge {
    */
   bandwidthRps?: number;
   /**
-   * DECLARED BUT UNUSED. Fraction of requests the link drops, 0..1. The
-   * networking phase will fail crossings against this; today the engine
-   * ignores it entirely.
+   * Fraction of crossings the link drops, 0..1. Each request offered to the
+   * edge is lost with this probability, drawn from the seeded RNG, and the
+   * CALLER sees it fail as 'packet-loss' at once, the way it sees a cut edge. A
+   * retry is a fresh crossing with a fresh draw. Undefined, 0 or not a
+   * number means a perfect link, and draws nothing, so the run is the same
+   * one it was before the field was read. 1 or more drops everything.
    */
   lossRate?: number;
 }
@@ -634,6 +637,23 @@ export interface Topology {
    * for it belongs.
    */
   annotations?: import('./annotations').Annotation[];
+  /**
+   * A timed fault schedule: crashes, slowdowns, error bursts and cut links,
+   * each pinned to a moment of simulated time. The engine plays it from the
+   * event loop, so the same seed, topology and schedule replay the same run
+   * however the frames happen to fall. Optional, and absent from every
+   * topology written before it existed, which therefore runs exactly as it
+   * always did. See `FaultEvent`.
+   */
+  faults?: FaultEvent[];
+  /**
+   * The seed for the run's random draws (arrival gaps, service times, cache
+   * hits), a whole number from 0 to 2^32 - 1. Saved with a design so that a
+   * shared run replays exactly; the engine uses it when it is not handed a
+   * seed of its own. Optional, and a topology without one runs on seed 1, as
+   * every topology did before the field existed.
+   */
+  seed?: number;
 }
 
 /** Rolling stats for one node over the last window. */
@@ -1279,6 +1299,8 @@ export type FailureReason =
   | 'crashed'
   /** The edge the call needed is cut by an injected network partition. */
   | 'partitioned'
+  /** Lost crossing an edge with a lossRate: the link dropped it. */
+  | 'packet-loss'
   /** No region was serving: the active one is down and failover has not landed. */
   | 'region-down'
   /** Refused by a websocket gateway: every connection slot was already held. */
@@ -1291,6 +1313,16 @@ export type FailureReason =
   | 'acquire-timeout'
   /** Dropped by a load shedder protecting higher-priority traffic. */
   | 'deprioritized';
+
+/**
+ * Lifetime failure counts by reason. `packet-loss` is the one optional key: it
+ * appears only once a lossy edge has dropped a request, so a design with no
+ * lossRate snapshots byte for byte as it did before the reason existed.
+ * Read it with `?? 0`.
+ */
+export type FailureCounts = Record<Exclude<FailureReason, 'packet-loss'>, number> & {
+  'packet-loss'?: number;
+};
 
 /* ------------------------------------------------------------------ *
  * Failure injection
@@ -1308,6 +1340,17 @@ export type FailureKind =
   | 'errors'
   /** Named edges are cut: a request offered to one fails as 'partitioned'. */
   | 'partition';
+
+/**
+ * The same list at runtime, for the validators that cannot read a type.
+ * Written out beside the type for the reason TRAFFIC_PATTERNS is.
+ */
+export const FAILURE_KINDS: readonly FailureKind[] = [
+  'crash',
+  'slow',
+  'errors',
+  'partition',
+];
 
 /** Knobs for an injected failure. Which ones apply depends on the kind. */
 export interface FailureOpts {
@@ -1328,6 +1371,34 @@ export interface FailureOpts {
    */
   edgeIds?: string[];
 }
+
+/**
+ * One entry in a topology's fault schedule.
+ *
+ * `atMs` is simulated time, never wall clock. An entry lands after every
+ * event already due at that same millisecond, which is exactly where a fault
+ * the student clicks in between two frames lands too, so a recorded run and
+ * its replay agree. Entries sharing an `atMs` apply in list order.
+ *
+ *   inject   attach a fault to a node, as `Engine.injectFailure` does. It
+ *            replaces whatever fault that node already had.
+ *   clear    heal the node, as `Engine.clearFailure` does.
+ *   cut      sever one edge, as `Engine.cutEdge` does. Independent of any
+ *            node fault, so a node can be slow AND have one wire cut.
+ *   restore  reconnect an edge that a `cut` severed. An edge cut by a
+ *            node's 'partition' fault stays cut until that fault is cleared.
+ */
+export type FaultEvent =
+  | {
+      atMs: number;
+      action: 'inject';
+      nodeId: string;
+      kind: FailureKind;
+      opts?: FailureOpts;
+    }
+  | { atMs: number; action: 'clear'; nodeId: string }
+  | { atMs: number; action: 'cut'; edgeId: string }
+  | { atMs: number; action: 'restore'; edgeId: string };
 
 /** An injected failure as reported back to the UI. */
 export interface ActiveFailure {
@@ -1394,7 +1465,7 @@ export interface SimSnapshot {
    * differently.
    */
   edgeState: Record<string, EdgeState>;
-  failuresByReason: Record<FailureReason, number>;
+  failuresByReason: FailureCounts;
   /**
    * Injected failures in force right now, one entry per faulted node. Empty
    * on a healthy system, so the UI can render a chaos indicator from this

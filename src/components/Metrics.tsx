@@ -708,6 +708,7 @@ const REASON_ORDER: FailureReason[] = [
   'bulkhead-full',
   'acquire-timeout',
   'deprioritized',
+  'packet-loss',
 ];
 
 const REASON_LABEL: Record<FailureReason, string> = {
@@ -726,6 +727,7 @@ const REASON_LABEL: Record<FailureReason, string> = {
   'bulkhead-full': 'bulkhead full',
   'acquire-timeout': 'acquire timeout',
   deprioritized: 'deprioritized',
+  'packet-loss': 'packet loss',
 };
 
 /**
@@ -757,6 +759,7 @@ const REASON_TERM: Record<FailureReason, string> = {
   'bulkhead-full': 'bulkhead-full',
   'acquire-timeout': 'bulkhead-full',
   deprioritized: 'deprioritized',
+  'packet-loss': 'packet-loss',
 };
 
 /**
