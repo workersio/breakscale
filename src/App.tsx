@@ -1070,13 +1070,14 @@ export default function App() {
   const [history] = useState(
     () =>
       new SessionHistory({
-        onChange: () => {
+        onChange: (edited) => {
           setHistVersion((v) => v + 1);
           // An entry landing is the definition of "the reader changed
           // something", so it is also the moment a design opened from a
           // share link stops being someone else's and starts being theirs.
-          // Saving resumes from here; see sharePending.
-          setSharePending((p) => (p ? false : p));
+          // Saving resumes from here; see sharePending. An Undo with
+          // nothing to undo changed nothing, so it must not.
+          if (edited) setSharePending((p) => (p ? false : p));
         },
       }),
   );
