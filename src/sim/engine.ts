@@ -1,6 +1,7 @@
 import { behaviourFor, type ComponentBehaviour } from './behaviour';
 import type { BehaviourCtx, NodeStateLike, ReqLike } from './engine-types';
 import { MinHeap, type Timed } from './heap';
+import { cos, exp, pow } from './fdlibm';
 import { sanitizeFaults } from './faults';
 import { Rng } from './random';
 import { DEFAULT_SEED, sanitizeSeed } from './seed';
@@ -2445,7 +2446,7 @@ export class Engine implements BehaviourCtx {
           // fails in zero time) would let a request burn its whole retry
           // budget in the same instant, making the collapse infinitely sharp
           // instead of a progression the student can watch develop.
-          const backoff = RETRY_BASE_BACKOFF_MS * Math.pow(2, attempt - 1);
+          const backoff = RETRY_BASE_BACKOFF_MS * pow(2, attempt - 1);
           const delay = backoff * (0.5 + this.rng.next());
           parent.retryTarget = edge.id;
           parent.retryAttempt = attempt;
@@ -2568,7 +2569,7 @@ export class Engine implements BehaviourCtx {
         // A day as a cosine between a quarter of the baseline and twice it.
         // Smooth because real daily traffic has no corners, and offset so a
         // run starts in the small hours rather than mid-peak.
-        const swing = (1 - Math.cos(2 * Math.PI * phase)) / 2;
+        const swing = (1 - cos(2 * Math.PI * phase)) / 2;
         return base * (DIURNAL_TROUGH + (DIURNAL_PEAK - DIURNAL_TROUGH) * swing);
       }
       default:
@@ -2961,7 +2962,7 @@ export class Engine implements BehaviourCtx {
         ? Math.min(capacity > 0 ? busy / capacity : 0, 1)
         : 0;
       // Exponential smoothing over roughly a 1s window.
-      const alpha = 1 - Math.exp(-dt / 500);
+      const alpha = 1 - exp(-dt / 500);
       state.utilization += (instant - state.utilization) * alpha;
       state.busyMsAccum += busy * dt;
     }
