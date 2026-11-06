@@ -31,6 +31,12 @@ export interface NodeFaultControlsProps {
   /** Every cable into or out of this node. */
   cables: readonly CableInfo[];
   onCrash: () => void;
+  /**
+   * False for a kind that does no timed work (a gate, a controller, the
+   * client), where Slow would change nothing. The row stays, inert, and says
+   * why. Defaults to true.
+   */
+  canSlow?: boolean;
   onSlow: (factor: number) => void;
   onGlitch: (rate: number) => void;
   onFix: () => void;
@@ -53,6 +59,7 @@ export function NodeFaultControls({
   fault,
   cables,
   onCrash,
+  canSlow = true,
   onSlow,
   onGlitch,
   onFix,
@@ -66,7 +73,7 @@ export function NodeFaultControls({
   const [rate, setRate] = useState(DEFAULT_GLITCH_RATE);
 
   const crashed = fault?.kind === 'crash';
-  const slowSame = fault?.kind === 'slow' && fault.factor === factor;
+  const slowInert = !canSlow || (fault?.kind === 'slow' && fault.factor === factor);
   const glitchSame = fault?.kind === 'errors' && fault.rate === rate;
   const healthy = fault === null;
 
@@ -103,6 +110,7 @@ export function NodeFaultControls({
             id={`${id}-factor`}
             className="ins-number"
             value={factor}
+            disabled={!canSlow}
             onChange={(e) => setFactor(Number(e.currentTarget.value))}
           >
             {SLOW_FACTORS.map((f) => (
@@ -114,15 +122,17 @@ export function NodeFaultControls({
           <button
             type="button"
             className="btn btn-sm btn-danger"
-            aria-disabled={slowSame}
+            aria-disabled={slowInert}
             aria-describedby={`${id}-slow`}
-            onClick={guarded(slowSame, () => onSlow(factor))}
+            onClick={guarded(slowInert, () => onSlow(factor))}
           >
             Slow
           </button>
         </div>
         <p id={`${id}-slow`} className="ins-hint">
-          Every request takes that many times longer to handle.
+          {canSlow
+            ? 'Every request takes that many times longer to handle.'
+            : 'It does no work of its own that takes time, so there is nothing here to slow down. Try it on a component that handles requests.'}
         </p>
       </div>
 

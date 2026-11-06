@@ -2965,6 +2965,9 @@ function SingleInspector({
               fault={faults.fault}
               cables={faults.cables}
               onCrash={() => faults.onInject(node.id, 'crash')}
+              // A kind that offers no service time does no timed work, so a
+              // slow fault there would change nothing.
+              canSlow={fields.includes('serviceMs')}
               onSlow={(factor) => faults.onInject(node.id, 'slow', { factor })}
               onGlitch={(rate) => faults.onInject(node.id, 'errors', { rate })}
               onFix={() => faults.onFix(node.id)}
