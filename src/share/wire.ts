@@ -370,9 +370,10 @@ const TAIL_FAULTS = 1 << 1;
 const TAIL_KNOWN = TAIL_SEED | TAIL_FAULTS;
 
 /**
- * Fault operations. Index is the wire value. The four injections come first,
+ * Fault operations. Index is the wire value. Each injection is its own op,
  * one per failure kind, so an entry's action and kind cost one value
- * together. Append only.
+ * together. The first four kinds came before the edge ops, and a kind added
+ * since goes on the end with them. Append only.
  */
 const FAULT_OPS = [
   'crash',
@@ -382,6 +383,7 @@ const FAULT_OPS = [
   'clear',
   'cut',
   'restore',
+  'crash-instance',
 ] as const;
 
 type FaultOp = (typeof FAULT_OPS)[number];

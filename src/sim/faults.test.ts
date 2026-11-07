@@ -687,7 +687,7 @@ describe('sanitizeFaults', () => {
       '3 has atMs -1; use a time in milliseconds, 0 or more.',
       '4 has atMs "5"; use a time in milliseconds, 0 or more.',
       '5 has action "explode"; use inject, clear, cut or restore.',
-      '6 has kind "meltdown"; use crash, slow, errors, partition.',
+      '6 has kind "meltdown"; use crash, slow, errors, partition, crash-instance.',
       "7 names node 'ghost', but there is no such node.",
       '8 needs `nodeId`.',
       "9 names edge 'ghost->api', but there is no such edge.",

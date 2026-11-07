@@ -1,4 +1,8 @@
-import { behaviourFor, type ComponentBehaviour } from './behaviour';
+import {
+  behaviourFor,
+  canCrashOneInstance,
+  type ComponentBehaviour,
+} from './behaviour';
 import type { BehaviourCtx, NodeStateLike, ReqLike } from './engine-types';
 import { MinHeap, type Timed } from './heap';
 import { cos, exp, pow } from './fdlibm';
@@ -20,6 +24,7 @@ import type {
   SimEdge,
   SimNode,
   RequestTrace,
+  RunTally,
   SimSnapshot,
   SystemStats,
   Topology,
@@ -51,6 +56,8 @@ const LATENCY_WINDOW_MS = 5000;
 const LATENCY_RING = 4096;
 /** Max samples sorted per percentile computation; beyond this the window is strided. */
 const PERCENTILE_SAMPLE_CAP = 512;
+/** Latencies a tally holds before its first doubling: 40s at 100 rps. */
+const TALLY_INITIAL = 4096;
 /** Trailing window for rate (per-second) measurements. */
 /* Traffic pattern shape. Chosen so a spike's MEAN over one cycle stays near
    the baseline: the reader compares the same work arriving unevenly, not more
@@ -193,10 +200,28 @@ interface Req {
    * reason instead of succeeding. Null on every ordinary request.
    */
   lostReason: FailureReason | null;
+  /**
+   * Which instance of `heldAt` this request's work is on, or -1 while it
+   * holds no slot. Placed when service starts and given back with the slot,
+   * so a 'crash-instance' fault can fail exactly the work its machine held.
+   */
+  instance: number;
   /** Edge this request traversed to reach nodeId, for edgeFlow accounting. */
   viaEdge: string;
   /** True when this request is a detached queue message being drained by a worker. */
   detached: boolean;
+  /**
+   * The tally a write-behind cache acked this detached copy under, so its
+   * landing is counted there even after the tally stops. Null on every
+   * request but those copies, and on them too when no tally ran.
+   */
+  ackedIn: Tally | null;
+  /**
+   * The tally a queue accepted this buffered message under, so a job that
+   * fails behind the ack is counted there, past the tally's stop too. Null on
+   * every request but those messages, and on them too when no tally ran.
+   */
+  queuedIn: Tally | null;
   /** Node that must be re-called on retry (the downstream target). */
   retryTarget: string;
   /** Attempt number for a scheduled retry. */
@@ -402,6 +427,48 @@ function quantile(sorted: Float64Array, n: number, q: number): number {
  * so the send path can test a partition with a single Set lookup.
  * ------------------------------------------------------------------ */
 
+/** A tally while it is recorded. `latencies` is filled up to `completed`. */
+interface Tally {
+  fromMs: number;
+  /** -1 while running. */
+  toMs: number;
+  arrived: number;
+  completed: number;
+  failed: number;
+  failures: Partial<Record<FailureReason, number>>;
+  latencies: Float64Array;
+  /** Writes a write-behind cache said were saved while this tally ran. */
+  writesAcked: number;
+  /**
+   * How many of those reached the store. Counted for as long as the engine
+   * runs, past the tally's stop, since a write acked near the end of the
+   * window is still on its way to the store then.
+   */
+  writesLanded: number;
+  /** Jobs a queue accepted while this tally ran. */
+  jobsQueued: number;
+  /**
+   * How many of `jobsQueued` failed once a worker took them. Counted past the
+   * tally's stop, like `writesLanded`.
+   */
+  jobsFailed: number;
+}
+
+function tallyLatency(t: Tally, ms: number): void {
+  if (t.completed === t.latencies.length) {
+    // Doubling keeps the copies to about one per element over a whole run.
+    const grown = new Float64Array(t.latencies.length * 2);
+    grown.set(t.latencies);
+    t.latencies = grown;
+  }
+  t.latencies[t.completed++] = ms;
+}
+
+function tallyFailure(t: Tally, reason: FailureReason): void {
+  t.failed++;
+  t.failures[reason] = (t.failures[reason] ?? 0) + 1;
+}
+
 interface Fault {
   kind: FailureKind;
   /** Simulated time the fault was injected. */
@@ -532,6 +599,26 @@ interface NodeState {
   instancePendingPublished: number;
 
   /**
+   * Work held on each instance right now, indexed by `Req.instance`: requests
+   * in service and threads parked on downstream calls. Null until the node
+   * first serves. It never shrinks, so work on an instance a scale-down
+   * removed is still counted until it finishes.
+   *
+   * The node's slots stay one pool, and admission still compares the whole
+   * node's work against `instances * capacity`. This only records which
+   * machine each slot is on, which is what losing one machine needs to know.
+   */
+  instanceBusy: Int32Array | null;
+  /** Where the next placement starts looking, so work is spread round the fleet. */
+  instanceNext: number;
+  /**
+   * 1 while a 'crash-instance' fault holds instance 0 down, else 0. A copy of
+   * the fault map kept on the state, because effectiveCapacity() reads it on
+   * every admission.
+   */
+  instancesDown: number;
+
+  /**
    * Behaviour-private scratch state, allocated once from the behaviour's
    * initState() hook. The engine never reads or interprets it. This is what
    * lets a stateful kind (an autoscaler's cooldown clock, a region's failover
@@ -594,6 +681,14 @@ export class Engine implements BehaviourCtx {
   private sysFailed = new RateCounter();
   private totalRequests = 0;
   private totalFailed = 0;
+  /**
+   * The tally being recorded, or null, which is every run that never asked
+   * for one. The root paths test this and nothing else, so a run without a
+   * tally does one comparison per request more than it did before.
+   */
+  private tally: Tally | null = null;
+  /** The last tally stopped, kept for readTally() until the next starts. */
+  private tallyStopped: Tally | null = null;
   private failures: FailureCounts = {
     error: 0,
     shed: 0,
@@ -734,6 +829,7 @@ export class Engine implements BehaviourCtx {
 
   setTopology(t: Topology): void {
     const previous = this.nodes;
+    const wasDown = this.instanceCrashState();
     this.topology = cloneTopology(t);
     this.recordAuthoredCapacity();
     this.buildNodes(previous);
@@ -743,10 +839,28 @@ export class Engine implements BehaviourCtx {
     // is a cut on an edge that no longer exists.
     const droppedNodes: string[] = [];
     const droppedEdges: string[] = [];
-    for (const nodeId of [...this.faults.keys()]) {
-      if (!this.nodes.has(nodeId)) {
+    for (const [nodeId, fault] of [...this.faults]) {
+      const state = this.nodes.get(nodeId);
+      // A node retyped to a kind that cannot lose one instance has no
+      // machine left down, so its fault goes the way a removed node's does.
+      if (
+        !state ||
+        (fault.kind === 'crash-instance' && !canCrashOneInstance(state.kind))
+      ) {
         this.faults.delete(nodeId);
         droppedNodes.push(nodeId);
+      }
+    }
+    // A state built fresh by this edit (a retyped node) starts with nothing
+    // down, so the copy of the fault map is written again for every node.
+    for (const state of this.nodes.values()) {
+      state.instancesDown =
+        this.faults.get(state.id)?.kind === 'crash-instance' ? 1 : 0;
+    }
+    for (const [id, down] of wasDown) {
+      const state = this.nodes.get(id);
+      if (state !== undefined && state === previous.get(id)) {
+        this.refitInstanceCrash(state, down);
       }
     }
     if (this.severed.size > 0) {
@@ -832,7 +946,10 @@ export class Engine implements BehaviourCtx {
     }
     const state = this.nodes.get(id);
     if (!state) return;
+    const fault = this.faults.get(id);
+    const wasDown = fault !== undefined && this.downBy(fault, state);
     Object.assign(state.config, patch);
+    this.refitInstanceCrash(state, wasDown);
     // A capacity increase may free up slots for waiting work immediately.
     this.pumpQueue(state);
   }
@@ -848,6 +965,10 @@ export class Engine implements BehaviourCtx {
    *              is failed at injection time. The caller sees a failed call
    *              like any other, so its retry budget and its breaker's error
    *              window both observe it.
+   *   crash-instance
+   *              effectiveCapacity() drops by one machine's slots, and the
+   *              work that machine held fails at injection time. Admission
+   *              is otherwise untouched: the node keeps serving on the rest.
    *   slow       serviceTimeFor() and ownServiceMs() multiply the node's own
    *              work: the drawn service time and any surcharge its kind
    *              adds, on every path, the self-managed stores included.
@@ -862,9 +983,13 @@ export class Engine implements BehaviourCtx {
   /**
    * Attach a fault to a node. One fault per node: injecting again replaces
    * whatever was there, so the UI never has to reason about stacking.
+   * Returns false, changing nothing, when there is no such node or it is a
+   * kind that cannot lose one instance and the fault is 'crash-instance'.
    */
-  injectFailure(nodeId: string, kind: FailureKind, opts: FailureOpts = {}): void {
-    if (!this.nodes.has(nodeId)) return;
+  injectFailure(nodeId: string, kind: FailureKind, opts: FailureOpts = {}): boolean {
+    const state = this.nodes.get(nodeId);
+    if (!state) return false;
+    if (kind === 'crash-instance' && !canCrashOneInstance(state.kind)) return false;
 
     const fault: Fault = {
       kind,
@@ -875,6 +1000,7 @@ export class Engine implements BehaviourCtx {
       edgeIds: opts.edgeIds ? opts.edgeIds.slice() : [],
     };
     this.faults.set(nodeId, fault);
+    state.instancesDown = kind === 'crash-instance' ? 1 : 0;
     this.rebuildCutEdges();
 
     // A crash is retroactive: work already inside the node dies with it.
@@ -882,6 +1008,8 @@ export class Engine implements BehaviourCtx {
     // being killed, and a student watching the graph would see the failure
     // arrive late for no visible reason.
     if (kind === 'crash') this.killInFlight(nodeId);
+    else if (kind === 'crash-instance') this.killOneInstance(state);
+    return true;
   }
 
   /** Heal a node. Work that already failed stays failed; new work succeeds. */
@@ -889,8 +1017,10 @@ export class Engine implements BehaviourCtx {
     if (!this.faults.delete(nodeId)) return;
     this.rebuildCutEdges();
     const state = this.nodes.get(nodeId);
+    if (!state) return;
+    state.instancesDown = 0;
     // A healed node may have callers' work waiting on it right now.
-    if (state) this.pumpQueue(state);
+    this.pumpQueue(state);
   }
 
   /**
@@ -941,7 +1071,7 @@ export class Engine implements BehaviourCtx {
   recordFailure(nodeId: string, kind: FailureKind, opts: FailureOpts = {}): void {
     if (!this.nodes.has(nodeId)) return;
     this.applyOverdueFaults();
-    this.injectFailure(nodeId, kind, opts);
+    if (!this.injectFailure(nodeId, kind, opts)) return;
     const copy: FailureOpts = {};
     if (opts.factor !== undefined) copy.factor = opts.factor;
     if (opts.rate !== undefined) copy.rate = opts.rate;
@@ -1029,6 +1159,67 @@ export class Engine implements BehaviourCtx {
     return this.seed;
   }
 
+  /* ---------------- tally ---------------- *
+   *
+   * An exact record of every client request that settles while it runs:
+   * each success's end-to-end latency, and each failure's reason. Off unless
+   * asked for. It reads what the run does and changes nothing, draws nothing
+   * and is not in the snapshot, so a run with a tally replays exactly as the
+   * same run without one.
+   * ---------------------------------------- */
+
+  /**
+   * Start a tally at the current simulated time, discarding any earlier one.
+   * Requests already in flight count in it if they finish inside it.
+   */
+  startTally(): void {
+    this.tallyStopped = null;
+    this.tally = {
+      fromMs: this.now,
+      toMs: -1,
+      arrived: 0,
+      completed: 0,
+      failed: 0,
+      failures: {},
+      latencies: new Float64Array(TALLY_INITIAL),
+      writesAcked: 0,
+      writesLanded: 0,
+      jobsQueued: 0,
+      jobsFailed: 0,
+    };
+  }
+
+  /** Stop recording. What was recorded stays readable until the next start. */
+  stopTally(): void {
+    const t = this.tally;
+    if (t === null) return;
+    t.toMs = this.now;
+    this.tally = null;
+    this.tallyStopped = t;
+  }
+
+  /**
+   * The tally running now, or the last one stopped, as a copy the caller owns.
+   * Null when none was started since the engine was built or last reset.
+   */
+  readTally(): RunTally | null {
+    const t = this.tally ?? this.tallyStopped;
+    if (t === null) return null;
+    return {
+      fromMs: t.fromMs,
+      toMs: t.toMs < 0 ? this.now : t.toMs,
+      arrived: t.arrived,
+      completed: t.completed,
+      failed: t.failed,
+      failuresByReason: { ...t.failures },
+      latencies: t.latencies.slice(0, t.completed),
+      writesAcked: t.writesAcked,
+      writesLanded: t.writesLanded,
+      jobsQueued: t.jobsQueued,
+      jobsFailed: t.jobsFailed,
+    };
+  }
+
   private appendRecorded(entry: FaultEvent): void {
     this.schedule.splice(this.scheduleNext, 0, entry);
     this.scheduleNext++;
@@ -1101,6 +1292,79 @@ export class Engine implements BehaviourCtx {
     // slot and then find the node crashed in onServiceComplete, failing it as
     // 'crashed'. Zeroing state.busy here instead would double-release those
     // slots and let the crashed node appear to have free capacity.
+  }
+
+  /**
+   * Fail the work instance 0 of `state` was holding: the threads parked on it
+   * and the requests in service on it. Its slots come back as each request
+   * fails, and since the fault is already in force they are not handed out
+   * again. Requests waiting in the node's line were on no machine yet and
+   * stay where they are.
+   *
+   * With one instance there is nothing left, so it is a whole-node crash.
+   */
+  private killOneInstance(state: NodeState): void {
+    if (this.effectiveInstances(state) <= 1) {
+      this.killInFlight(state.id);
+      return;
+    }
+
+    this.reclaimParked(state, 'crashed', 0);
+
+    // Every request in service has exactly one live SERVICE_DONE event, so
+    // the heap is the list of them. Collected first because failing one runs
+    // its caller's code, which can push events. Ordered by when each was
+    // scheduled, which is when its service began, so the order is the run's
+    // own rather than the heap's layout.
+    const victims: Ev[] = [];
+    this.heap.each((ev) => {
+      const req = ev.req;
+      if (
+        ev.kind === EV_SERVICE_DONE &&
+        req !== null &&
+        req.token === ev.token &&
+        req.heldAt === state &&
+        req.instance === 0
+      ) {
+        victims.push(ev);
+      }
+    });
+    victims.sort((a, b) => a.seq - b.seq);
+    for (const ev of victims) {
+      const req = ev.req;
+      // An earlier failure's caller may have resolved this one already.
+      if (req === null || req.resolved || req.token !== ev.token) continue;
+      state.errors.add(this.now, 1);
+      state.totalFailed++;
+      this.resolve(req, false, 'crashed', this.now - req.enterMs);
+    }
+  }
+
+  /** Whether each node losing one instance is down outright, by id. */
+  private instanceCrashState(): Map<string, boolean> {
+    const out = new Map<string, boolean>();
+    for (const [id, fault] of this.faults) {
+      const state = this.nodes.get(id);
+      if (fault.kind === 'crash-instance' && state !== undefined) {
+        out.set(id, this.downBy(fault, state));
+      }
+    }
+    return out;
+  }
+
+  /**
+   * A node with one instance down changed how many it runs. Down to the dead
+   * one alone, the node is crashed, so what the machine left was holding dies
+   * as a crash's would. Up from one, machines now run beside the dead one,
+   * and the work it held dies at once rather than finishing on it.
+   */
+  private refitInstanceCrash(state: NodeState, wasDown: boolean): void {
+    const fault = this.faults.get(state.id);
+    if (fault?.kind !== 'crash-instance') return;
+    const down = this.downBy(fault, state);
+    if (down === wasDown) return;
+    if (down) this.killInFlight(state.id);
+    else this.killOneInstance(state);
   }
 
   private rebuildCutEdges(): void {
@@ -1300,6 +1564,7 @@ export class Engine implements BehaviourCtx {
       if (model === 'slots') {
         this.fillSlotInstances(state);
         this.finishInstances(state, entry);
+        if (state.instancesDown > 0) entry.instancesDown = state.instancesDown;
       } else if (model === 'custom') {
         state.instancePending = 0;
         if (state.behaviour.reportInstances)
@@ -1445,6 +1710,9 @@ export class Engine implements BehaviourCtx {
     this.sysFailed.reset();
     this.totalRequests = 0;
     this.totalFailed = 0;
+    // A tally is a window of one run. The run it measured is gone.
+    this.tally = null;
+    this.tallyStopped = null;
     this.failures = {
       error: 0,
       shed: 0,
@@ -1776,6 +2044,11 @@ export class Engine implements BehaviourCtx {
       state.totalFailed++;
       this.failures.shed++;
       this.sysFailed.add(this.now, 1);
+      const tally = this.tally;
+      if (tally !== null) {
+        tally.arrived++;
+        tallyFailure(tally, 'shed');
+      }
       return;
     }
 
@@ -1805,6 +2078,7 @@ export class Engine implements BehaviourCtx {
     this.totalRequests++;
     this.sysOffered.add(this.now, 1);
     state.arrivals.add(this.now, 1);
+    if (this.tally !== null) this.tally.arrived++;
 
     this.dispatchDownstream(state, root);
   }
@@ -2082,7 +2356,7 @@ export class Engine implements BehaviourCtx {
     // crash takes a node out whatever kind it is, and the caller sees an
     // immediate failure it can retry (or that its breaker can count).
     const fault = this.faults.get(state.id);
-    if (fault && fault.kind === 'crash') {
+    if (fault && this.downBy(fault, state)) {
       state.errors.add(this.now, 1);
       state.totalFailed++;
       this.resolve(req, false, 'crashed', 0);
@@ -2217,6 +2491,13 @@ export class Engine implements BehaviourCtx {
     msg.enterMs = this.now;
     msg.hop = req.hop;
     msg.detached = true;
+    // The caller hears yes now, so a job that fails later fails where no
+    // client sees it. The tally counts those for a check to see.
+    const tally = this.tally;
+    if (tally !== null) {
+      tally.jobsQueued++;
+      msg.queuedIn = tally;
+    }
     state.waiting.push(msg);
 
     state.completions.add(this.now, 1);
@@ -2267,6 +2548,14 @@ export class Engine implements BehaviourCtx {
     msg.detached = true;
     msg.key = req.key;
     msg.isWrite = req.isWrite;
+    // A write-behind cache's ack is a promise the write will land. The tally
+    // keeps count of the promises so a check can see the ones that are
+    // broken behind it, which no client ever hears about.
+    const tally = this.tally;
+    if (tally !== null && state.kind === 'writebehind') {
+      tally.writesAcked++;
+      msg.ackedIn = tally;
+    }
     // The flush delay is the time a write sits dirty, not work, so it goes
     // in as waiting and a 'slow' fault leaves it alone.
     if (extraDeliveryMs > 0) msg.extraWaitMs = extraDeliveryMs;
@@ -2302,6 +2591,7 @@ export class Engine implements BehaviourCtx {
       state.busy++;
       req.holdingSlot = true;
       req.heldAt = state;
+      this.placeOnInstance(state, req);
       this.push(this.now + ms, EV_SERVICE_DONE, state.id, req, req.token);
     } else {
       this.onServiceComplete(state, req);
@@ -2312,6 +2602,7 @@ export class Engine implements BehaviourCtx {
     state.busy++;
     req.holdingSlot = true;
     req.heldAt = state;
+    this.placeOnInstance(state, req);
     req.enterMs = this.now;
     // Any extra time a behaviour attached to this request (a write-behind
     // cache's flush residence, booked via ackAndRelay) is consumed here,
@@ -2357,6 +2648,7 @@ export class Engine implements BehaviourCtx {
    */
   private releaseHeld(state: NodeState, req: Req): void {
     req.heldAt = null;
+    this.leaveInstance(state, req);
     if (req.parked) this.unlinkParked(state, req);
     const drained = req.onDrained;
     req.onDrained = null;
@@ -2367,6 +2659,64 @@ export class Engine implements BehaviourCtx {
     this.releaseSlot(state, req);
     this.pumpQueue(state);
     if (drained !== null) drained(this, state, req);
+  }
+
+  /**
+   * Put `req`'s work on one instance of `state`: the next one round the fleet
+   * with a free slot, skipping a machine that is down. When none has one,
+   * which only a kind that serves without asking for a slot can reach, the
+   * least loaded instance that is up takes it.
+   *
+   * No random draw, so the run's stream is the same with or without it, and
+   * nothing here changes what the node admits.
+   */
+  private placeOnInstance(state: NodeState, req: Req): void {
+    const n = this.effectiveInstances(state);
+    let busy = state.instanceBusy;
+    if (busy === null || busy.length < n) {
+      // Only when the fleet first serves or grows past every size it has had.
+      const grown = new Int32Array(Math.max(n, busy === null ? 1 : busy.length * 2));
+      if (busy !== null) grown.set(busy);
+      busy = grown;
+      state.instanceBusy = grown;
+    }
+    if (n === 1) {
+      busy[0]++;
+      req.instance = 0;
+      return;
+    }
+    const perInstance = Math.max(1, Math.floor(state.config.capacity));
+    const skip = state.instancesDown;
+    let i = state.instanceNext < n ? state.instanceNext : 0;
+    let pick = -1;
+    let fewest = Infinity;
+    for (let k = 0; k < n; k++) {
+      if (i >= skip) {
+        const held = busy[i];
+        if (held < perInstance) {
+          pick = i;
+          break;
+        }
+        if (held < fewest) {
+          fewest = held;
+          pick = i;
+        }
+      }
+      i = i + 1 < n ? i + 1 : 0;
+    }
+    // n > 1 and at most one instance is down, so the loop always picked.
+    busy[pick]++;
+    req.instance = pick;
+    state.instanceNext = pick + 1 < n ? pick + 1 : 0;
+  }
+
+  /** Take `req`'s work off the instance it was placed on. */
+  private leaveInstance(state: NodeState, req: Req): void {
+    const i = req.instance;
+    if (i < 0) return;
+    req.instance = -1;
+    const busy = state.instanceBusy;
+    if (busy !== null && i < busy.length && busy[i] > 0) busy[i]--;
   }
 
   private releaseSlot(state: NodeState, req: Req): void {
@@ -2403,28 +2753,53 @@ export class Engine implements BehaviourCtx {
    * answer. The children are left to run, because failing the parent first
    * would leave them joining into a recycled request. No pump: the caller
    * decides what the freed slots are for.
+   *
+   * With `onInstance`, only the threads on that one instance are lost and the
+   * rest stay parked.
    */
-  private reclaimParked(state: NodeState, reason: FailureReason): void {
+  private reclaimParked(
+    state: NodeState,
+    reason: FailureReason,
+    onInstance = -1,
+  ): void {
+    if (onInstance >= 0) {
+      let req = state.parkHead;
+      while (req !== null) {
+        const next = req.parkNext;
+        if (req.instance === onInstance) {
+          this.unlinkParked(state, req);
+          this.loseThread(state, req, reason);
+        }
+        req = next;
+      }
+      return;
+    }
     let req = state.parkHead;
     while (req !== null) {
       const next = req.parkNext;
       req.parked = false;
       req.parkPrev = null;
       req.parkNext = null;
-      req.heldAt = null;
-      req.lostReason = reason;
-      const drained = req.onDrained;
-      req.onDrained = null;
-      if (!state.discarded) {
-        this.releaseSlot(state, req);
-        if (drained !== null) drained(this, state, req);
-      } else {
-        req.holdingSlot = false;
-      }
+      this.loseThread(state, req, reason);
       req = next;
     }
     state.parkHead = null;
     state.parked = 0;
+  }
+
+  /** One parked thread is gone: give its slot back and mark its request lost. */
+  private loseThread(state: NodeState, req: Req, reason: FailureReason): void {
+    req.heldAt = null;
+    this.leaveInstance(state, req);
+    req.lostReason = reason;
+    const drained = req.onDrained;
+    req.onDrained = null;
+    if (!state.discarded) {
+      this.releaseSlot(state, req);
+      if (drained !== null) drained(this, state, req);
+    } else {
+      req.holdingSlot = false;
+    }
   }
 
   /** Start serving whoever is next in line, if a slot is free. */
@@ -2511,7 +2886,7 @@ export class Engine implements BehaviourCtx {
     // The node died while this request was in service. Its work is lost; the
     // slot it held has already been released by the normal path above, so the
     // accounting stays in one place.
-    if (fault && fault.kind === 'crash') {
+    if (fault && this.downBy(fault, state)) {
       state.errors.add(this.now, 1);
       state.totalFailed++;
       this.resolve(req, false, 'crashed', req.ownMs);
@@ -2638,6 +3013,8 @@ export class Engine implements BehaviourCtx {
       if (req.detached || req.abandoned) {
         // Either a queue message that finished its worker path, or work the
         // caller already timed out on. Nobody is waiting for this result.
+        if (ok && req.ackedIn !== null) req.ackedIn.writesLanded++;
+        if (!ok && req.queuedIn !== null) req.queuedIn.jobsFailed++;
         // Free the sampler if this was the traced one, or nothing would ever
         // be traced again.
         if (this.tracing === req) this.tracing = null;
@@ -2661,6 +3038,11 @@ export class Engine implements BehaviourCtx {
         this.tracing = null;
       }
       const client = this.nodes.get(req.nodeId);
+      const tally = this.tally;
+      if (tally !== null) {
+        if (ok) tallyLatency(tally, total);
+        else tallyFailure(tally, reason);
+      }
       if (ok) {
         this.sysGood.add(this.now, 1);
         this.sysLatency.add(this.now, total);
@@ -2896,9 +3278,15 @@ export class Engine implements BehaviourCtx {
   }
 
   effectiveCapacity(state: NodeStateLike): number {
-    return (
-      Math.max(1, Math.floor(state.config.capacity)) * this.effectiveInstances(state)
-    );
+    const instances = this.effectiveInstances(state);
+    // One machine down leaves the rest. With only one there is no rest, and
+    // the node is crashed outright (see downBy), so the slot count is left as
+    // it is: a crashed node's work has to drain to be failed.
+    const live =
+      (state as NodeState).instancesDown > 0 && instances > 1
+        ? instances - 1
+        : instances;
+    return Math.max(1, Math.floor(state.config.capacity)) * live;
   }
 
   /**
@@ -3005,7 +3393,19 @@ export class Engine implements BehaviourCtx {
     if (field === 'shardCapacity') {
       return Math.max(1, Math.floor(state.config.shardCapacity));
     }
-    return this.effectiveInstances(state);
+    return this.effectiveInstances(state) - this.deadInstances(state);
+  }
+
+  /**
+   * Instances counted in the fleet that are down and serve nothing. A
+   * controller sees and sizes only the rest: counting the dead one as
+   * running, it would scale the live ones away under light load and leave
+   * the node with only the dead machine.
+   */
+  private deadInstances(state: NodeState): number {
+    return state.instancesDown > 0 && this.effectiveInstances(state) > 1
+      ? state.instancesDown
+      : 0;
   }
 
   /**
@@ -3019,7 +3419,6 @@ export class Engine implements BehaviourCtx {
    * machines, and the number it moved is the number the student sees grow.
    */
   setScale(nodeId: string, units: number): void {
-    const next = Math.max(1, Math.floor(units));
     const state = this.nodes.get(nodeId);
     if (!state) return;
     // Write whichever knob this kind actually scales along. A sharded store
@@ -3028,10 +3427,18 @@ export class Engine implements BehaviourCtx {
     // improves. A kind with no scale field is left alone outright.
     const field = state.behaviour.scaleField;
     if (field === undefined) return;
+    // `units` counts the machines that are up, the same as scaleOf() reads,
+    // so a dead one is added back to keep it in the fleet until it is fixed.
+    const next =
+      Math.max(1, Math.floor(units)) +
+      (field === 'instances' ? this.deadInstances(state) : 0);
     if (state.config[field] === next) return;
+    const fault = this.faults.get(nodeId);
+    const wasDown = fault !== undefined && this.downBy(fault, state);
     state.config[field] = next;
     const node = this.topology.nodes.find((n) => n.id === nodeId);
     if (node) node.config[field] = next;
+    this.refitInstanceCrash(state, wasDown);
     this.pumpQueue(state);
   }
 
@@ -3056,7 +3463,20 @@ export class Engine implements BehaviourCtx {
   }
 
   isCrashed(nodeId: string): boolean {
-    return this.faults.get(nodeId)?.kind === 'crash';
+    const fault = this.faults.get(nodeId);
+    const state = this.nodes.get(nodeId);
+    return fault !== undefined && state !== undefined && this.downBy(fault, state);
+  }
+
+  /**
+   * Does `fault` leave `state` with nothing serving? A crash does, and so
+   * does losing one instance of a node that runs only one.
+   */
+  private downBy(fault: Fault, state: NodeState): boolean {
+    return (
+      fault.kind === 'crash' ||
+      (fault.kind === 'crash-instance' && this.effectiveInstances(state) <= 1)
+    );
   }
 
   /**
@@ -3077,6 +3497,7 @@ export class Engine implements BehaviourCtx {
     req.enterMs = this.now;
     req.onDrained = onDrained;
     req.heldAt = state;
+    this.placeOnInstance(state, req);
     // Drawn even when serviceMs is 0, unlike drawServiceMs(): this path has
     // always drawn, and skipping it would move every later draw in the run.
     const ms = this.ownServiceMs(
@@ -3188,18 +3609,24 @@ export class Engine implements BehaviourCtx {
    *
    * The count is read through effectiveInstances(), so a stack drawn from this
    * is exactly the fleet the autoscaler most recently wrote.
+   *
+   * A machine down to a 'crash-instance' fault is unit 0 and reads 0, and the
+   * waterline fills the machines still up: utilisation is measured against
+   * their slots alone, so that is the share of them that is busy.
    */
   private fillSlotInstances(state: NodeState): void {
     const instances = this.effectiveInstances(state);
     const units = state.instanceUnits;
     units.length = instances;
+    const down = state.instancesDown < instances ? state.instancesDown : instances;
+    for (let i = 0; i < down; i++) units[i] = 0;
 
     // Utilisation can sit marginally above 1 when a node is oversubscribed;
     // the waterline is capped so no unit ever reports more than full.
     const util =
       state.utilization > 1 ? 1 : state.utilization > 0 ? state.utilization : 0;
-    let remaining = util * instances;
-    for (let i = 0; i < instances; i++) {
+    let remaining = util * (instances - down);
+    for (let i = down; i < instances; i++) {
       if (remaining >= 1) {
         units[i] = 1;
         remaining -= 1;
@@ -3398,8 +3825,11 @@ export class Engine implements BehaviourCtx {
       pooled.parkPrev = null;
       pooled.parkNext = null;
       pooled.lostReason = null;
+      pooled.instance = -1;
       pooled.viaEdge = '';
       pooled.detached = false;
+      pooled.ackedIn = null;
+      pooled.queuedIn = null;
       pooled.retryTarget = '';
       pooled.retryAttempt = 0;
       pooled.ownMs = 0;
@@ -3432,8 +3862,11 @@ export class Engine implements BehaviourCtx {
       parkPrev: null,
       parkNext: null,
       lostReason: null,
+      instance: -1,
       viaEdge: '',
       detached: false,
+      ackedIn: null,
+      queuedIn: null,
       retryTarget: '',
       retryAttempt: 0,
       ownMs: 0,
@@ -3559,6 +3992,9 @@ function createNodeState(node: SimNode): NodeState {
     instancePublished: null,
     instancePending: 0,
     instancePendingPublished: -1,
+    instanceBusy: null,
+    instanceNext: 0,
+    instancesDown: 0,
     ext: null,
     custom: null,
     ownOccupancy: null,

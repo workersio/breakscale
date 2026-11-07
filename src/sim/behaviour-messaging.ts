@@ -542,6 +542,9 @@ const websocket: ComponentBehaviour = {
   // engine through reportOccupancy below.
   instanceModel: 'slots',
   scaleField: 'instances',
+  // A connection slot is released by its expiry timer, not by any request
+  // finishing, so the engine cannot say which machine holds it.
+  slotsOutliveService: true,
 
   initState(): WsExt {
     return { expiry: [], head: 0 };

@@ -24,7 +24,7 @@
  * on how often it happened to act, which is exactly the kind of coupling that
  * makes a "deterministic" simulator quietly non-reproducible.
  */
-import type { NodeStats } from './types';
+import type { NodeConfig, NodeStats } from './types';
 import type { BehaviourCtx, NodeStateLike } from './engine-types';
 import type { ComponentBehaviour } from './behaviour';
 import { clamp01 } from './behaviour';
@@ -67,6 +67,20 @@ const DEFAULT_WARMUP_MS = 0;
  */
 function knob(value: number | undefined, fallback: number): number {
   return Number.isFinite(value) ? (value as number) : fallback;
+}
+
+/**
+ * The fewest and most instances an autoscaler will run its node at.
+ *
+ * The ceiling is never below the floor: a floor set above the ceiling wins, so
+ * a controller set to "never below 4, never above 1" runs four machines. The
+ * challenge budget prices an autoscaled node from this, so it has to be the
+ * same arithmetic the controller uses.
+ */
+export function fleetBounds(cfg: NodeConfig): { min: number; max: number } {
+  const min = Math.max(1, Math.floor(knob(cfg.minCapacity, DEFAULT_MIN_INSTANCES)));
+  const max = Math.max(min, Math.floor(knob(cfg.maxCapacity, DEFAULT_MAX_INSTANCES)));
+  return { min, max };
 }
 
 interface AutoscalerState {
@@ -258,14 +272,7 @@ const autoscaler: ComponentBehaviour = {
     // the unit they bound is now INSTANCES -- the fleet size, not the thread
     // count. For every topology written before instances existed the two
     // readings coincide, because those nodes run exactly one instance.
-    const minInst = Math.max(
-      1,
-      Math.floor(knob(cfg.minCapacity, DEFAULT_MIN_INSTANCES)),
-    );
-    const maxInst = Math.max(
-      minInst,
-      Math.floor(knob(cfg.maxCapacity, DEFAULT_MAX_INSTANCES)),
-    );
+    const { min: minInst, max: maxInst } = fleetBounds(cfg);
     const target = clamp01(knob(cfg.targetUtil, DEFAULT_TARGET_UTIL));
     const step = Math.max(0.01, knob(cfg.scaleStepPct, DEFAULT_STEP_PCT));
     // An instance count is integral, so a step must move at least one machine:

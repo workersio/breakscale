@@ -216,8 +216,10 @@ is simulated time in milliseconds from the start of the run.
 - \`{ "atMs": 10000, "action": "inject", "nodeId": "db", "kind": "crash" }\`
   takes a node down. Other kinds: \`slow\` with \`"opts": { "factor": 3 }\`
   (three times slower), \`errors\` with \`"opts": { "rate": 0.2 }\` (20% of
-  requests fail), and \`partition\` (its outgoing edges stop carrying
-  requests).
+  requests fail), \`partition\` (its outgoing edges stop carrying
+  requests), and \`crash-instance\` (one of its \`instances\` dies and the
+  rest keep serving, which is how scaling out survives losing a machine
+  and scaling up does not).
 - \`{ "atMs": 20000, "action": "clear", "nodeId": "db" }\` heals it.
 - \`{ "atMs": 5000, "action": "cut", "edgeId": "api->db" }\` cuts one edge
   and \`restore\` reconnects it. An edge's id is \`from->to\` unless you gave

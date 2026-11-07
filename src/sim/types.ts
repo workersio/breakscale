@@ -799,6 +799,14 @@ export interface NodeStats {
    */
   instancesPending?: number;
   /**
+   * Machines that are down because of a 'crash-instance' fault. Present only
+   * while one is, so a healthy snapshot is unchanged. The first
+   * `instancesDown` entries of `perInstance` are those machines and read 0;
+   * the waterline is poured into the rest. Counted inside `instances`, which
+   * stays the fleet size the design asked for.
+   */
+  instancesDown?: number;
+  /**
    * Utilisation per unit, 0..1, with `length === instances`. Undefined
    * whenever `instances` is. Index meaning is per-kind and fixed by the table
    * above -- partition i for a shard, [primary, ...replicas] for a replica
@@ -1366,6 +1374,17 @@ export type FailureCounts = Record<Exclude<FailureReason, 'packet-loss'>, number
 export type FailureKind =
   /** The node is dead: in-flight work fails now, new work fails on arrival. */
   | 'crash'
+  /**
+   * One machine of the node is dead and the rest keep serving. The work that
+   * machine held fails now, including threads parked on its downstream calls,
+   * and its slots are gone until the fault is cleared, so the node runs at
+   * `(instances - 1) * capacity` slots. Requests waiting in the node's line
+   * are not on any one machine and stay in it. With a single instance there
+   * is nothing left to serve, so it is exactly 'crash'. Only a kind that
+   * scales by `instances` and holds slots only while it works can lose one;
+   * see `canCrashOneInstance`.
+   */
+  | 'crash-instance'
   /** The node still works, but every service time is multiplied by `factor`. */
   | 'slow'
   /** The node returns errors at `rate`, on top of its configured errorRate. */
@@ -1382,6 +1401,7 @@ export const FAILURE_KINDS: readonly FailureKind[] = [
   'slow',
   'errors',
   'partition',
+  'crash-instance',
 ];
 
 /** Knobs for an injected failure. Which ones apply depends on the kind. */
@@ -1557,4 +1577,52 @@ export interface HistoryPoint {
   goodput: number;
   offered: number;
   errorRate: number;
+}
+
+/**
+ * Every client request that settled inside a tally window, as
+ * `Engine.readTally()` reports it.
+ *
+ * The snapshot's percentiles come from a ring of the last 5 seconds, which is
+ * the right thing to draw and the wrong thing to grade: a verdict has to see
+ * every request in its window, not the ones that happened to fit. This is
+ * that record, kept only while a tally is running.
+ *
+ * `arrived` counts requests the clients sent inside the window. `completed`
+ * and `failed` count requests that finished inside it, wherever they started,
+ * so the two halves need not add up to `arrived`: work still in flight at
+ * either edge of the window is the difference.
+ */
+export interface RunTally {
+  /** Simulated ms the tally started. */
+  fromMs: number;
+  /** Simulated ms it stopped, or the current time while it runs. */
+  toMs: number;
+  /** Client requests sent inside the window, the engine's own sheds included. */
+  arrived: number;
+  /** Client requests that succeeded inside the window. */
+  completed: number;
+  /** Client requests that failed inside the window. */
+  failed: number;
+  /** `failed`, split by why. A reason that never happened is absent. */
+  failuresByReason: Partial<Record<FailureReason, number>>;
+  /**
+   * End-to-end ms of every success, in the order they finished, measured as
+   * the client measured it. `length === completed`. A copy the caller owns.
+   */
+  latencies: Float64Array;
+  /** Writes a write-behind cache acknowledged inside the window. */
+  writesAcked: number;
+  /**
+   * How many of `writesAcked` have landed at the store so far, counted past
+   * the window's end for as long as the engine has run since.
+   */
+  writesLanded: number;
+  /** Jobs a queue accepted inside the window. */
+  jobsQueued: number;
+  /**
+   * How many of `jobsQueued` failed once a worker took them, counted past the
+   * window's end. The client heard yes for each, so none shows in `failed`.
+   */
+  jobsFailed: number;
 }

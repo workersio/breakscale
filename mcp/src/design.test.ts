@@ -142,7 +142,7 @@ describe('buildTopology', () => {
     expect(r.errors).toEqual([
       "faults[0] names node 'cache', but there is no such node.",
       'faults[1] has atMs -5; use a time in milliseconds, 0 or more.',
-      'faults[2] has kind "boom"; use crash, slow, errors, partition.',
+      'faults[2] has kind "boom"; use crash, slow, errors, partition, crash-instance.',
       "faults[3] names edge 'users->db', but there is no such edge.",
     ]);
     expect(buildTopology({ ...chain, faults: 'crash it' }).ok).toBe(false);
