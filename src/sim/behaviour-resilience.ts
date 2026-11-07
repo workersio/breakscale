@@ -108,6 +108,9 @@ function admitWaiter(ctx: BehaviourCtx, state: NodeStateLike, b: BulkheadState):
  */
 const bulkhead: ComponentBehaviour = {
   kind: 'bulkhead',
+  // Its own pool is the hold: taken at admission and released on each
+  // downstream result. An engine hold on top would count one wait twice.
+  blocksOnDownstream: false,
   // A gate, not a server: it holds no slots of its own and its utilisation
   // would be meaningless. The pool count is its real meter.
   servesRequests: false,
@@ -169,6 +172,15 @@ const bulkhead: ComponentBehaviour = {
     if (b.inFlight < cfgBulkheadMax(state)) admitWaiter(ctx, state, b);
   },
 
+  onDiscard: (ctx, state) => {
+    // The waiters are taken off the list before any is failed: failing one
+    // runs its caller's code, which may call back into the engine.
+    const b = state.ext as BulkheadState;
+    const waiters = b.waiters;
+    b.waiters = [];
+    for (const waiter of waiters) ctx.fail(waiter.req, 'no-route', 0);
+  },
+
   onWake: (ctx, state, req) => {
     const b = state.ext as BulkheadState;
     const idx = isWaiting(b, req);
@@ -228,6 +240,9 @@ interface RetryQueueState {
  */
 const retryqueue: ComponentBehaviour = {
   kind: 'retryqueue',
+  // A delivery waiting out its backoff holds no consumer concurrency, the
+  // way a redrive queue works. The producer is acked at admission either way.
+  blocksOnDownstream: false,
   // Delivery slots are real work: the meter reads delivery concurrency.
   servesRequests: true,
   instanceModel: 'slots',
@@ -323,6 +338,8 @@ function cfgRenditions(state: NodeStateLike): number {
 
 const transcoder: ComponentBehaviour = {
   kind: 'transcoder',
+  // Uploads are detached by design: the job is done when the encode is.
+  blocksOnDownstream: false,
   servesRequests: true,
   instanceModel: 'slots',
   scaleField: 'instances',
@@ -388,6 +405,8 @@ const transcoder: ComponentBehaviour = {
  */
 const edgecompute: ComponentBehaviour = {
   kind: 'edgecompute',
+  // An event-driven edge: the origin fetch is the caller's wait.
+  blocksOnDownstream: false,
   servesRequests: true,
   instanceModel: 'slots',
   scaleField: 'instances',
@@ -466,6 +485,9 @@ function cfgFlushDelayMs(state: NodeStateLike): number {
  */
 const writebehind: ComponentBehaviour = {
   kind: 'writebehind',
+  // The buffer slot covers the flush delay; the store write itself is
+  // relayed, and the producer was acked at admission.
+  blocksOnDownstream: false,
   servesRequests: true,
   generatesLoad: false,
   pullsFromQueues: false,
@@ -600,6 +622,8 @@ function isLowPriority(state: NodeStateLike, req: ReqLike): boolean {
  */
 const loadshedder: ComponentBehaviour = {
   kind: 'loadshedder',
+  // A gate with no slots: it decides and hands the request on.
+  blocksOnDownstream: false,
   // A doorman, like the limiter: no slots, no meaningful utilisation.
   servesRequests: false,
   generatesLoad: false,

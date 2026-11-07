@@ -70,13 +70,19 @@ describe('request tracer', () => {
     // A caller blocked on a slow dependency would otherwise read as slow
     // itself, which would blame the wrong node for the whole path.
     const { trace } = traceOf('single-server', 6);
+    expect(trace!.ok).toBe(true);
     const deepest = Math.max(...trace!.hops.map((h) => h.depth));
-    const upstream = trace!.hops.filter((h) => h.depth < deepest);
     const bottom = trace!.hops.filter((h) => h.depth === deepest);
-    const worstUpstream = Math.max(...upstream.map((h) => h.serviceMs));
-    // The database is where the time goes; the api in front of it must not
-    // report the wait it spent on the database as its own service.
-    expect(worstUpstream).toBeLessThan(sum(bottom, 'queuedMs'));
+    // single-server is one serial path with no link latency, so every
+    // millisecond of the total is some hop's queueing or some hop's own work,
+    // and each is booked once. An api that charged its wait on the database
+    // as its own service would book the database's time twice, and the parts
+    // would add up to more than the whole.
+    const accounted = sum(trace!.hops, 'queuedMs') + sum(trace!.hops, 'serviceMs');
+    expect(accounted).toBeLessThanOrEqual(trace!.totalMs + 1e-6);
+    // And the database really did take time, so the check above has
+    // something to catch.
+    expect(sum(bottom, 'queuedMs') + sum(bottom, 'serviceMs')).toBeGreaterThan(20);
   });
 
   it('accounts for a successful request within its measured total', () => {

@@ -167,6 +167,32 @@ interface Req {
   abandoned: boolean;
   /** Set while the request occupies a server slot, so release is idempotent. */
   holdingSlot: boolean;
+  /**
+   * The node whose slot this request holds, engine-managed or kept in `ext`,
+   * or null once it is released. Set wherever a slot is taken (startService,
+   * beginZeroService, serveWithin) and cleared by releaseHeld(), so a slot is
+   * always given back to the state that granted it. That matters when a node
+   * is retyped or removed mid-request: the id then names a different state,
+   * or none, and releasing by id would decrement a counter this request never
+   * incremented.
+   */
+  heldAt: NodeState | null;
+  /**
+   * True while the request's own work is done but its slot stays held,
+   * because its node blocks on downstream calls that have not all answered.
+   * Such a request sits on its node's parked list (parkPrev / parkNext).
+   */
+  parked: boolean;
+  parkPrev: Req | null;
+  parkNext: Req | null;
+  /**
+   * Set when the node lost this request's thread while it was parked: a crash
+   * ('crashed') or the node being removed ('no-route'). The slot was reclaimed
+   * at that moment; the request still waits for its children, because they
+   * would otherwise join into a recycled parent, and then fails with this
+   * reason instead of succeeding. Null on every ordinary request.
+   */
+  lostReason: FailureReason | null;
   /** Edge this request traversed to reach nodeId, for edgeFlow accounting. */
   viaEdge: string;
   /** True when this request is a detached queue message being drained by a worker. */
@@ -404,6 +430,30 @@ interface NodeState {
   config: NodeConfig;
   /** Requests occupying a server slot right now. */
   busy: number;
+  /**
+   * How many of the slots held at this node belong to parked requests: their
+   * own work is done and they are waiting on downstream calls. Included in
+   * `busy` for a kind the engine slots itself (admission and least-loaded
+   * routing must see a stuck thread as load) and subtracted wherever work is
+   * measured. Only a kind whose behaviour blocks on downstream calls parks.
+   */
+  parked: number;
+  /** Head of the intrusive list of parked requests, so a crash can reclaim them. */
+  parkHead: Req | null;
+  /**
+   * Set on a state the moment a topology edit drops it, before anything it
+   * held is failed. Failing those requests runs other nodes' code, which can
+   * route back here through the old node map; this flag is what stops a dead
+   * state admitting or starting work.
+   */
+  discarded: boolean;
+  /**
+   * The call cycle this node sits on, as an index shared by every node on the
+   * same one, or -1 when no chain of calls leads from it back to itself.
+   * Rebuilt with the topology. A thread parked on a cycle can end up waiting
+   * on a thread that waits on it, so admission treats these nodes with care.
+   */
+  cycle: number;
   /** FIFO of requests waiting for a slot (service/db/worker) or buffered messages (queue). */
   waiting: Req[];
   /** Read cursor into `waiting`, so dequeue is O(1) without splice. */
@@ -1032,6 +1082,12 @@ export class Engine implements BehaviourCtx {
     state.waiting.length = 0;
     state.waitHead = 0;
 
+    // Threads parked on downstream calls die with the process. Their slots
+    // come back now, before anything below can re-enter the engine, and each
+    // request fails as 'crashed' when its calls answer, even if the node has
+    // been healed by then.
+    this.reclaimParked(state, 'crashed');
+
     for (const req of waiting) {
       if (req.resolved) continue;
       // A buffered queue message has no caller to inform; it is simply lost,
@@ -1203,7 +1259,15 @@ export class Engine implements BehaviourCtx {
       };
       nodeOut[state.id] = entry;
 
-      entry.inFlight = state.busy;
+      // Being served means working. A parked slot is held but idle, so it is
+      // published apart, and only where it can happen: a blocking kind with
+      // somewhere to call. Everywhere else the field is absent rather than a
+      // zero that could never be anything else.
+      const parked = state.parked;
+      entry.inFlight = state.busy > parked ? state.busy - parked : 0;
+      if (state.behaviour.blocksOnDownstream && state.out.length > 0) {
+        entry.waitingOnDownstream = parked;
+      }
       entry.queued = state.waiting.length - state.waitHead;
       entry.throughput = completions;
       entry.arrivalRate = state.arrivals.rate(now);
@@ -1522,11 +1586,24 @@ export class Engine implements BehaviourCtx {
       }
     }
 
+    markCycles(next);
+
     // Drop state belonging to removed nodes: their in-flight requests are gone.
+    // Every dropped state is marked before any is discarded, because failing
+    // one node's requests runs other nodes' code, and that code may route into
+    // a second dropped node through the old map.
     if (previous) {
+      let dropped = false;
       for (const [id, state] of previous) {
         if (next.get(id) === state) continue;
-        this.discardNodeState(state);
+        state.discarded = true;
+        dropped = true;
+      }
+      if (dropped) {
+        for (const [id, state] of previous) {
+          if (next.get(id) === state) continue;
+          this.discardNodeState(state);
+        }
       }
     }
 
@@ -1558,12 +1635,20 @@ export class Engine implements BehaviourCtx {
   }
 
   private discardNodeState(state: NodeState): void {
-    for (let i = state.waitHead; i < state.waiting.length; i++) {
-      const req = state.waiting[i];
-      this.resolve(req, false, 'no-route', 0);
-    }
-    state.waiting.length = 0;
+    // Parked requests lose their thread with the node; their callers hear
+    // 'no-route' once the calls they made have answered.
+    this.reclaimParked(state, 'no-route');
+    const waiting = state.waiting;
+    const head = state.waitHead;
+    state.waiting = [];
     state.waitHead = 0;
+    for (let i = head; i < waiting.length; i++) {
+      const req = waiting[i];
+      if (req && !req.resolved) this.resolve(req, false, 'no-route', 0);
+    }
+    // Requests a kind keeps in `ext` are invisible to the engine, and would
+    // otherwise never resolve.
+    if (state.ext !== null) state.behaviour.onDiscard?.(this, state);
     state.busy = 0;
   }
 
@@ -1571,7 +1656,10 @@ export class Engine implements BehaviourCtx {
 
   private dispatch(ev: Ev): void {
     const state = this.nodes.get(ev.nodeId);
-    if (!state) return;
+    if (!state) {
+      this.dispatchOrphan(ev);
+      return;
+    }
 
     switch (ev.kind) {
       case EV_ARRIVAL:
@@ -1580,7 +1668,12 @@ export class Engine implements BehaviourCtx {
         }
         break;
       case EV_SERVICE_DONE:
-        if (ev.req && ev.req.token === ev.token) this.onServiceDone(state, ev.req);
+        if (ev.req && ev.req.token === ev.token) {
+          // The state that granted the slot is not the one under this id any
+          // more: the node was retyped mid-service. That process is gone.
+          if (ev.req.heldAt === state) this.onServiceDone(state, ev.req);
+          else this.resolve(ev.req, false, 'no-route', 0);
+        }
         break;
       case EV_TIMEOUT:
         if (ev.req && ev.req.token === ev.token) this.onTimeout(ev.req);
@@ -1604,6 +1697,35 @@ export class Engine implements BehaviourCtx {
         if (ev.req && ev.req.token === ev.token && !ev.req.resolved) {
           state.behaviour.onWake?.(this, state, ev.req);
         }
+        break;
+      default:
+        break;
+    }
+  }
+
+  /**
+   * An event for a node a topology edit removed. A request caught there would
+   * otherwise never resolve, and a blocking caller waiting on it would keep
+   * its slot for good, so each one is answered as 'no-route', the reason a
+   * call to a node that does not exist gets everywhere else. A timeout still
+   * fires, because the caller that armed it is a different node. A pending
+   * retry is answered at the join rather than resolved, since its siblings
+   * may still be live. A behaviour's own wake is dropped: onDiscard already
+   * failed whatever it was holding.
+   */
+  private dispatchOrphan(ev: Ev): void {
+    const req = ev.req;
+    if (!req || req.token !== ev.token) return;
+    switch (ev.kind) {
+      case EV_SERVICE_DONE:
+      case EV_LINK_ARRIVE:
+        if (!req.resolved) this.resolve(req, false, 'no-route', 0);
+        break;
+      case EV_TIMEOUT:
+        this.onTimeout(req);
+        break;
+      case EV_RETRY:
+        if (!req.resolved) this.childResolved(req, false, 'no-route', 0);
         break;
       default:
         break;
@@ -1945,6 +2067,12 @@ export class Engine implements BehaviourCtx {
   }
 
   private admit(state: NodeState, req: Req): void {
+    // A state dropped by a topology edit, reached through the old node map
+    // while the edit fails what that node held. It is not there to answer.
+    if (state.discarded) {
+      this.resolve(req, false, 'no-route', 0);
+      return;
+    }
     state.arrivals.add(this.now, 1);
     // Stamped here, at the ONE point every request enters a node, so the
     // queued time the tracer reports cannot miss a path.
@@ -1984,11 +2112,36 @@ export class Engine implements BehaviourCtx {
       return;
     }
 
+    // Every slot is taken, so this call would wait in line. On a call cycle
+    // that wait can be circular: a thread parked somewhere on the cycle waits
+    // on this call, and the slots this call waits for may belong to threads
+    // that wait, call by call, on that first one. Nothing on such a loop ever
+    // frees, even after the traffic stops. So a call whose own chain is
+    // already parked on this cycle is refused as 'depth', the reason a cycle
+    // has always produced, rather than queued. With a slot free it was served
+    // above, as it always was, and the hop ceiling still bounds the recursion.
+    if (state.cycle >= 0 && b.blocksOnDownstream && this.parkedOnCycle(state, req)) {
+      this.resolve(req, false, 'depth', 0);
+      return;
+    }
+
     if (this.queueDepth(state) >= this.effectiveQueueLimit(state)) {
       this.shed(state, req);
       return;
     }
     state.waiting.push(req);
+  }
+
+  /**
+   * Is an ancestor of `req` parked on a node of the cycle `state` sits on?
+   * At most MAX_HOP_DEPTH links, and only walked when a node on a cycle is
+   * full.
+   */
+  private parkedOnCycle(state: NodeState, req: Req): boolean {
+    for (let p = req.parent; p !== null; p = p.parent) {
+      if (p.parked && p.heldAt !== null && p.heldAt.cycle === state.cycle) return true;
+    }
+    return false;
   }
 
   /**
@@ -2148,6 +2301,7 @@ export class Engine implements BehaviourCtx {
     if (ms > 0) {
       state.busy++;
       req.holdingSlot = true;
+      req.heldAt = state;
       this.push(this.now + ms, EV_SERVICE_DONE, state.id, req, req.token);
     } else {
       this.onServiceComplete(state, req);
@@ -2157,6 +2311,7 @@ export class Engine implements BehaviourCtx {
   private startService(state: NodeState, req: Req): void {
     state.busy++;
     req.holdingSlot = true;
+    req.heldAt = state;
     req.enterMs = this.now;
     // Any extra time a behaviour attached to this request (a write-behind
     // cache's flush residence, booked via ackAndRelay) is consumed here,
@@ -2173,20 +2328,45 @@ export class Engine implements BehaviourCtx {
   }
 
   private onServiceDone(state: NodeState, req: Req): void {
-    // The slot is released the instant this node's own work finishes, even if
-    // the caller already gave up — abandoned work burned the slot until now.
-    this.releaseSlot(state, req);
-    this.pumpQueue(state);
-    // A self-managing kind (a sharded store) holds its slot bookkeeping in
-    // `ext` rather than in state.busy, so it is told to free that slot here,
-    // at exactly the moment the engine frees an ordinary one. Cleared first so
-    // a recycled request can never re-fire a stale callback.
-    const drained = req.onDrained;
-    if (drained !== null) {
-      req.onDrained = null;
-      drained(this, state, req);
+    // A node that blocks on its downstream calls keeps the slot until this
+    // request resolves, however that happens: resolve() releases it. Only a
+    // node with somewhere to call parks; for a leaf the request is about to
+    // resolve here anyway, and releasing now keeps today's event order.
+    if (state.behaviour.blocksOnDownstream && state.out.length > 0) {
+      this.park(state, req);
+    } else {
+      // The slot is released the instant this node's own work finishes, even
+      // if the caller already gave up: abandoned work burned the slot until
+      // now.
+      this.releaseHeld(state, req);
     }
     this.onServiceComplete(state, req);
+  }
+
+  /**
+   * Give back the slot `req` holds at `state` and let the next waiter in.
+   *
+   * The order is fixed and is the order the engine has always used at service
+   * end: free the engine slot, start whoever is next in line, then tell a
+   * self-managing kind (a pooled store, a lambda) to free the slot it keeps in
+   * `ext`. Its callback is cleared before it runs, so a recycled request can
+   * never fire a stale one.
+   *
+   * A state dropped by a topology edit only has its flags cleared. It must
+   * never start work, and its `ext` no longer means anything.
+   */
+  private releaseHeld(state: NodeState, req: Req): void {
+    req.heldAt = null;
+    if (req.parked) this.unlinkParked(state, req);
+    const drained = req.onDrained;
+    req.onDrained = null;
+    if (state.discarded) {
+      req.holdingSlot = false;
+      return;
+    }
+    this.releaseSlot(state, req);
+    this.pumpQueue(state);
+    if (drained !== null) drained(this, state, req);
   }
 
   private releaseSlot(state: NodeState, req: Req): void {
@@ -2195,10 +2375,62 @@ export class Engine implements BehaviourCtx {
     state.busy = Math.max(0, state.busy - 1);
   }
 
+  /** Keep `req`'s slot while it waits on the calls it is about to make. */
+  private park(state: NodeState, req: Req): void {
+    req.parked = true;
+    req.parkPrev = null;
+    req.parkNext = state.parkHead;
+    if (state.parkHead !== null) state.parkHead.parkPrev = req;
+    state.parkHead = req;
+    state.parked++;
+  }
+
+  private unlinkParked(state: NodeState, req: Req): void {
+    const prev = req.parkPrev;
+    const next = req.parkNext;
+    if (prev !== null) prev.parkNext = next;
+    else if (state.parkHead === req) state.parkHead = next;
+    if (next !== null) next.parkPrev = prev;
+    req.parked = false;
+    req.parkPrev = null;
+    req.parkNext = null;
+    if (state.parked > 0) state.parked--;
+  }
+
+  /**
+   * The node lost every thread that was parked on it: reclaim their slots now,
+   * and mark each request so its join fails with `reason` when its children
+   * answer. The children are left to run, because failing the parent first
+   * would leave them joining into a recycled request. No pump: the caller
+   * decides what the freed slots are for.
+   */
+  private reclaimParked(state: NodeState, reason: FailureReason): void {
+    let req = state.parkHead;
+    while (req !== null) {
+      const next = req.parkNext;
+      req.parked = false;
+      req.parkPrev = null;
+      req.parkNext = null;
+      req.heldAt = null;
+      req.lostReason = reason;
+      const drained = req.onDrained;
+      req.onDrained = null;
+      if (!state.discarded) {
+        this.releaseSlot(state, req);
+        if (drained !== null) drained(this, state, req);
+      } else {
+        req.holdingSlot = false;
+      }
+      req = next;
+    }
+    state.parkHead = null;
+    state.parked = 0;
+  }
+
   /** Start serving whoever is next in line, if a slot is free. */
   private pumpQueue(state: NodeState): void {
     const mode = state.behaviour.pump;
-    if (mode === 'none') return;
+    if (mode === 'none' || state.discarded) return;
     if (mode === 'sources') {
       this.pumpWorker(state);
       return;
@@ -2216,7 +2448,20 @@ export class Engine implements BehaviourCtx {
 
   /** Workers pull messages out of the queue nodes that feed them. */
   private pumpWorker(state: NodeState): void {
+    if (state.discarded) return;
     const capacity = this.effectiveCapacity(state);
+    // A call wired straight into a consumer, not through a queue, waits in
+    // the consumer's own line when every slot is taken. Its caller is waiting
+    // on it (and a blocking caller holds a slot for it), so that line is
+    // served first, ahead of the buffered messages that nobody waits on.
+    while (state.busy < capacity && state.waitHead < state.waiting.length) {
+      const req = state.waiting[state.waitHead];
+      state.waiting[state.waitHead] = undefined as unknown as Req;
+      state.waitHead++;
+      this.compactWaiting(state);
+      if (req.resolved) continue;
+      this.startService(state, req);
+    }
     while (state.busy < capacity) {
       const msg = this.takeFromSources(state);
       if (!msg) break;
@@ -2373,6 +2618,14 @@ export class Engine implements BehaviourCtx {
     if (req.resolved) return;
     req.resolved = true;
 
+    // A blocking node's slot is held until its request resolves, and every
+    // way a request ends comes through here, so this is the one release that
+    // cannot be missed. It runs before the answer travels upward: the thread
+    // is free the moment its answer leaves. For every other kind the slot was
+    // already released at service end and `heldAt` is null.
+    const held = req.heldAt;
+    if (held !== null) this.releaseHeld(held, req);
+
     // Recorded here rather than at each completion site: resolve() is the one
     // funnel every request passes through however it ends, so a hop cannot be
     // missed by a path that finishes some other way. Measuring it anywhere
@@ -2441,6 +2694,12 @@ export class Engine implements BehaviourCtx {
   /** A backoff delay elapsed: re-issue the failed downstream call. */
   private onRetry(state: NodeState, parent: Req): void {
     if (parent.resolved) return;
+    // The thread waiting out this backoff died with its node (see
+    // reclaimParked). Nobody is left to make the call; the join fails it.
+    if (parent.lostReason !== null) {
+      this.childResolved(parent, false, parent.lostReason, 0);
+      return;
+    }
     const edge = state.out.find((e) => e.id === parent.retryTarget);
     if (!edge) {
       this.childResolved(parent, false, 'no-route', 0);
@@ -2474,11 +2733,14 @@ export class Engine implements BehaviourCtx {
       const retries = parentState
         ? Math.max(0, Math.floor(parentState.config.retries))
         : 0;
+      // A parent whose thread was lost (see reclaimParked) has nobody left to
+      // retry, so the failure goes straight to the join.
       if (
         parentState &&
         child.attempt < retries &&
         reason !== 'depth' &&
-        reason !== 'no-route'
+        reason !== 'no-route' &&
+        parent.lostReason === null
       ) {
         // Re-issue the same downstream call. This is real extra load.
         const edge = parentState.out.find((e) => e.id === child.retryTarget);
@@ -2520,6 +2782,20 @@ export class Engine implements BehaviourCtx {
 
     const parentState = this.nodes.get(parent.nodeId);
     const total = parent.ownMs + parent.maxChildMs;
+
+    // The thread that made these calls died while it waited for them (see
+    // reclaimParked). Whatever the children said, there is no one left to
+    // answer the caller. Booked like the crash check in onServiceComplete,
+    // and instead of the failure branch below, so it is counted once.
+    const lost = parent.lostReason;
+    if (lost !== null) {
+      if (lost === 'crashed' && parentState) {
+        parentState.errors.add(this.now, 1);
+        parentState.totalFailed++;
+      }
+      this.resolve(parent, false, lost, total);
+      return;
+    }
 
     if (parent.childFailed) {
       // Same as above: resolve() books the client's failure itself.
@@ -2800,6 +3076,7 @@ export class Engine implements BehaviourCtx {
     const req = reqLike as Req;
     req.enterMs = this.now;
     req.onDrained = onDrained;
+    req.heldAt = state;
     // Drawn even when serviceMs is 0, unlike drawServiceMs(): this path has
     // always drawn, and skipping it would move every later draw in the run.
     const ms = this.ownServiceMs(
@@ -3004,9 +3281,20 @@ export class Engine implements BehaviourCtx {
       // A kind that runs its own slot discipline reports occupancy itself,
       // because serveWithin() never touches state.busy and the raw counter
       // would read 0 however saturated the node really is.
+      //
+      // Utilisation is work. A slot parked on a downstream call is held but
+      // idle, so it is left out here and shown as waitingOnDownstream instead;
+      // admission still counts it, which is how a blocked server sheds while
+      // its meter reads low. A self-reporting kind decides for itself (a
+      // lambda reports concurrency, because that is what it throttles on).
       const own = state.ownOccupancy;
       const capacity = own !== null ? own.capacity : this.effectiveCapacity(state);
-      const busy = own !== null ? own.busy : state.busy;
+      const busy =
+        own !== null
+          ? own.busy
+          : state.busy > state.parked
+            ? state.busy - state.parked
+            : 0;
       // A buffer's slot count is meaningless, so it reports zero utilisation.
       const instant = state.behaviour.servesRequests
         ? Math.min(capacity > 0 ? busy / capacity : 0, 1)
@@ -3105,6 +3393,11 @@ export class Engine implements BehaviourCtx {
       pooled.attempt = 0;
       pooled.abandoned = false;
       pooled.holdingSlot = false;
+      pooled.heldAt = null;
+      pooled.parked = false;
+      pooled.parkPrev = null;
+      pooled.parkNext = null;
+      pooled.lostReason = null;
       pooled.viaEdge = '';
       pooled.detached = false;
       pooled.retryTarget = '';
@@ -3134,6 +3427,11 @@ export class Engine implements BehaviourCtx {
       attempt: 0,
       abandoned: false,
       holdingSlot: false,
+      heldAt: null,
+      parked: false,
+      parkPrev: null,
+      parkNext: null,
+      lostReason: null,
       viaEdge: '',
       detached: false,
       retryTarget: '',
@@ -3154,6 +3452,9 @@ export class Engine implements BehaviourCtx {
     // Bump the token so any timer still referencing this incarnation is stale.
     req.token = (req.token + 1) | 0;
     req.parent = null;
+    // A pooled request must not keep a dropped node's state alive. resolve()
+    // has already released the slot, so this only drops the reference.
+    req.heldAt = null;
     req.next = this.freeReq;
     this.freeReq = req;
   }
@@ -3163,6 +3464,65 @@ export class Engine implements BehaviourCtx {
  * helpers
  * ------------------------------------------------------------------ */
 
+/**
+ * Mark every node that sits on a call cycle, giving the nodes of one cycle
+ * the same index (the strongly connected components of the request graph,
+ * by Tarjan's algorithm). An edge into or out of a buffer is left out: a
+ * queue answers its caller at once and hands its consumer a message nobody
+ * waits on, so no thread can wait across it. Runs once per topology edit.
+ */
+function markCycles(nodes: Map<string, NodeState>): void {
+  const index = new Map<NodeState, number>();
+  const low = new Map<NodeState, number>();
+  const stack: NodeState[] = [];
+  const onStack = new Set<NodeState>();
+  let counter = 0;
+  let cycles = 0;
+
+  const follows = (from: NodeState, edge: SimEdge): NodeState | null => {
+    const to = nodes.get(edge.to);
+    if (!to) return null;
+    if (from.behaviour.buffersForConsumers || to.behaviour.buffersForConsumers)
+      return null;
+    return to;
+  };
+
+  const visit = (v: NodeState): void => {
+    index.set(v, counter);
+    low.set(v, counter);
+    counter++;
+    stack.push(v);
+    onStack.add(v);
+    let selfLoop = false;
+    for (const edge of v.out) {
+      const w = follows(v, edge);
+      if (w === null) continue;
+      if (w === v) selfLoop = true;
+      if (!index.has(w)) {
+        visit(w);
+        low.set(v, Math.min(low.get(v) as number, low.get(w) as number));
+      } else if (onStack.has(w)) {
+        low.set(v, Math.min(low.get(v) as number, index.get(w) as number));
+      }
+    }
+    if (low.get(v) !== index.get(v)) return;
+    const members: NodeState[] = [];
+    let w: NodeState | undefined;
+    do {
+      w = stack.pop() as NodeState;
+      onStack.delete(w);
+      members.push(w);
+    } while (w !== v);
+    const cyclic = members.length > 1 || selfLoop;
+    const id = cyclic ? cycles++ : -1;
+    for (const m of members) m.cycle = id;
+  };
+
+  for (const state of nodes.values()) {
+    if (!index.has(state)) visit(state);
+  }
+}
+
 function createNodeState(node: SimNode): NodeState {
   return {
     id: node.id,
@@ -3170,6 +3530,10 @@ function createNodeState(node: SimNode): NodeState {
     behaviour: behaviourFor(node.kind),
     config: { ...node.config },
     busy: 0,
+    parked: 0,
+    parkHead: null,
+    discarded: false,
+    cycle: -1,
     waiting: [],
     waitHead: 0,
     out: [],

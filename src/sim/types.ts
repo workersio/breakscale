@@ -75,9 +75,17 @@ export interface NodeConfig {
   hitRate: number;
   /** Probability a request fails on its own (bad deploy, bug). */
   errorRate: number;
-  /** ms after which the caller gives up. 0 = no timeout. */
+  /**
+   * ms after which the caller gives up on one downstream call, per attempt.
+   * 0 = no timeout. A caller that blocks on its calls (a service, a worker, a
+   * lambda) holds its slot until the answer or this deadline, so this is also
+   * the longest a slow dependency can pin one of its threads per attempt.
+   */
   timeoutMs: number;
-  /** Retries on failure/timeout. */
+  /**
+   * Retries on failure/timeout. A blocking caller keeps its slot through the
+   * backoff and every retry, as a thread inside a retry loop does.
+   */
   retries: number;
   /** Client only: requests per second offered to the system. */
   rps: number;
@@ -658,15 +666,36 @@ export interface Topology {
 
 /** Rolling stats for one node over the last window. */
 export interface NodeStats {
-  /** Requests currently being served. */
+  /**
+   * Requests currently being served: doing this node's own work. A slot held
+   * while waiting on a downstream call is not in it; see waitingOnDownstream.
+   */
   inFlight: number;
+  /**
+   * Requests whose own work is done but which still hold a slot, because this
+   * node blocks on its downstream calls and they have not all answered yet: a
+   * thread sitting in a call to a slow database. These slots count against
+   * capacity, so a node can queue and shed with a low utilisation.
+   *
+   * Present only on a kind that blocks (service, worker, lambda) and has at
+   * least one outgoing request edge, and absent everywhere else, where it
+   * could only ever read zero. `inFlight + waitingOnDownstream` is how many
+   * slots are taken; a lambda's `runningNow` is the same total.
+   */
+  waitingOnDownstream?: number;
   /** Requests waiting for a slot. */
   queued: number;
   /** Completed requests per second. */
   throughput: number;
   /** Offered load per second (including those later dropped). */
   arrivalRate: number;
-  /** Fraction of slots busy, 0..1. Can exceed 1 conceptually if oversubscribed. */
+  /**
+   * Fraction of slots doing work, 0..1, smoothed over about a second. Can
+   * exceed 1 conceptually if oversubscribed. Work only: a slot waiting on a
+   * downstream call (waitingOnDownstream) is not counted. A lambda reports
+   * its concurrency instead, waiting invocations included, because that is
+   * what it throttles and bills on.
+   */
   utilization: number;
   p50: number;
   p95: number;
@@ -1073,7 +1102,10 @@ export interface NodeStats {
   coldStartsPerSec?: number;
   /** Lambda only: warm instances sitting idle, ready to serve instantly. */
   warmIdle?: number;
-  /** Lambda only: invocations running right now, against `maxConcurrency`. */
+  /**
+   * Lambda only: invocations running right now, against `maxConcurrency`,
+   * including those waiting on a call they made (waitingOnDownstream).
+   */
   runningNow?: number;
 
   /* ---- cron readouts --------------------------------------------------- */

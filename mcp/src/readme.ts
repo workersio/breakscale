@@ -145,6 +145,10 @@ as real queueing, latency and failures, measured from simulated requests.
   per second. Do this arithmetic when you pick numbers: a design that is
   meant to hold should sit well under it, and one meant to show a
   bottleneck should cross it.
+- A \`service\`, \`worker\` or \`lambda\` that calls something keeps its slot
+  until those calls answer, retries and backoff included. For one of those,
+  use \`serviceMs\` plus the slowest call it waits on in that sum, or the
+  caller will run out of slots well before the arithmetic says it should.
 
 ## Components
 

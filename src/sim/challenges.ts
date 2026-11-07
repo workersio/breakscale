@@ -22,9 +22,9 @@ export const CHALLENGES: Challenge[] = [
     id: 'hold-the-line',
     name: 'Hold the line',
     brief:
-      'Your one server and its database are handling 150 requests a second. The team has agreed that 99 out of 100 requests should come back within 200ms, and right now you are just over. Get under it.',
+      'Your one server and its database are handling 200 requests a second. The team has agreed that 99 out of 100 requests should come back within 200ms, and right now you are well over. Get under it.',
     presetId: 'single-server',
-    loadRps: 150,
+    loadRps: 200,
     goals: [{ metric: 'p99', max: 200 }],
     hints: [
       'Something here is full. Watch the components while it runs and find the one that is busy.',

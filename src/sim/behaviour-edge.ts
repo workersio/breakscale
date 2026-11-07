@@ -45,6 +45,8 @@ import { clamp01 } from './behaviour';
  */
 const cdn: ComponentBehaviour = {
   kind: 'cdn',
+  // An event-driven edge: the origin fetch is the caller's wait.
+  blocksOnDownstream: false,
   servesRequests: true,
   generatesLoad: false,
   pullsFromQueues: false,
@@ -172,6 +174,8 @@ function projectedTokens(
  */
 const ratelimiter: ComponentBehaviour = {
   kind: 'ratelimiter',
+  // A gate with no slots: it decides and hands the request on.
+  blocksOnDownstream: false,
   // A limiter is a doorman, not a server: it holds no slots and its
   // utilisation would be meaningless, so it reports none.
   servesRequests: false,
@@ -363,6 +367,8 @@ const BREAKER_MIN_SAMPLES = 5;
  */
 const breaker: ComponentBehaviour = {
   kind: 'breaker',
+  // A gate with no slots: it decides and hands the request on.
+  blocksOnDownstream: false,
   // Like the limiter, a pass-through gate rather than a server.
   servesRequests: false,
   generatesLoad: false,

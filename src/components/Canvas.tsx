@@ -587,6 +587,19 @@ function worstHealth(a: Health, b: Health): Health {
 }
 
 /**
+ * The share of a blocking node's slots that are taken, working or waiting on
+ * a call it made, or `util` for a node that cannot wait (the field is absent).
+ */
+function heldShare(s: NodeStats, cfg: NodeConfig, util: number): number {
+  const waiting = s.waitingOnDownstream;
+  if (waiting === undefined) return util;
+  const slots =
+    cfg.capacity * Math.max(1, Math.floor(s.instances ?? cfg.instances ?? 1));
+  if (!(slots > 0)) return util;
+  return Math.max(util, clamp((s.inFlight + waiting) / slots, 0, 1));
+}
+
+/**
  * What the three numbers on a node MEAN, per kind.
  *
  * This switch is deliberately EXHAUSTIVE over NodeKind, with no default for
@@ -621,6 +634,13 @@ export function readoutFor(
 ): Readout {
   const util = clamp(s.utilization, 0, 1);
   const losing = s.shedRate + s.timeoutRate > 0;
+  /* A node that blocks on its calls keeps a slot taken for the whole wait on
+     them, and that wait is not work, so utilisation alone read a server with
+     every slot held, shedding half its traffic, as 6% busy and green. The
+     headline keeps meaning work; the meter and health follow the share of
+     slots taken, whichever is higher. waitingOnDownstream is published only
+     where waiting can happen, so every other node reads exactly as before. */
+  const held = heldShare(s, cfg, util);
 
   switch (kind) {
     case 'client': {
@@ -798,8 +818,8 @@ export function readoutFor(
         primary: { value: formatPct(util), label: 'busy' },
         a: { value: formatMs(s.p99), label: 'p99' },
         b: { value: formatCount(s.queued), label: 'waiting' },
-        load: util,
-        health: healthOfLoad(util),
+        load: held,
+        health: healthOfLoad(held),
         spark: util,
         sparkUnit: true,
         losing,
@@ -855,8 +875,8 @@ export function readoutFor(
         primary: { value: formatPct(util), label: 'busy' },
         a: { value: formatRate(s.throughput), label: 'done' },
         b: { value: formatCount(backlog), label: 'waiting' },
-        load: util,
-        health: healthOfLoad(util),
+        load: held,
+        health: healthOfLoad(held),
         spark: util,
         sparkUnit: true,
         losing,

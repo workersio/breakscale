@@ -141,6 +141,8 @@ function asAutoscaler(state: NodeStateLike): AutoscalerState | null {
  */
 const autoscaler: ComponentBehaviour = {
   kind: 'autoscaler',
+  // It acts on its target and serves nothing.
+  blocksOnDownstream: false,
   // A controller is not in the request path: it serves nothing, holds nothing,
   // and reports no utilisation of its own. Marking it servesRequests:false is
   // what keeps its (permanently zero) slot count out of the utilisation
@@ -472,6 +474,8 @@ function regionHealthy(ctx: BehaviourCtx, state: NodeStateLike, i: number): bool
  */
 const region: ComponentBehaviour = {
   kind: 'region',
+  // A switch with no work of its own: it routes and holds nothing.
+  blocksOnDownstream: false,
   // A pure switch: it forwards without holding slots of its own.
   servesRequests: true,
   generatesLoad: false,

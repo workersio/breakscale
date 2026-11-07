@@ -2780,18 +2780,37 @@ function SingleInspector({
   const fleet = Math.max(1, Math.floor(stats?.instances ?? cfg.instances ?? 1));
   const maxThroughput = showCeiling ? fleet * cfg.capacity * (1000 / cfg.serviceMs) : 0;
 
+  /*
+   * A node that blocks on its calls (the engine publishes waitingOnDownstream
+   * only for one that can) keeps a slot taken for its own work AND for the
+   * whole wait on what it called. The ceiling above assumes the calls answer
+   * at once, so for this node it is a bound it never reaches, and headroom
+   * built from it read 19x spare on a server shedding half its traffic with
+   * every slot held. Slots held is measured, so it takes headroom's place.
+   */
+  const blocking = stats?.waitingOnDownstream !== undefined;
+  const slots = fleet * cfg.capacity;
+  const held = stats ? stats.inFlight + (stats.waitingOnDownstream ?? 0) : 0;
+  const heldShare = slots > 0 ? held / slots : 0;
+
   // Headroom answers "is this the bottleneck?" without reading a chart:
   // the ceiling divided by what is actually arriving. Below 1.0x the node
   // cannot keep up, which is why it is toned by the same load thresholds.
   const arrivals = stats?.arrivalRate ?? 0;
   const headroom =
-    showCeiling && arrivals > 0 && maxThroughput > 0 ? maxThroughput / arrivals : null;
+    showCeiling && !blocking && arrivals > 0 && maxThroughput > 0
+      ? maxThroughput / arrivals
+      : null;
 
   // One suggestion, only once this node is actually the thing that cannot
   // keep up -- below 1.0x headroom, same threshold the "Spare capacity"
-  // reading itself is toned by.
+  // reading itself is toned by. A blocking node cannot keep up once every
+  // slot is held and work is waiting in line for one.
+  const outOfSlots = blocking && heldShare >= 1 && (stats?.queued ?? 0) >= 1;
   const suggestion =
-    headroom !== null && headroom < 1 ? suggestionFor(node.kind) : null;
+    (headroom !== null && headroom < 1) || (showCeiling && outOfSlots)
+      ? suggestionFor(node.kind)
+      : null;
 
   const serviceMsLabel =
     cfg.serviceMs < 10 ? cfg.serviceMs.toFixed(1) : String(Math.round(cfg.serviceMs));
@@ -2938,7 +2957,15 @@ function SingleInspector({
                 {fleet > 1
                   ? `${formatCount(fleet)} instances x ${formatCount(cfg.capacity)} slots ÷ ${serviceMsLabel}ms each`
                   : `${formatCount(cfg.capacity)} at once ÷ ${serviceMsLabel}ms each`}
+                {blocking && ', if its calls answered at once'}
               </p>
+              {blocking && stats && (
+                <StatRow
+                  label="Slots held"
+                  value={`${formatCount(held)} / ${formatCount(slots)}`}
+                  tone={toneClass(healthOfLoad(heldShare))}
+                />
+              )}
               {headroom !== null && (
                 <StatRow
                   label="Spare capacity"
@@ -2996,6 +3023,12 @@ function SingleInspector({
                       label="Being handled now"
                       value={formatCount(stats.inFlight)}
                     />
+                    {stats.waitingOnDownstream !== undefined && (
+                      <StatRow
+                        label="Waiting on its calls"
+                        value={formatCount(stats.waitingOnDownstream)}
+                      />
+                    )}
                     <StatRow
                       label="Waiting in line"
                       term={node.kind === 'queue' ? 'backlog' : 'queue-time'}
