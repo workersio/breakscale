@@ -32,6 +32,14 @@ export interface NodeFaultControlsProps {
   cables: readonly CableInfo[];
   onCrash: () => void;
   /**
+   * Take one machine down and leave the rest serving. Absent for a node with
+   * a single instance, or a kind that cannot lose one, and the row is not
+   * shown: with one machine it would be Crash under another name.
+   */
+  onCrashOne?: () => void;
+  /** How many machines the node runs, for the Crash one instance hint. */
+  instances?: number;
+  /**
    * False for a kind that does no timed work (a gate, a controller, the
    * client), where Slow would change nothing. The row stays, inert, and says
    * why. Defaults to true.
@@ -59,6 +67,8 @@ export function NodeFaultControls({
   fault,
   cables,
   onCrash,
+  onCrashOne,
+  instances = 1,
   canSlow = true,
   onSlow,
   onGlitch,
@@ -73,6 +83,7 @@ export function NodeFaultControls({
   const [rate, setRate] = useState(DEFAULT_GLITCH_RATE);
 
   const crashed = fault?.kind === 'crash';
+  const oneDown = fault?.kind === 'crash-instance';
   const slowInert = !canSlow || (fault?.kind === 'slow' && fault.factor === factor);
   const glitchSame = fault?.kind === 'errors' && fault.rate === rate;
   const healthy = fault === null;
@@ -100,6 +111,24 @@ export function NodeFaultControls({
           Stops it completely. Work it was holding is lost.
         </p>
       </div>
+
+      {onCrashOne && (
+        <div className="ins-fault-row">
+          <button
+            type="button"
+            className="btn btn-sm btn-danger"
+            aria-disabled={oneDown}
+            aria-describedby={`${id}-crash-one`}
+            onClick={guarded(oneDown, onCrashOne)}
+          >
+            Crash one instance
+          </button>
+          <p id={`${id}-crash-one`} className="ins-hint">
+            Stops one of its {instances} machines. The work on that machine is lost, and
+            the other {instances - 1} keep serving with fewer slots between them.
+          </p>
+        </div>
+      )}
 
       <div className="ins-fault-row">
         <label className="row-k" htmlFor={`${id}-factor`}>

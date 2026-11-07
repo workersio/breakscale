@@ -14,6 +14,7 @@ import type {
   SimNode,
   SystemStats,
 } from '../sim/types';
+import { canCrashOneInstance } from '../sim/behaviour';
 import { defaultConfig } from '../sim/presets';
 import { suggestionFor } from '../content/suggestions';
 import { KIND_NAME, KIND_TERM } from './nodeVisuals';
@@ -1229,7 +1230,14 @@ const FIELD_GROUPS: { title: string; fields: ReadonlySet<Field> }[] = [
   },
   {
     title: 'How much it can handle',
-    fields: new Set<Field>(['capacity', 'serviceMs', 'serviceCv', 'queueLimit']),
+    fields: new Set<Field>([
+      'instances',
+      'capacity',
+      'serviceMs',
+      'serviceCv',
+      'queueLimit',
+      'lockMs',
+    ]),
   },
   {
     title: 'When things go wrong',
@@ -1260,6 +1268,17 @@ function fillPct(value: number, min: number, max: number): string {
   return `${Math.max(0, Math.min(1, t)) * 100}%`;
 }
 
+/**
+ * Why a field is fixed during a challenge, in the terms of what it stands
+ * for. A client stands for the people sending requests, so its fields are
+ * theirs; everywhere else the fixed fields describe the work.
+ */
+function lockNoteFor(kind: NodeKind): string {
+  return kind === 'client'
+    ? 'Fixed for this challenge: it is how the people sending requests behave, not part of your design.'
+    : 'Fixed for this challenge: it describes the work, not your design.';
+}
+
 function SliderRow({
   spec,
   value,
@@ -1271,8 +1290,11 @@ function SliderRow({
   value: number;
   /** True when a multi-selection disagrees on this field. */
   mixed?: boolean;
-  /** Held still by a challenge. Shown, and shown to be fixed, never hidden. */
-  locked?: boolean;
+  /**
+   * Held still by a challenge, with the sentence saying why. Shown, and shown
+   * to be fixed, never hidden.
+   */
+  locked?: string;
   onChange: (v: number) => void;
 }) {
   const id = useId();
@@ -1304,16 +1326,14 @@ function SliderRow({
         }
         aria-describedby={`${id}-u`}
         aria-valuetext={mixed ? 'mixed' : spec.display(value)}
-        disabled={locked}
+        disabled={locked !== undefined}
         onChange={(e) => onChange(Number(e.currentTarget.value))}
       />
       <span id={`${id}-u`} className="sr-only">
         {spec.unit}
       </span>
       {locked ? (
-        <p className="ins-hint">
-          Fixed for this challenge: it describes the work, not your design.
-        </p>
+        <p className="ins-hint">{locked}</p>
       ) : spec.hint ? (
         <p className="ins-hint">{spec.hint}</p>
       ) : null}
@@ -1332,7 +1352,7 @@ function NumberRow({
   value: number;
   mixed?: boolean;
   /** Held still by a challenge. See SliderRow. */
-  locked?: boolean;
+  locked?: string;
   onChange: (v: number) => void;
 }) {
   const id = useId();
@@ -1372,7 +1392,7 @@ function NumberRow({
           value={draft ?? value}
           placeholder={mixed ? 'mixed' : undefined}
           data-mixed={mixed || undefined}
-          disabled={locked}
+          disabled={locked !== undefined}
           onChange={(e) => {
             const text = e.currentTarget.value;
             setDraft(text);
@@ -1401,9 +1421,7 @@ function NumberRow({
         <span className="label ins-unit">{spec.unit}</span>
       </span>
       {locked ? (
-        <p className="ins-hint">
-          Fixed for this challenge: it describes the work, not your design.
-        </p>
+        <p className="ins-hint">{locked}</p>
       ) : spec.hint ? (
         <p className="ins-hint">{spec.hint}</p>
       ) : null}
@@ -1419,7 +1437,8 @@ function ChoiceRow({
 }: {
   spec: ChoiceSpec;
   value: 'reject' | 'wait';
-  locked?: boolean;
+  /** Held still by a challenge. See SliderRow. */
+  locked?: string;
   onChange: (v: 'reject' | 'wait') => void;
 }) {
   const id = useId();
@@ -1432,7 +1451,7 @@ function ChoiceRow({
         id={id}
         className="ins-number"
         value={value}
-        disabled={locked}
+        disabled={locked !== undefined}
         onChange={(e) => onChange(e.currentTarget.value as 'reject' | 'wait')}
       >
         {spec.options.map((option) => (
@@ -1441,7 +1460,11 @@ function ChoiceRow({
           </option>
         ))}
       </select>
-      {spec.hint ? <p className="ins-hint">{spec.hint}</p> : null}
+      {locked ? (
+        <p className="ins-hint">{locked}</p>
+      ) : spec.hint ? (
+        <p className="ins-hint">{spec.hint}</p>
+      ) : null}
     </div>
   );
 }
@@ -2224,14 +2247,21 @@ export interface InspectorProps {
   onDelete: (id: string) => void;
   onRename: (id: string, label: string) => void;
   /**
-   * Fields a challenge is holding still, or undefined outside one.
+   * The fields a challenge is holding still on a node of each kind, or
+   * undefined outside one.
    *
    * A brief fixes the properties of the work (how long a query takes, how
-   * uneven it is) and leaves every design decision editable. See
-   * FIXED_DURING_CHALLENGE in sim/challenge.ts for why that line sits where
-   * it does.
+   * uneven it is) and of the people sending it (how fast, how patient), and
+   * leaves every design decision editable. See DEFAULT_LOCKS in
+   * sim/challenge.ts for why that line sits where it does. By kind, because
+   * a client's retries are the brief's and a server's are the reader's.
    */
-  lockedFields?: readonly string[];
+  lockedFields?: (kind: NodeKind) => readonly string[];
+  /**
+   * Whether to offer the suggested fix. Off during a challenge, where it
+   * would be the answer printed beside the question.
+   */
+  suggestions?: boolean;
 
   /* ---- multi-selection: all optional, all additive ---------------- *
    * The canvas rewrite made a multi-selection reachable, but the shell
@@ -2275,6 +2305,7 @@ export function Inspector({
   onDelete,
   onRename,
   lockedFields,
+  suggestions = true,
   selectedNodes,
   selectedEdgeCount = 0,
   onChangeMany,
@@ -2359,6 +2390,7 @@ export function Inspector({
         onChangeMany={onChangeMany}
         onDelete={onDelete}
         onDeleteMany={onDeleteMany}
+        lockedFields={lockedFields}
       />
     );
   }
@@ -2370,7 +2402,8 @@ export function Inspector({
       onChange={onChange}
       onDelete={onDelete}
       onRename={onRename}
-      lockedFields={lockedFields}
+      lockedFields={lockedFields?.(nodes[0]!.kind)}
+      suggestions={suggestions}
       faults={faults}
     />
   );
@@ -2747,6 +2780,7 @@ function SingleInspector({
   onDelete,
   onRename,
   lockedFields,
+  suggestions,
   faults,
 }: {
   node: SimNode;
@@ -2755,6 +2789,7 @@ function SingleInspector({
   onDelete: (id: string) => void;
   onRename: (id: string, label: string) => void;
   lockedFields?: readonly string[];
+  suggestions: boolean;
   faults?: InspectorFaults;
 }) {
   const fields = FIELDS_BY_KIND[node.kind];
@@ -2778,7 +2813,12 @@ function SingleInspector({
    * looking at it.
    */
   const fleet = Math.max(1, Math.floor(stats?.instances ?? cfg.instances ?? 1));
-  const maxThroughput = showCeiling ? fleet * cfg.capacity * (1000 / cfg.serviceMs) : 0;
+  // A machine down to 'Crash one instance' takes its slots with it, so the
+  // ceiling is the machines still up. With one machine that is a crashed
+  // node, whose status line already says nothing is serving.
+  const down = fleet > 1 ? Math.min(stats?.instancesDown ?? 0, fleet - 1) : 0;
+  const up = fleet - down;
+  const maxThroughput = showCeiling ? up * cfg.capacity * (1000 / cfg.serviceMs) : 0;
 
   /*
    * A node that blocks on its calls (the engine publishes waitingOnDownstream
@@ -2789,7 +2829,7 @@ function SingleInspector({
    * every slot held. Slots held is measured, so it takes headroom's place.
    */
   const blocking = stats?.waitingOnDownstream !== undefined;
-  const slots = fleet * cfg.capacity;
+  const slots = up * cfg.capacity;
   const held = stats ? stats.inFlight + (stats.waitingOnDownstream ?? 0) : 0;
   const heldShare = slots > 0 ? held / slots : 0;
 
@@ -2808,9 +2848,10 @@ function SingleInspector({
   // slot is held and work is waiting in line for one.
   const outOfSlots = blocking && heldShare >= 1 && (stats?.queued ?? 0) >= 1;
   const suggestion =
-    (headroom !== null && headroom < 1) || (showCeiling && outOfSlots)
+    suggestions && ((headroom !== null && headroom < 1) || (showCeiling && outOfSlots))
       ? suggestionFor(node.kind)
       : null;
+  const lockNote = lockNoteFor(node.kind);
 
   const serviceMsLabel =
     cfg.serviceMs < 10 ? cfg.serviceMs.toFixed(1) : String(Math.round(cfg.serviceMs));
@@ -2920,7 +2961,7 @@ function SingleInspector({
                     key={field}
                     spec={spec}
                     value={value}
-                    locked={locked}
+                    locked={locked ? lockNote : undefined}
                     onChange={(v) => onChange(node.id, { [field]: v })}
                   />
                 ) : spec.control === 'choice' ? (
@@ -2928,7 +2969,7 @@ function SingleInspector({
                     key={field}
                     spec={spec}
                     value={node.config.bulkheadMode ?? 'reject'}
-                    locked={locked}
+                    locked={locked ? lockNote : undefined}
                     onChange={(v) => onChange(node.id, { bulkheadMode: v })}
                   />
                 ) : (
@@ -2936,7 +2977,7 @@ function SingleInspector({
                     key={field}
                     spec={spec}
                     value={value}
-                    locked={locked}
+                    locked={locked ? lockNote : undefined}
                     onChange={(v) => onChange(node.id, { [field]: v })}
                   />
                 );
@@ -2955,7 +2996,7 @@ function SingleInspector({
               />
               <p className="ins-expr">
                 {fleet > 1
-                  ? `${formatCount(fleet)} instances x ${formatCount(cfg.capacity)} slots ÷ ${serviceMsLabel}ms each`
+                  ? `${formatCount(up)} ${down > 0 ? 'running ' : ''}${up === 1 ? 'instance' : 'instances'} x ${formatCount(cfg.capacity)} slots ÷ ${serviceMsLabel}ms each`
                   : `${formatCount(cfg.capacity)} at once ÷ ${serviceMsLabel}ms each`}
                 {blocking && ', if its calls answered at once'}
               </p>
@@ -2992,6 +3033,12 @@ function SingleInspector({
               fault={faults.fault}
               cables={faults.cables}
               onCrash={() => faults.onInject(node.id, 'crash')}
+              onCrashOne={
+                fleet > 1 && canCrashOneInstance(node.kind)
+                  ? () => faults.onInject(node.id, 'crash-instance')
+                  : undefined
+              }
+              instances={fleet}
               // A kind that offers no service time does no timed work, so a
               // slow fault there would change nothing.
               canSlow={fields.includes('serviceMs')}
@@ -3147,6 +3194,7 @@ function MultiInspector({
   onChangeMany,
   onDelete,
   onDeleteMany,
+  lockedFields,
 }: {
   nodes: readonly SimNode[];
   edgeCount: number;
@@ -3154,6 +3202,7 @@ function MultiInspector({
   onChangeMany?: (ids: readonly string[], patch: Partial<NodeConfig>) => void;
   onDelete: (id: string) => void;
   onDeleteMany?: (ids: readonly string[]) => void;
+  lockedFields?: (kind: NodeKind) => readonly string[];
 }) {
   const ids = useMemo(() => nodes.map((n) => n.id), [nodes]);
 
@@ -3192,6 +3241,10 @@ function MultiInspector({
   }, [ids, onDelete, onDeleteMany]);
 
   const fields = kind ? FIELDS_BY_KIND[kind] : [];
+  /* The same fields the single view holds still. A multi-selection that
+     could move them would be the way round every lock a brief has. */
+  const locked = kind ? (lockedFields?.(kind) ?? []) : [];
+  const lockNote = kind ? lockNoteFor(kind) : '';
   const grouped = FIELD_GROUPS.map((g) => ({
     title: g.title,
     fields: fields.filter((f) => g.fields.has(f)),
@@ -3257,12 +3310,14 @@ function MultiInspector({
                        and the moment the student moves it, the value becomes
                        real for every one of them. */
                     const value = shared ?? readField(nodes[0]!, field);
+                    const note = locked.includes(field) ? lockNote : undefined;
                     return spec.control === 'slider' ? (
                       <SliderRow
                         key={field}
                         spec={spec}
                         value={value}
                         mixed={mixed}
+                        locked={note}
                         onChange={(v) => applyAll({ [field]: v })}
                       />
                     ) : spec.control === 'choice' ? (
@@ -3270,6 +3325,7 @@ function MultiInspector({
                         key={field}
                         spec={spec}
                         value={nodes[0]!.config.bulkheadMode ?? 'reject'}
+                        locked={note}
                         onChange={(v) => applyAll({ bulkheadMode: v })}
                       />
                     ) : (
@@ -3278,6 +3334,7 @@ function MultiInspector({
                         spec={spec}
                         value={value}
                         mixed={mixed}
+                        locked={note}
                         onChange={(v) => applyAll({ [field]: v })}
                       />
                     );
@@ -3376,6 +3433,11 @@ export interface TrafficControlProps {
    * control rather than an inapplicable one.
    */
   noTrafficSource: boolean;
+  /**
+   * The load is set by a challenge, which judges the design at the rate it
+   * states. The slider still shows it, held still and saying why.
+   */
+  locked?: boolean;
 }
 
 export function TrafficControl({
@@ -3389,6 +3451,7 @@ export function TrafficControl({
   lost,
   empty,
   noTrafficSource,
+  locked = false,
 }: TrafficControlProps) {
   const sliderId = useId();
 
@@ -3464,7 +3527,8 @@ export function TrafficControl({
                 '--fill-pct': fillPct(rpsToPosition(rps), 0, SLIDER_STEPS),
               } as React.CSSProperties
             }
-            disabled={noTrafficSource}
+            disabled={noTrafficSource || locked}
+            aria-describedby={locked ? `${sliderId}-locked` : undefined}
             aria-valuetext={
               noTrafficSource
                 ? 'No traffic source on the canvas'
@@ -3477,6 +3541,10 @@ export function TrafficControl({
                replaced by the reason rather than sitting under a dead
                control. Says what to do, not what went wrong. */
             <p className="traffic-scale-note">Add a client to send traffic.</p>
+          ) : locked ? (
+            <p id={`${sliderId}-locked`} className="traffic-scale-note">
+              Set by the challenge you are in.
+            </p>
           ) : (
             <div className="traffic-scale" aria-hidden="true">
               {SCALE_MARKS.map((m) => (

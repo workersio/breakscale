@@ -33,6 +33,9 @@ export const BACKED_UP_KEYS = [
   'breakscale.preferences.v1',
   'breakscale.layout.v1',
   'breakscale.session.v1',
+  // Challenge attempts and passes. Losing them on a new machine would cost
+  // someone every brief they had already worked through.
+  'breakscale.challenges.v1',
 ] as const;
 
 export interface BackupFile {

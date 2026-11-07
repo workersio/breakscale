@@ -175,6 +175,18 @@ export interface ComponentBehaviour {
    */
   scaleField?: 'instances' | 'shardCapacity';
   /**
+   * Does this kind hold a slot after its own work is over, in a way only it
+   * can see? True for a websocket gateway, whose slot is a connection that
+   * stays open long after the handshake was served, kept in `ext` on a timer.
+   *
+   * The engine can take one instance of a node down ('crash-instance') only
+   * when it can tell which machine holds which work, and it knows that for a
+   * slot it hands out or times itself: its own, and anything served through
+   * serveWithin(). A slot held past that is invisible to it, so such a kind
+   * cannot lose one machine honestly and is not offered the fault.
+   */
+  slotsOutliveService?: boolean;
+  /**
    * Called after the node's own service time elapsed and its independent error
    * roll passed. Returning 'complete' answers the call here.
    */
@@ -462,6 +474,19 @@ export function behaviourFor(kind: NodeKind): ComponentBehaviour {
   // An unknown kind degrades to plain-server semantics rather than throwing,
   // so a topology saved by a newer build still loads.
   return service;
+}
+
+/**
+ * Can a node of this kind lose ONE instance to a 'crash-instance' fault?
+ *
+ * Only a kind that scales by `instances` has machines to lose, and only one
+ * whose every slot is held while the engine can see it can lose one honestly
+ * (see `slotsOutliveService`). Read by the engine, by the schedule validator
+ * and by the inspector, so the three cannot disagree.
+ */
+export function canCrashOneInstance(kind: NodeKind): boolean {
+  const b = behaviourFor(kind);
+  return b.scaleField === 'instances' && b.slotsOutliveService !== true;
 }
 
 export function clamp01(v: number): number {

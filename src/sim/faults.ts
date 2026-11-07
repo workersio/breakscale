@@ -1,4 +1,5 @@
-import type { FailureKind, FailureOpts, FaultEvent, Topology } from './types';
+import { canCrashOneInstance } from './behaviour';
+import type { FailureKind, FailureOpts, FaultEvent, NodeKind, Topology } from './types';
 import { FAILURE_KINDS } from './types';
 
 /* ------------------------------------------------------------------ *
@@ -35,12 +36,14 @@ export function sanitizeFaults(
   onDrop?: (index: number, why: string) => void,
 ): FaultEvent[] {
   if (!Array.isArray(input)) return [];
-  const nodeIds = topology ? new Set(topology.nodes.map((n) => n.id)) : null;
+  const nodeKinds = topology
+    ? new Map<string, NodeKind>(topology.nodes.map((n) => [n.id, n.kind]))
+    : null;
   const edgeIds = topology ? new Set(topology.edges.map((e) => e.id)) : null;
   const out: FaultEvent[] = [];
 
   input.forEach((raw: unknown, index) => {
-    const why = problemWith(raw, nodeIds, edgeIds, index);
+    const why = problemWith(raw, nodeKinds, edgeIds, index);
     if (why === null) out.push(rebuild(raw as FaultEvent));
     else onDrop?.(index, why);
   });
@@ -50,7 +53,7 @@ export function sanitizeFaults(
 /** Why an entry cannot be played, or null when it can. */
 function problemWith(
   raw: unknown,
-  nodeIds: ReadonlySet<string> | null,
+  nodeKinds: ReadonlyMap<string, NodeKind> | null,
   edgeIds: ReadonlySet<string> | null,
   index: number,
 ): string | null {
@@ -76,13 +79,24 @@ function problemWith(
   }
 
   if (typeof f.nodeId !== 'string' || f.nodeId === '') return 'needs `nodeId`.';
-  if (nodeIds && !nodeIds.has(f.nodeId)) {
+  const nodeKind = nodeKinds?.get(f.nodeId);
+  if (nodeKinds && nodeKind === undefined) {
     return `names node '${f.nodeId}', but there is no such node.`;
   }
   if (f.action === 'clear') return null;
 
   if (!FAILURE_KINDS.includes(f.kind as FailureKind)) {
     return `has kind ${JSON.stringify(f.kind)}; use ${FAILURE_KINDS.join(', ')}.`;
+  }
+  // Checked here rather than left to the engine, which ignores such an entry:
+  // a schedule that says a machine died should not load as one where nothing
+  // happened.
+  if (
+    f.kind === 'crash-instance' &&
+    nodeKind !== undefined &&
+    !canCrashOneInstance(nodeKind)
+  ) {
+    return `crashes one instance of '${f.nodeId}', but a ${nodeKind} cannot lose one instance; use crash.`;
   }
   if (f.opts === undefined) return null;
   if (!f.opts || typeof f.opts !== 'object' || Array.isArray(f.opts)) {

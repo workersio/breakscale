@@ -249,7 +249,7 @@ describe('a hostile tail', () => {
       ['a seed past 32 bits', [1, 0x80, 0x80, 0x80, 0x80, 0x10]],
       ['a truncated seed', [1]],
       ['a schedule of zero entries', [2, 0]],
-      ['an unknown op', [2, 1, 7 << 3, 0, 0]],
+      ['an unknown op', [2, 1, 8 << 3, 0, 0]],
       ['options on a clear', [2, 1, (4 << 3) | 1, 0, 0]],
       ['a missing node', [2, 1, 0, 0, 99]],
       ['a missing edge', [2, 1, 5 << 3, 0, 99]],

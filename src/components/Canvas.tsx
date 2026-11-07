@@ -93,6 +93,7 @@ import {
 import type { Annotation, AnnotationFont, Note, Section } from '../sim/annotations';
 import { usePreference } from '../content/preferences';
 import { Minimap } from './Minimap';
+import { DETAIL_ZOOM, MINIMAL_ZOOM, fitViewport } from './fit';
 import { serialiseSvg } from '../imageExport';
 import './Canvas.css';
 
@@ -284,35 +285,8 @@ const MIN_ZOOM = 0.4;
 const MAX_ZOOM = 2.5;
 /** One keyboard or button zoom step. Shared so the two cannot drift. */
 const ZOOM_STEP = 1.25;
-/** Below this the body numbers and sparkline drop. */
-const DETAIL_ZOOM = 0.7;
-/** Below this only the name, health rule and meter survive. */
-const MINIMAL_ZOOM = 0.5;
-
-/** Auto-fit margin and clamp. 1.5 stops a 3-node preset becoming a billboard.
- *
- * FIT_MIN is deliberately DETAIL_ZOOM, not a rounder 0.6. Auto-fit runs on
- * every preset load, so it decides what a student sees first — and at 0.6
- * the fitted view landed in the 0.6-0.7 band where the body numbers are
- * suppressed, presenting the flagship preset as a row of empty boxes. The
- * floor and the legibility threshold are the same number by definition:
- * never auto-fit to a zoom at which the diagram stops showing its data. */
-/* The auto-fit margin, in CSS px of the visible rect.
- *
- * 64 is generous on a desktop and expensive on a phone: it spends 128 of a
- * 390px width on air, which is a third of the screen, and the fit clamps at
- * FIT_MIN anyway so that air buys nothing. A narrow viewport gets a tighter
- * frame; the diagram still has room to breathe, and more of it lands on
- * screen before the reader has to pan. */
-const FIT_MARGIN_WIDE = 64;
-const FIT_MARGIN_NARROW = 24;
-const NARROW_FIT_WIDTH = 720;
-
-function fitMarginFor(viewWidth: number): number {
-  return viewWidth <= NARROW_FIT_WIDTH ? FIT_MARGIN_NARROW : FIT_MARGIN_WIDE;
-}
-const FIT_MIN = DETAIL_ZOOM;
-const FIT_MAX = 1.5;
+/* The detail thresholds and the auto-fit floors live in fit.ts, with the
+   fit arithmetic they govern. */
 
 /*
  * The click/drag threshold lives in pointerInput.ts (dragThresholdFor) and
@@ -5379,17 +5353,15 @@ export default function Canvas({
    * same rounding zoomAt applies, so a fit and a keyboard zoom can never
    * report two spellings of the same percentage.
    */
+  /** The surface size the last fit framed for. See the resize observer. */
+  const fittedSizeRef = useRef<{ w: number; h: number } | null>(null);
   const fitTo = useCallback(
     (nodes: readonly SimNode[]) => {
       const rects = visibleRect();
       if (!rects || nodes.length === 0) return;
-      // Scale and centring both use the VISIBLE rect, so a fit with panels
-      // open frames the diagram inside the uncovered area and never parks a
-      // node under an opaque panel. The view offset is still expressed
-      // relative to the surface, which is what the transform is anchored to.
-      const { surface: r, view: vr } = rects;
-      if (vr.width === 0 || vr.height === 0) return;
-
+      // Scale and centring both use the VISIBLE rect (see fitViewport), so a
+      // fit with panels open, or the challenge sheet up on a phone, frames
+      // the diagram in the uncovered area and never under an opaque panel.
       let minX = Infinity;
       let minY = Infinity;
       let maxX = -Infinity;
@@ -5400,21 +5372,12 @@ export default function Canvas({
         if (n.x + NODE_W > maxX) maxX = n.x + NODE_W;
         if (n.y + NODE_H > maxY) maxY = n.y + NODE_H;
       }
-      const bw = Math.max(1, maxX - minX);
-      const bh = Math.max(1, maxY - minY);
-      const margin = fitMarginFor(vr.width);
-      const k = clamp(
-        Math.round(
-          Math.min((vr.width - margin * 2) / bw, (vr.height - margin * 2) / bh) * 1000,
-        ) / 1000,
-        FIT_MIN,
-        FIT_MAX,
-      );
-      setView({
-        k,
-        x: vr.left - r.left + (vr.width - bw * k) / 2 - minX * k,
-        y: vr.top - r.top + (vr.height - bh * k) / 2 - minY * k,
-      });
+      const next = fitViewport({ minX, minY, maxX, maxY }, rects.surface, rects.view);
+      if (!next) return;
+      // The surface size this fit was framed for, so the resize observer can
+      // tell a real resize from the size it was already fitted to.
+      fittedSizeRef.current = { w: rects.surface.width, h: rects.surface.height };
+      setView(next);
     },
     [visibleRect],
   );
@@ -5539,14 +5502,25 @@ export default function Canvas({
     // identity moves with every topology change, so every drop re-subscribed
     // and that initial delivery re-aimed the camera one frame later.
     // Measured: a node dropped near the canvas edge zoomed the view from
-    // 1.5 to 1.21 with nothing resized anywhere. The observer now lives for
-    // the surface's whole life and ignores the first delivery.
-    let first = true;
-    const ro = new ResizeObserver(() => {
-      if (first) {
-        first = false;
+    // 1.5 to 1.21 with nothing resized anywhere. The observer lives for the
+    // surface's whole life.
+    //
+    // A delivery is a resize when the size differs from the one the last fit
+    // framed for, not merely when it is not the first. Skipping the first
+    // outright could lose a real one: if the surface changes size after the
+    // boot fit and before the first delivery, that delivery IS the resize.
+    // Measured on a ?challenge= link at 390px, the diagram sat about 100px
+    // below the centre of the room it was framed for. With no fit yet (an
+    // empty canvas) the first size is only recorded.
+    const ro = new ResizeObserver((entries) => {
+      const box = entries[entries.length - 1]?.target.getBoundingClientRect();
+      if (!box) return;
+      const fitted = fittedSizeRef.current;
+      if (!fitted) {
+        fittedSizeRef.current = { w: box.width, h: box.height };
         return;
       }
+      if (fitted.w === box.width && fitted.h === box.height) return;
       if (pendingRef.current) return;
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => fitToContentRef.current());
