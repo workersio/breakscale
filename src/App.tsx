@@ -21,9 +21,30 @@ import { useGithubStars, useCountUp, formatStars } from './useGithubStars';
 import { Engine } from './sim/engine';
 import { PRESETS, makeNode } from './sim/presets';
 import { CHALLENGES, challengeById } from './sim/challenges';
-import { FIXED_DURING_CHALLENGE, applyLoad, evaluate } from './sim/challenge';
+import { evaluate, lockedFieldsFor } from './sim/challenge';
+import type { Challenge } from './sim/challenge';
+import { designKey, judgedTopology, startDesign } from './sim/judge';
+import type { Verdict } from './sim/judge';
 import { ChallengePanel } from './components/Challenge';
 import { Challenges } from './components/Challenges';
+import {
+  CHALLENGES_KEY,
+  EMPTY_STORE,
+  attemptFor,
+  badgeFor,
+  challengeParam,
+  conform,
+  freshStart,
+  loadChallengeStore,
+  nextChallenge,
+  saveChallengeStore,
+  withActive,
+  withAttempt,
+  withHints,
+  withPass,
+} from './challengeWorkspace';
+import type { ChallengeStore } from './challengeWorkspace';
+import { useChallengeCheck } from './useChallengeCheck';
 import type { Preset } from './sim/presets';
 import Canvas, {
   GRID,
@@ -80,7 +101,7 @@ import { usePresence } from './components/presence';
 import { SessionHistory, syncEngine } from './history';
 import type { HistoryEntry, HistorySnapshot } from './history';
 import { ShareLinkTooLargeError, decodeTopology, hasShareHash } from './share';
-import { ShareStoreError, fetchStored, hasStoredLink } from './share/store';
+import { ID_PARAM, ShareStoreError, fetchStored, hasStoredLink } from './share/store';
 import {
   buildLink,
   designTopology,
@@ -566,6 +587,19 @@ function saveSession(session: Session): void {
 }
 
 /**
+ * The stored session as written, or null when there is none or storage is
+ * blocked. Compared, not parsed: it says whether another tab has saved over
+ * the session since this one last looked.
+ */
+function storedSessionRaw(): string | null {
+  try {
+    return localStorage.getItem(STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Is this tab opening a share link?
  *
  * Read once, synchronously, before the first render. Decoding it is
@@ -584,6 +618,23 @@ function shareHashPresent(): boolean {
   } catch {
     // No DOM (a test importing App), or a locked-down location object.
     return false;
+  }
+}
+
+/**
+ * Take a share link off the URL: the fragment, and the query id a stored
+ * link pairs with it. For a brief started from a link, so a reload comes back
+ * to the brief rather than to the link, which boot would otherwise put first.
+ */
+function dropShareLink(): void {
+  try {
+    if (!shareHashPresent()) return;
+    const url = new URL(window.location.href);
+    url.hash = '';
+    url.searchParams.delete(ID_PARAM);
+    window.history.replaceState(window.history.state, '', url.toString());
+  } catch {
+    // A locked-down location: the link stays, and a reload opens it again.
   }
 }
 
@@ -606,6 +657,116 @@ function clientRps(t: Topology): number {
   return sum;
 }
 
+/**
+ * Said after opening something from inside a brief, which goes back to the
+ * reader's own design and replaces it, as opening it from there would.
+ */
+const IN_PLACE = 'in place of your design. Undo brings yours back.';
+
+/** The reader's own design, held while a challenge has the canvas. */
+interface Aside extends Session {
+  /**
+   * It was a share link they had not touched yet. It comes back the same
+   * way, still not saved over their own design until they change it.
+   */
+  shared: boolean;
+  /**
+   * The stored session when this was set aside. If storage holds something
+   * else by the time the reader leaves, another tab has saved newer work of
+   * theirs, and that comes back instead of this copy.
+   */
+  stamp: string | null;
+}
+
+/**
+ * The challenge store as storage holds it, over what this tab holds. Each
+ * write goes to storage at once, so what storage has is never older than
+ * memory, only newer where another tab wrote. Memory fills in what storage
+ * could not keep, and which brief is open is this tab's.
+ */
+function mergeStored(mine: ChallengeStore, stored: ChallengeStore): ChallengeStore {
+  if (stored === EMPTY_STORE) return mine;
+  return {
+    active: mine.active,
+    attempts: { ...mine.attempts, ...stored.attempts },
+    progress: { ...mine.progress, ...stored.progress },
+  };
+}
+
+/** What the app opens on: whose workspace, and what is in it. */
+interface Boot {
+  session: Session;
+  challengeId: string | null;
+  aside: Aside | null;
+  store: ChallengeStore;
+  /**
+   * What to tell the reader once the app is up, when boot moved them out of
+   * their own design on a `?challenge=` link. Starting from the picker says
+   * the same, so the canvas changing is never a mystery either way.
+   */
+  notice: string | null;
+}
+
+/**
+ * Choose the workspace to open.
+ *
+ * A share link wins over everything, a brief included: someone opening a
+ * link wants to see that link. The brief's attempt is kept for next time and
+ * the reader's own design stays in storage, unwritten, as it always does
+ * under a link. Otherwise a `?challenge=<id>` link starts or resumes that
+ * brief, and failing that the brief the reader was in when they left comes
+ * back. Inside a brief the reader's own design is what storage holds, since
+ * nothing writes it while a brief is open, so that is what is set aside.
+ */
+function bootWorkspace(): Boot {
+  const own = loadSession();
+  const store = loadChallengeStore(CHALLENGES);
+  if (shareHashPresent()) {
+    return {
+      session: own,
+      challengeId: null,
+      aside: null,
+      store: withActive(store, null),
+      notice: null,
+    };
+  }
+  let linked: string | null = null;
+  try {
+    linked = challengeParam(window.location.search);
+  } catch {
+    // No DOM (a test importing App): no link to follow.
+  }
+  const id = linked && challengeById(linked) ? linked : store.active;
+  const challenge = id ? challengeById(id) : undefined;
+  if (!challenge) {
+    return {
+      session: own,
+      challengeId: null,
+      aside: null,
+      store: withActive(store, null),
+      notice: null,
+    };
+  }
+  const attempt = attemptFor(store, challenge);
+  const topology = attempt?.topology ?? freshStart(challenge);
+  const stamp = storedSessionRaw();
+  // Only a link that took the reader out of their own saved design. A
+  // reload inside a brief, or a first visit with nothing saved, needs no word.
+  const notice =
+    id === linked && store.active === null && stamp !== null
+      ? attempt
+        ? 'Picked up where you left off. Your design is set aside until you leave.'
+        : 'Your design is set aside. It comes back when you leave.'
+      : null;
+  return {
+    session: { topology, rps: clientRps(topology), presetId: challenge.presetId },
+    challengeId: challenge.id,
+    aside: { ...own, shared: false, stamp },
+    store: withActive(withAttempt(store, challenge, topology), challenge.id),
+    notice,
+  };
+}
+
 /* ------------------------------------------------------------------ *
  * App
  * ------------------------------------------------------------------ */
@@ -613,7 +774,8 @@ function clientRps(t: Topology): number {
 export default function App() {
   // Read storage once, before the first paint, so the app never flashes a
   // preset and then swaps to the restored session.
-  const [initial] = useState(loadSession);
+  const [boot] = useState(bootWorkspace);
+  const initial = boot.session;
 
   /**
    * "A share link is on the URL and has not been dealt with yet."
@@ -683,15 +845,68 @@ export default function App() {
   const [challengesOpen, setChallengesOpen] = useState(false);
 
   /**
-   * The challenge being attempted, by id, or null for the free sandbox.
+   * The challenge being attempted, by id, or null for the reader's own
+   * design.
    *
    * Only the id is held: the brief itself is a module constant, and storing
    * a copy would let a challenge edited in source drift from one already in
-   * progress. Not persisted, because a brief resumed days later with a
-   * half-finished design and no memory of the goal is worse than starting it
-   * again.
+   * progress. Its attempt is kept in the challenge store, and the live
+   * mirror below is for handlers that run before React has re-rendered.
    */
-  const [challengeId, setChallengeId] = useState<string | null>(null);
+  const [challengeId, setChallengeId] = useState<string | null>(boot.challengeId);
+  const challengeLiveRef = useRef<string | null>(boot.challengeId);
+
+  /**
+   * The reader's own design, while a brief has the canvas. Kept in memory so
+   * leaving puts back exactly what they left, and in storage, because the
+   * session key is never written inside a brief, so it survives a reload.
+   */
+  const asideRef = useRef<Aside | null>(boot.aside);
+
+  /**
+   * Attempts and passes. Written through at once rather than from an effect:
+   * switching workspace has to land the attempt being left before anything
+   * else can run, or a reload in between would lose it.
+   */
+  const [chalStore, setChalStore] = useState<ChallengeStore>(boot.store);
+  const chalStoreRef = useRef<ChallengeStore>(boot.store);
+  const updateStore = useCallback((fn: (s: ChallengeStore) => ChallengeStore) => {
+    // Read storage first: another tab may have recorded a pass or an attempt
+    // since this one last looked, and writing the store from memory alone
+    // would erase it. Which brief is open stays this tab's own.
+    const base = mergeStored(chalStoreRef.current, loadChallengeStore(CHALLENGES));
+    const next = fn(base);
+    if (
+      next === chalStoreRef.current ||
+      (next === base && JSON.stringify(base) === JSON.stringify(chalStoreRef.current))
+    ) {
+      return;
+    }
+    chalStoreRef.current = next;
+    saveChallengeStore(next);
+    setChalStore(next);
+  }, []);
+  // Another tab's writes show here too, so the picker's badges agree.
+  // Storage is outside React, which is why this is an effect.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== CHALLENGES_KEY) return;
+      const next = mergeStored(chalStoreRef.current, loadChallengeStore(CHALLENGES));
+      chalStoreRef.current = next;
+      setChalStore(next);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+  // What boot chose (a brief resumed, a link followed, a brief left behind
+  // by a share link) is written once it has been chosen.
+  useEffect(() => {
+    saveChallengeStore(chalStoreRef.current);
+  }, []);
+
+  /** Bumped when a brief is started by hand, to move focus to it. */
+  const [panelFocus, setPanelFocus] = useState(0);
+  const menuBtnRef = useRef<HTMLButtonElement | null>(null);
 
   /* ---------------- panel layout ---------------- */
 
@@ -1041,21 +1256,32 @@ export default function App() {
 
   /* ---------------- persistence ---------------- */
 
+  /* A live mirror of sharePending, for the workspace switch below, which
+     runs inside handlers and has to know about a link opened this tick. */
+  const sharePendingRef = useRef(sharePending);
+  useLayoutEffect(() => {
+    sharePendingRef.current = sharePending;
+  }, [sharePending]);
+
   useEffect(() => {
     // A share link is still being decoded, or has just been opened and not
     // yet edited. Writing here would overwrite the recipient's own saved
     // design with someone else's before they had touched anything.
-    if (sharePending) return;
+    if (sharePending && challengeId === null) return;
     // Debounced: dragging a node or a slider must not write on every frame.
     // Between a change and the write, the work genuinely is not saved yet,
     // and the indicator says so rather than reassuring early.
     setSaveState('saving');
     const id = window.setTimeout(() => {
-      saveSession({ topology, rps, presetId });
+      // Inside a brief the canvas is the brief's, and it is saved as its
+      // attempt. The reader's own design is never written from here.
+      const brief = challengeId ? challengeById(challengeId) : undefined;
+      if (brief) updateStore((s) => withAttempt(s, brief, topology));
+      else saveSession({ topology, rps, presetId });
       setSaveState('saved');
     }, 400);
     return () => window.clearTimeout(id);
-  }, [topology, rps, presetId, sharePending]);
+  }, [topology, rps, presetId, sharePending, challengeId, updateStore]);
 
   /* ---------------- undo / redo ---------------- */
 
@@ -1094,13 +1320,14 @@ export default function App() {
     selectedIds: new Set<string>(),
     rps: initial.rps,
     presetId: initial.presetId,
+    challengeId: boot.challengeId,
   });
   // Layout effect, not a passive one: the mirror must be current before the
   // NEXT event handler runs (a pointerup reading the final drag position),
   // and passive effects offer no such ordering guarantee.
   useLayoutEffect(() => {
-    snapRef.current = { topology, selectedIds, rps, presetId };
-  }, [topology, selectedIds, rps, presetId]);
+    snapRef.current = { topology, selectedIds, rps, presetId, challengeId };
+  }, [topology, selectedIds, rps, presetId, challengeId]);
 
   /**
    * The topology as of the LAST EVENT HANDLER, not the last committed render.
@@ -1139,29 +1366,167 @@ export default function App() {
     return () => window.clearTimeout(t);
   }, [toast]);
 
+  /**
+   * State backing the lost-per-second derivation further down (see the
+   * cumulativeLost memo). Declared here because reset and preset load must
+   * zero it SYNCHRONOUSLY: leaving it to the effect meant the old run's
+   * "Dropped 104k/s" sat on screen next to p99 0ms until the next effect
+   * pass — indefinitely, while paused.
+   */
+  const lostPrevRef = useRef<number | null>(null);
+  const lostPrevTimeRef = useRef(0);
+  const [lostRps, setLostRps] = useState(0);
+
+  const resetLostRate = useCallback(() => {
+    lostPrevRef.current = null;
+    lostPrevTimeRef.current = 0;
+    setLostRps(0);
+  }, []);
+
+  /**
+   * Bumped when the diagram is replaced wholesale, so the canvas re-frames
+   * the new content. Node edits never bump it: the camera belongs to the
+   * student, and add/delete/undo must not move it.
+   */
+  const [fitNonce, setFitNonce] = useState(0);
+
+  /**
+   * The challenge sheet's size, kept in the uncovered-canvas sentinel.
+   *
+   * On a phone the brief is a sheet over the foot of the canvas, and the
+   * part of the canvas above it is all the student has to look at. A fixed
+   * guess at its height framed the diagram partly under it. The measured
+   * height goes straight onto the sentinel as --chal-sheet-h (read by the
+   * phone rule in Challenge.css) rather than through React state, so a
+   * resize refit already queued for the next frame measures the new rect.
+   *
+   * Folding or opening the sheet, or its first measurement on a new start
+   * or a ?challenge= link, also re-frames the diagram: the room above the
+   * sheet is what changed, and the diagram should fill it. Text growing
+   * inside an open sheet (a hint, a verdict) updates the rect without
+   * moving the camera, the way every other panel does. A desktop never
+   * re-frames here: the panel sits beside the diagram there, not under it.
+   */
+  const sheetShutRef = useRef<boolean | null>(null);
+  const phoneRef = useRef(phone);
+  useLayoutEffect(() => {
+    phoneRef.current = phone;
+  }, [phone]);
+  const handleSheetResize = useCallback((height: number | null, shut: boolean) => {
+    if (height === null) {
+      // The panel went away. The next one is a new sheet to frame above.
+      sheetShutRef.current = null;
+      return;
+    }
+    stageSafeRef.current?.style.setProperty('--chal-sheet-h', `${height}px`);
+    const was = sheetShutRef.current;
+    sheetShutRef.current = shut;
+    if (phoneRef.current && was !== shut) setFitNonce((n) => n + 1);
+  }, []);
+
+  /**
+   * Move between the reader's workspace and a brief's, or between briefs.
+   *
+   * The workspace being left is saved now rather than by the debounced
+   * autosave, which the switch would cancel: an edit made a moment before
+   * starting a brief would otherwise be lost to a reload. Entering a brief
+   * from the reader's own design sets that design aside; going back to the
+   * reader's workspace by any route ends the aside, because what is on the
+   * canvas then is theirs. An aside that was a share link they had not
+   * touched goes back to not being saved over their own design, whichever
+   * route ends it: Leave, opening something else, or an undo past the start.
+   */
+  const switchWorkspace = useCallback(
+    (to: string | null) => {
+      const from = challengeLiveRef.current;
+      if (from === to) return;
+      const out = snapRef.current;
+      const leaving = from ? challengeById(from) : undefined;
+      if (leaving) {
+        updateStore((s) => withAttempt(s, leaving, topoLiveRef.current));
+      } else if (!sharePendingRef.current) {
+        saveSession({
+          topology: topoLiveRef.current,
+          rps: out.rps,
+          presetId: out.presetId,
+        });
+      }
+      if (from === null) {
+        asideRef.current = {
+          topology: topoLiveRef.current,
+          rps: out.rps,
+          presetId: out.presetId,
+          shared: sharePendingRef.current,
+          stamp: storedSessionRaw(),
+        };
+        // The canvas is no longer the link's, and boot puts a link first.
+        dropShareLink();
+      }
+      if (to === null) {
+        // Set after any commit the caller made first, which clears it.
+        if (asideRef.current?.shared) {
+          sharePendingRef.current = true;
+          setSharePending(true);
+        }
+        asideRef.current = null;
+      }
+      updateStore((s) => withActive(s, to));
+      challengeLiveRef.current = to;
+      setChallengeId(to);
+    },
+    [updateStore],
+  );
+
+  /**
+   * Put a whole design on the canvas and start its run from the beginning.
+   * Not a history entry by itself; the callers decide that.
+   */
+  const installDesign = useCallback(
+    (fresh: Topology, fit: boolean) => {
+      setTopology(fresh);
+      setSelectedIds(new Set<string>());
+      topoLiveRef.current = fresh;
+      engine.setTopology(asReplacement(fresh));
+      engine.reset();
+      resetLostRate();
+      setSnapshot(engine.snapshot());
+      if (fit) setFitNonce((n) => n + 1);
+    },
+    [engine, resetLostRate],
+  );
+
   const applyEntry = useCallback(
     (entry: HistoryEntry, verb: 'Undid' | 'Redid') => {
-      // The engine first, via the same non-resetting paths a forward edit
-      // uses: updateNodeConfig for a config-only difference, setTopology for
-      // structure. Nothing here resets the simulation or its metrics.
-      // The fault schedule is what happened during the run, not part of the
-      // design, so undo and redo carry the live one forward rather than
-      // rolling recordings back to whatever the entry was captured with.
-      const live = topoLiveRef.current.faults;
-      const target: Topology = live
-        ? { ...entry.topology, faults: live }
-        : entry.topology;
-      syncEngine(engine, snapRef.current.topology, target);
-      const synced = withSchedule(target, engine.faultSchedule());
-      topoLiveRef.current = synced;
-      setTopology(synced);
+      if (entry.challengeId !== challengeLiveRef.current) {
+        // Into a brief or out of one. That is a different workspace, and its
+        // run starts again from the top, the way starting or leaving does,
+        // so a brief's faults land when it says they do.
+        switchWorkspace(entry.challengeId);
+        installDesign(entry.topology, true);
+      } else {
+        // The engine first, via the same non-resetting paths a forward edit
+        // uses: updateNodeConfig for a config-only difference, setTopology
+        // for structure. Nothing here resets the simulation or its metrics.
+        // The fault schedule is what happened during the run, not part of
+        // the design, so undo and redo carry the live one forward rather
+        // than rolling recordings back to whatever the entry was captured
+        // with.
+        const live = topoLiveRef.current.faults;
+        const target: Topology = live
+          ? { ...entry.topology, faults: live }
+          : entry.topology;
+        syncEngine(engine, snapRef.current.topology, target);
+        const synced = withSchedule(target, engine.faultSchedule());
+        topoLiveRef.current = synced;
+        setTopology(synced);
+      }
       setSelectedIds(new Set(entry.selectedIds));
       setRps(entry.rps);
       setPresetId(entry.presetId);
       toastSeq.current += 1;
       setToast({ text: `${verb} ${entry.label}`, id: toastSeq.current });
     },
-    [engine],
+    [engine, switchWorkspace, installDesign],
   );
 
   const handleUndo = useCallback(() => {
@@ -1182,7 +1547,14 @@ export default function App() {
    * it already knows, so editing the graph does not disturb in-flight work.
    */
   const applyTopology = useCallback(
-    (edit: Topology) => {
+    (raw: Topology) => {
+      // Inside a brief, a node added or pasted runs with the brief's fixed
+      // fields and the clients share its load, exactly as the check will run
+      // them; see conform.
+      const brief = challengeLiveRef.current
+        ? challengeById(challengeLiveRef.current)
+        : undefined;
+      const edit = brief ? conform(brief, raw) : raw;
       engine.setTopology(edit);
       const next = withSchedule(edit, engine.faultSchedule());
       topoLiveRef.current = next;
@@ -1823,11 +2195,35 @@ export default function App() {
   /* ---------------- live config edits ---------------- */
 
   /**
+   * The patch without the fields a brief holds still on this node. The
+   * inspector already shows them as fixed; this is the same rule at the
+   * point the change lands, so no other path can move one either.
+   */
+  const unlocked = useCallback(
+    (id: string, patch: Partial<NodeConfig>): Partial<NodeConfig> => {
+      const brief = challengeLiveRef.current
+        ? challengeById(challengeLiveRef.current)
+        : undefined;
+      const node = brief
+        ? topoLiveRef.current.nodes.find((n) => n.id === id)
+        : undefined;
+      if (!brief || !node) return patch;
+      const fixed = lockedFieldsFor(brief, node.kind);
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(patch)) if (!fixed.includes(k)) out[k] = v;
+      return out as Partial<NodeConfig>;
+    },
+    [],
+  );
+
+  /**
    * Knob changes are applied to the running engine in place. No reset: the
    * whole point is watching the system respond to a change under load.
    */
   const handleConfigChange = useCallback(
-    (id: string, patch: Partial<NodeConfig>) => {
+    (id: string, asked: Partial<NodeConfig>) => {
+      const patch = unlocked(id, asked);
+      if (Object.keys(patch).length === 0) return;
       // A slider fires this every frame, so the history side is debounced:
       // the first frame captures the pre-edit baseline, and the entry lands
       // once the value settles. One knob gesture, one undo step.
@@ -1842,7 +2238,7 @@ export default function App() {
       // No slider sync needed: the header's offered load is DERIVED from the
       // topology's client nodes, so a per-node rps knob updates it for free.
     },
-    [engine, history],
+    [engine, history, unlocked],
   );
 
   /**
@@ -1854,21 +2250,26 @@ export default function App() {
    * a single pass over one `Set`.
    */
   const handleConfigChangeMany = useCallback(
-    (ids: readonly string[], patch: Partial<NodeConfig>) => {
-      if (ids.length === 0) return;
+    (ids: readonly string[], asked: Partial<NodeConfig>) => {
+      const patches = new Map<string, Partial<NodeConfig>>();
+      for (const id of ids) {
+        const patch = unlocked(id, asked);
+        if (Object.keys(patch).length > 0) patches.set(id, patch);
+      }
+      if (patches.size === 0) return;
       history.touch('setting change', snapRef.current);
-      const targets = new Set(ids);
-      for (const id of targets) engine.updateNodeConfig(id, patch);
+      for (const [id, patch] of patches) engine.updateNodeConfig(id, patch);
       setTopology((t) => ({
         ...t,
-        nodes: t.nodes.map((n) =>
-          targets.has(n.id) ? { ...n, config: { ...n.config, ...patch } } : n,
-        ),
+        nodes: t.nodes.map((n) => {
+          const patch = patches.get(n.id);
+          return patch ? { ...n, config: { ...n.config, ...patch } } : n;
+        }),
       }));
       // No slider sync needed: the header derives offered load from the
       // topology, so editing any client's rps here updates it for free.
     },
-    [engine, history],
+    [engine, history, unlocked],
   );
 
   const handleRename = useCallback(
@@ -1892,6 +2293,9 @@ export default function App() {
    */
   const handleRpsChange = useCallback(
     (next: number) => {
+      // A brief states its load and is judged at it. The slider is held
+      // still while one is open; this is the same rule where it lands.
+      if (challengeLiveRef.current !== null) return;
       setRps(next);
       const clients = findClients(topology);
       if (clients.length === 0) return;
@@ -1925,28 +2329,24 @@ export default function App() {
   /* ---------------- presets & reset ---------------- */
 
   /**
-   * State backing the lost-per-second derivation further down (see the
-   * cumulativeLost memo). Declared here because reset and preset load must
-   * zero it SYNCHRONOUSLY: leaving it to the effect meant the old run's
-   * "Dropped 104k/s" sat on screen next to p99 0ms until the next effect
-   * pass — indefinitely, while paused.
+   * Go from a brief back to the reader's own workspace, as one history
+   * entry, and return the design that comes back. The caller puts it, or
+   * whatever it is replacing it with, on the canvas.
    */
-  const lostPrevRef = useRef<number | null>(null);
-  const lostPrevTimeRef = useRef(0);
-  const [lostRps, setLostRps] = useState(0);
-
-  const resetLostRate = useCallback(() => {
-    lostPrevRef.current = null;
-    lostPrevTimeRef.current = 0;
-    setLostRps(0);
-  }, []);
-
-  /**
-   * Bumped when the diagram is replaced wholesale, so the canvas re-frames
-   * the new content. Node edits never bump it: the camera belongs to the
-   * student, and add/delete/undo must not move it.
-   */
-  const [fitNonce, setFitNonce] = useState(0);
+  const leaveBrief = useCallback((): Aside => {
+    const held = asideRef.current;
+    const stored = storedSessionRaw();
+    // Newer work saved in another tab wins over the copy held here, which
+    // would otherwise be written back over it.
+    const back =
+      held !== null && (stored === null || stored === held.stamp)
+        ? held
+        : { ...loadSession(), shared: false, stamp: stored };
+    asideRef.current = back;
+    history.commit('leave challenge', snapRef.current);
+    switchWorkspace(null);
+    return back;
+  }, [history, switchWorkspace]);
 
   /**
    * Replace the whole design, as one history entry.
@@ -1956,25 +2356,51 @@ export default function App() {
    * one is in its place. They share this so they can never drift into
    * disagreeing about what "replace" means, and in particular so an
    * imported design is undoable on exactly the terms an example load is.
-   * The caller owns the copy it passes; this takes it as given.
+   * The caller owns the copy it passes; this takes it as given. Returns
+   * whether it left a brief to do it, so the caller can say that the
+   * reader's own design is what was replaced.
    */
   const replaceDesign = useCallback(
-    (fresh: Topology, nextPresetId: string | null, label: string) => {
+    (
+      fresh: Topology,
+      nextPresetId: string | null,
+      label: string,
+      /**
+       * The brief the new design belongs to, or null for the reader's own
+       * workspace. Null is the default on purpose: opening a saved design, a
+       * file or an example is the reader choosing what is on their canvas,
+       * and doing it from inside a brief leaves the brief.
+       */
+      nextChallengeId: string | null = null,
+      nextRps: number = clientRps(fresh),
+    ): boolean => {
+      // Opening something of the reader's own from inside a brief goes back
+      // to their design first, as Leave does, and replaces it from there, the
+      // same as opening it from their own workspace would. So one undo
+      // brings their design back rather than the brief, and the design set
+      // aside is never dropped without having been put back.
+      let before = snapRef.current;
+      const leaving = nextChallengeId === null && challengeLiveRef.current !== null;
+      if (leaving) {
+        const back = leaveBrief();
+        before = {
+          topology: back.topology,
+          selectedIds: new Set<string>(),
+          rps: back.rps,
+          presetId: back.presetId,
+          challengeId: null,
+        };
+      }
       // ONE entry, captured before the load, so a student who replaces a
       // half-built system can undo back to what they had.
-      history.commit(label, snapRef.current);
-      setTopology(fresh);
-      setRps(clientRps(fresh));
+      history.commit(label, before);
+      switchWorkspace(nextChallengeId);
+      setRps(nextRps);
       setPresetId(nextPresetId);
-      setSelectedIds(new Set<string>());
-      topoLiveRef.current = fresh;
-      engine.setTopology(asReplacement(fresh));
-      engine.reset();
-      resetLostRate();
-      setSnapshot(engine.snapshot());
-      setFitNonce((n) => n + 1);
+      installDesign(fresh, true);
+      return leaving;
     },
-    [engine, history, resetLostRate],
+    [history, switchWorkspace, installDesign, leaveBrief],
   );
 
   /**
@@ -1992,9 +2418,12 @@ export default function App() {
         setToast({ text: 'That design is no longer saved.', id: toastSeq.current });
         return;
       }
-      replaceDesign(structuredClone(saved.topology), null, 'open design');
+      const left = replaceDesign(structuredClone(saved.topology), null, 'open design');
       toastSeq.current += 1;
-      setToast({ text: `Opened ${saved.name}`, id: toastSeq.current });
+      setToast({
+        text: left ? `Opened ${saved.name} ${IN_PLACE}` : `Opened ${saved.name}`,
+        id: toastSeq.current,
+      });
     },
     [replaceDesign],
   );
@@ -2069,70 +2498,185 @@ export default function App() {
   const handleLoadPreset = useCallback(
     (preset: Preset) => {
       // Deep copy: presets are module-level constants and must never be
-      // mutated by editing the loaded system.
-      replaceDesign(structuredClone(preset.topology), preset.id, 'example load');
-      // Loading an example by hand leaves any brief behind: the design the
-      // brief was judging is gone, so continuing to score it would be
-      // scoring something else.
-      setChallengeId(null);
+      // mutated by editing the loaded system. Loading an example by hand
+      // leaves any brief behind, because the example is now the reader's
+      // own design; the brief's attempt is kept for when they come back.
+      const left = replaceDesign(
+        structuredClone(preset.topology),
+        preset.id,
+        'example load',
+      );
+      if (left) {
+        toastSeq.current += 1;
+        setToast({ text: `Opened ${preset.name} ${IN_PLACE}`, id: toastSeq.current });
+      }
     },
     [replaceDesign],
   );
 
+  const say = useCallback((text: string) => {
+    toastSeq.current += 1;
+    setToast({ text, id: toastSeq.current });
+  }, []);
+  // Once, for what boot did before there was a toast to say it with.
+  const bootNotice = boot.notice;
+  useEffect(() => {
+    if (bootNotice) say(bootNotice);
+  }, [bootNotice, say]);
+
   /**
-   * Start a brief: load its preset and set the load it is judged at.
+   * Start a brief, or go back to one already started.
    *
-   * The load is applied to the topology rather than held beside it, so the
-   * slider shows the number the brief actually states and a reader can move
-   * it. Turning the traffic down until the goals are met is not a way to
-   * cheat, because the goals are only ever read at the stated load.
+   * No confirm. The reader's design is not replaced, only set aside, and it
+   * comes back exactly as it was when they leave, so there is nothing to
+   * warn them about. The toast says where it went, once, so the canvas
+   * changing under them is never a mystery.
    */
   const handleStartChallenge = useCallback(
     (id: string) => {
-      const challenge = challengeById(id);
-      if (!challenge) return;
-      const preset = PRESETS.find((p) => p.id === challenge.presetId);
-      if (!preset) return;
-
-      /*
-       * A brief replaces whatever is on the canvas, so it asks first when
-       * that is something the reader made.
-       *
-       * Undo already recovers it, which is the real safety net, but nobody
-       * who has just watched their diagram vanish thinks to press Ctrl+Z.
-       * The question is only worth asking when there is something to lose:
-       * an unmodified example or an empty canvas is not work, and a prompt
-       * on every start would train people to dismiss it before reading.
-       *
-       * A confirm() for the same reason the restore path uses one. It is
-       * destructive, it is rare, and a custom modal would be new furniture
-       * for a question asked once.
-       */
-      const madeSomething = presetId === null && topology.nodes.length > 0;
-      if (
-        madeSomething &&
-        !window.confirm(
-          'Starting a challenge replaces what is on the canvas. Your design is not saved anywhere else. Continue?',
-        )
-      ) {
-        return;
-      }
-
-      const topo = structuredClone(preset.topology);
-      applyLoad(topo, challenge.loadRps);
-      replaceDesign(topo, preset.id, 'challenge start');
-      setChallengeId(id);
+      const brief = challengeById(id);
+      if (!brief) return;
+      setPanelFocus((n) => n + 1);
+      if (challengeLiveRef.current === id) return;
+      const fromOwn = challengeLiveRef.current === null;
+      const attempt = attemptFor(chalStoreRef.current, brief);
+      const topo = attempt ? structuredClone(attempt.topology) : freshStart(brief);
+      replaceDesign(topo, brief.presetId, 'challenge start', id);
+      if (attempt) say('Picked up where you left off.');
+      else if (fromOwn) say('Your design is set aside. It comes back when you leave.');
     },
-    [replaceDesign, presetId, topology.nodes.length],
+    [replaceDesign, say],
   );
 
-  /* The live verdict. Recomputed per snapshot rather than on a timer, so the
-     panel and the numbers it quotes always come from the same tick. */
   const challenge = challengeId ? challengeById(challengeId) : undefined;
-  const challengeResult = useMemo(
+
+  /**
+   * Leave the brief and put the reader's design back exactly as it was. Not
+   * only on a pass: giving up is leaving too, and the attempt stays for
+   * whenever they want another go.
+   */
+  const handleLeaveChallenge = useCallback(() => {
+    if (challengeLiveRef.current === null) return;
+    const back = leaveBrief();
+    setRps(back.rps);
+    setPresetId(back.presetId);
+    installDesign(structuredClone(back.topology), true);
+    say('Back to your design.');
+    menuBtnRef.current?.focus();
+  }, [leaveBrief, installDesign, say]);
+
+  const handleStartOver = useCallback(() => {
+    if (!challenge) return;
+    replaceDesign(
+      freshStart(challenge),
+      challenge.presetId,
+      'start over',
+      challenge.id,
+    );
+  }, [challenge, replaceDesign]);
+
+  const next = challenge ? nextChallenge(CHALLENGES, challenge.id) : null;
+  const handleNextChallenge = useCallback(() => {
+    if (next) handleStartChallenge(next.id);
+  }, [next, handleStartChallenge]);
+
+  /** Record a pass the moment a check finds one. Not on Done. */
+  const handleVerdict = useCallback(
+    (verdict: Verdict, brief: Challenge) => {
+      if (verdict.status !== 'passed') return;
+      updateStore((s) =>
+        withPass(s, brief, attemptFor(s, brief)?.hintsShown ?? 0, new Date()),
+      );
+    },
+    [updateStore],
+  );
+
+  const check = useChallengeCheck(challenge, topology, handleVerdict);
+
+  const handleHint = useCallback(() => {
+    if (!challenge) return;
+    updateStore((s) =>
+      withHints(
+        s,
+        challenge,
+        (attemptFor(s, challenge)?.hintsShown ?? 0) + 1,
+        topoLiveRef.current,
+      ),
+    );
+  }, [challenge, updateStore]);
+
+  /**
+   * Put one of the check's runs on the canvas and play it from the start.
+   *
+   * The configs, faults and seed are the run's; where each box sits and
+   * what the reader wrote on the canvas are theirs, so watching does not
+   * move anything. The design key comes out the same, so the verdict stays
+   * the one on screen.
+   */
+  const handleWatchRun = useCallback(
+    (seed: number) => {
+      if (check?.view.status !== 'verdict') return;
+      const verdict = check.view.verdict;
+      if (!('runs' in verdict)) return;
+      const run = verdict.runs.find((r) => r.seed === seed) ?? verdict.deciding;
+      const configs = new Map(run.replay.nodes.map((n) => [n.id, n.config]));
+      const t = topoLiveRef.current;
+      const faults = run.replay.faults ?? [];
+      const watch: Topology = {
+        nodes: t.nodes.map((n) => ({ ...n, config: configs.get(n.id) ?? n.config })),
+        edges: t.edges,
+        ...(t.annotations ? { annotations: t.annotations } : {}),
+        ...(faults.length > 0 ? { faults } : {}),
+        seed: run.seed,
+      };
+      history.commit('watch run', snapRef.current);
+      installDesign(watch, false);
+      setRunning(true);
+      runningRef.current = true;
+    },
+    [check, history, installDesign],
+  );
+
+  /* The live reading. Recomputed per snapshot rather than on a timer, so the
+     panel and the numbers it quotes always come from the same tick. It is
+     only ever shown as live: the check is what passes. */
+  const live = useMemo(
     () => (challenge && snapshot ? evaluate(challenge, snapshot) : null),
     [challenge, snapshot],
   );
+
+  /** A design key for the brief as it starts, to know when Start over does anything. */
+  const freshKey = useMemo(
+    () =>
+      challenge
+        ? designKey(
+            challenge,
+            judgedTopology(challenge, freshStart(challenge)).topology,
+          )
+        : '',
+    [challenge],
+  );
+
+  /** A node's name as the brief starts, else as it is now, else its id. */
+  const nameOf = useCallback(
+    (id: string) => {
+      const from = challenge
+        ? startDesign(challenge).nodes.find((n) => n.id === id)
+        : undefined;
+      return (
+        from?.label ?? topoLiveRef.current.nodes.find((n) => n.id === id)?.label ?? id
+      );
+    },
+    [challenge],
+  );
+
+  const lockedFor = useCallback(
+    (kind: NodeKind): readonly string[] =>
+      challenge ? lockedFieldsFor(challenge, kind) : [],
+    [challenge],
+  );
+
+  const badgeOf = useCallback((c: Challenge) => badgeFor(chalStore, c), [chalStore]);
 
   /* ---------------- design files ----------------
    *
@@ -2211,13 +2755,11 @@ export default function App() {
       // The imported design is no longer any example, so the preset id is
       // cleared: leaving it set would have the Examples gallery claim a
       // file the student opened is the example it was edited from.
-      replaceDesign(result.topology, null, 'file import');
+      const left = replaceDesign(result.topology, null, 'file import');
       setImportError(null);
       toastSeq.current += 1;
-      setToast({
-        text: result.name ? `Opened ${result.name}` : 'Opened design',
-        id: toastSeq.current,
-      });
+      const opened = result.name ? `Opened ${result.name}` : 'Opened design';
+      setToast({ text: left ? `${opened} ${IN_PLACE}` : opened, id: toastSeq.current });
     },
     [replaceDesign],
   );
@@ -2287,16 +2829,13 @@ export default function App() {
     void opening.then((result) => {
       if (cancelled) return;
       if (result.status === 'ok') {
-        setTopology(result.topology);
+        // Opens in the reader's own workspace, never in a brief's. Boot
+        // already chose that whenever a link is on the URL; this is the same
+        // rule where the link lands, so nothing can open one into a brief.
+        switchWorkspace(null);
         setRps(clientRps(result.topology));
         setPresetId(null);
-        setSelectedIds(new Set<string>());
-        topoLiveRef.current = result.topology;
-        engine.setTopology(asReplacement(result.topology));
-        engine.reset();
-        resetLostRate();
-        setSnapshot(engine.snapshot());
-        setFitNonce((n) => n + 1);
+        installDesign(result.topology, true);
         toastSeq.current += 1;
         // A replay opens like any shared design, at t=0 with the clock
         // running, and its faults land at the moments they were recorded.
@@ -2322,7 +2861,22 @@ export default function App() {
     // Once, at boot. `sharePending` is deliberately absent from the deps:
     // the recipient's first edit clears it, and re-running this then would
     // reload the link over the change they had just made.
-  }, [engine, resetLostRate]);
+  }, [switchWorkspace, installDesign]);
+
+  /* A `?challenge=<id>` link has done its job once boot has followed it.
+     Taken off the URL so a reload after leaving the brief does not put the
+     reader straight back into it. The location is outside React, which is
+     why this is an effect. */
+  useEffect(() => {
+    try {
+      const url = new URL(window.location.href);
+      if (!url.searchParams.has('challenge')) return;
+      url.searchParams.delete('challenge');
+      window.history.replaceState(window.history.state, '', url.toString());
+    } catch {
+      // A locked-down location: the link stays, and only costs a resume.
+    }
+  }, []);
 
   /**
    * Open the share dialog without building anything. The design is only
@@ -2798,6 +3352,7 @@ export default function App() {
             lost={lostRps}
             empty={topology.nodes.length === 0}
             noTrafficSource={offeredRps === 0 && findClients(topology).length === 0}
+            locked={challenge !== undefined}
           />
         </div>
 
@@ -2893,6 +3448,7 @@ export default function App() {
 
           <div className="app-menu-wrap">
             <button
+              ref={menuBtnRef}
               type="button"
               className="btn btn-icon app-menu-btn"
               aria-haspopup="menu"
@@ -2935,7 +3491,8 @@ export default function App() {
           'app-body' +
           (layout.library ? ' has-library' : '') +
           (inspectorVisible ? ' has-inspector' : '') +
-          (metricsVisible ? ' has-metrics' : '')
+          (metricsVisible ? ' has-metrics' : '') +
+          (challenge ? ' has-challenge' : '')
         }
         /* The three panel sizes, written here because .app-body is where the
            slots and the strip's insets all read them from. A drag rewrites
@@ -3001,6 +3558,16 @@ export default function App() {
             onDragOver={handleFileDragOver}
             onDrop={handleFileDrop}
           >
+            {/*
+              The uncovered-canvas sentinel. Inert and invisible; a sibling
+              of the Canvas, outside .cv-surface, so the gesture router can
+              never see it. Its rect is the canvas minus every open panel.
+              Before the Canvas, so its ref is attached by the time the
+              Canvas's own layout effect frames the first design: after it,
+              the boot fit found no sentinel and framed the whole stage, a
+              brief's diagram included, under the open panels.
+            */}
+            <div ref={stageSafeRef} className="stage-safe" aria-hidden="true" />
             <Canvas
               topology={topology}
               snapshot={snapshot}
@@ -3034,17 +3601,25 @@ export default function App() {
               fitSignal={fitNonce}
               visibleRef={stageSafeRef}
             />
-            {/*
-              The uncovered-canvas sentinel. Inert and invisible; a sibling
-              of the Canvas, outside .cv-surface, so the gesture router can
-              never see it. Its rect is the canvas minus every open panel.
-            */}
-            <div ref={stageSafeRef} className="stage-safe" aria-hidden="true" />
-            {challenge && challengeResult ? (
+            {challenge && check ? (
               <ChallengePanel
                 challenge={challenge}
-                result={challengeResult}
-                onGiveUp={() => setChallengeId(null)}
+                live={live}
+                liveFlowing={(snapshot?.system.goodputRps ?? 0) > 0}
+                check={check.view}
+                budget={check.budget}
+                hintsShown={attemptFor(chalStore, challenge)?.hintsShown ?? 0}
+                onHint={handleHint}
+                onCheckAgain={check.checkAgain}
+                onWatch={handleWatchRun}
+                onStartOver={check.key !== freshKey ? handleStartOver : null}
+                onNext={next ? handleNextChallenge : null}
+                onLeave={handleLeaveChallenge}
+                focusSignal={panelFocus}
+                nameOf={nameOf}
+                besideInspector={inspectorVisible && !phone}
+                foldOnStart={phone}
+                onSheetResize={handleSheetResize}
               />
             ) : null}
             <button
@@ -3132,7 +3707,8 @@ export default function App() {
             selectedEdgeCount={selectedEdgeCount}
             onChangeMany={handleConfigChangeMany}
             onDeleteMany={handleDeleteMany}
-            lockedFields={challenge ? FIXED_DURING_CHALLENGE : undefined}
+            lockedFields={challenge ? lockedFor : undefined}
+            suggestions={challenge === undefined}
             faults={inspectorFaults}
             onEdgeLoss={handleEdgeLoss}
           />
@@ -3294,6 +3870,7 @@ export default function App() {
         onClose={() => setChallengesOpen(false)}
         challenges={CHALLENGES}
         onStart={handleStartChallenge}
+        badgeOf={badgeOf}
       />
     </div>
   );

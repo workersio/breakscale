@@ -4,8 +4,8 @@ import type { Topology } from './sim/types';
  * Undo / redo for the shell.
  *
  * FULL SNAPSHOTS, NOT DELTAS. The topology is a few dozen plain-data nodes,
- * so a complete copy of `{ topology, selectedIds, rps, presetId }` per entry
- * is a few kilobytes. Excalidraw's delta machinery exists for multiplayer
+ * so a complete copy of `{ topology, selectedIds, rps, presetId, challengeId }`
+ * per entry is a few kilobytes. Excalidraw's delta machinery exists for multiplayer
  * reconciliation, which this app does not have; snapshots are the version
  * that is obviously correct.
  *
@@ -30,6 +30,12 @@ export interface HistorySnapshot {
   selectedIds: ReadonlySet<string>;
   rps: number;
   presetId: string | null;
+  /**
+   * The challenge the canvas belonged to, or null for the reader's own
+   * design. A brief is a different workspace, so undoing past the moment one
+   * started is leaving it, and redoing is going back in.
+   */
+  challengeId: string | null;
 }
 
 /**
@@ -141,6 +147,7 @@ function snapshotEqual(a: HistorySnapshot, b: HistorySnapshot): boolean {
   return (
     a.rps === b.rps &&
     a.presetId === b.presetId &&
+    a.challengeId === b.challengeId &&
     selectionEqual(a.selectedIds, b.selectedIds) &&
     topologyEqual(a.topology, b.topology)
   );
@@ -157,6 +164,7 @@ function cloneSnapshot(s: HistorySnapshot): HistorySnapshot {
     selectedIds: new Set(s.selectedIds),
     rps: s.rps,
     presetId: s.presetId,
+    challengeId: s.challengeId,
   };
 }
 
@@ -313,7 +321,8 @@ export class SessionHistory {
     if (
       topologyEqual(base.topology, after.topology) &&
       base.rps === after.rps &&
-      base.presetId === after.presetId
+      base.presetId === after.presetId &&
+      base.challengeId === after.challengeId
     ) {
       return;
     }
