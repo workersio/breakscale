@@ -219,6 +219,23 @@ describe('SessionHistory', () => {
     const entry = h.undo(snap(moved(t0, t0.nodes[1]!.id, 50, 0)));
     expect(entry!.topology.nodes[1]!.x).toBe(t0.nodes[1]!.x);
   });
+
+  it('reports an empty undo or redo as no edit', () => {
+    // App resumes autosaving a design opened from a share link on the
+    // first edit. An Undo pressed with nothing to undo is not one, or it
+    // would write the shared design over the reader's own saved session.
+    const calls: boolean[] = [];
+    const h = new SessionHistory({ onChange: (edited) => calls.push(edited) });
+    const t0 = makeTopology();
+
+    expect(h.undo(snap(t0))).toBeNull();
+    expect(h.redo(snap(t0))).toBeNull();
+    expect(calls).toEqual([false, false]);
+
+    h.commit('add', snap(t0));
+    h.undo(snap(moved(t0, t0.nodes[1]!.id, 50, 0)));
+    expect(calls).toEqual([false, false, true, true]);
+  });
 });
 
 describe('note text edits', () => {
