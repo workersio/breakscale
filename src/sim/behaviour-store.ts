@@ -32,6 +32,7 @@
 import type { NodeStats } from './types';
 import type { BehaviourCtx, NodeStateLike, ReqLike } from './engine-types';
 import type { AdmitAction, ComponentBehaviour } from './behaviour';
+import { log2, pow } from './fdlibm';
 
 /** Keyspace the engine draws request keys from; mirrored here for sizing. */
 const KEYSPACE = 64;
@@ -596,7 +597,7 @@ const GRAPH_FANOUT = 3;
 function graphClassify(ctx: BehaviourCtx, state: NodeStateLike, req: ReqLike): void {
   const depth = Math.max(1, Math.floor(num(state.config.traversalDepth, 1)));
   const base = Math.max(0, state.config.serviceMs);
-  const mult = Math.pow(GRAPH_FANOUT, Math.min(depth, 8) - 1);
+  const mult = pow(GRAPH_FANOUT, Math.min(depth, 8) - 1);
   ctx.addServiceDelay(req, base * (mult - 1));
 }
 
@@ -645,7 +646,7 @@ function vectorClassify(ctx: BehaviourCtx, state: NodeStateLike, req: ReqLike): 
   const sizeK = Math.max(0, num(state.config.indexSizeK, 0));
   const recall = Math.min(0.99, Math.max(0, num(state.config.recallTarget, 0)));
   const base = Math.max(0, state.config.serviceMs);
-  const mult = Math.log2(2 + sizeK) / (1 - recall);
+  const mult = log2(2 + sizeK) / (1 - recall);
   if (mult > 1) ctx.addServiceDelay(req, base * (mult - 1));
 }
 

@@ -1,3 +1,5 @@
+import { cos, log, pow } from './fdlibm';
+
 /** Deterministic PRNG (mulberry32) so a given seed replays identically. */
 export class Rng {
   private s: number;
@@ -19,7 +21,7 @@ export class Rng {
     if (mean <= 0) return 0;
     // Guard against log(0).
     const u = 1 - this.next();
-    return -Math.log(u) * mean;
+    return -log(u) * mean;
   }
 
   /**
@@ -40,7 +42,7 @@ export class Rng {
     if (shape < 1) {
       // Boost low shapes into the valid range.
       const u = 1 - this.next();
-      return this.gamma(shape + 1, scale) * Math.pow(u, 1 / shape);
+      return this.gamma(shape + 1, scale) * pow(u, 1 / shape);
     }
     const d = shape - 1 / 3;
     const c = 1 / Math.sqrt(9 * d);
@@ -54,7 +56,7 @@ export class Rng {
       v = v * v * v;
       const u = 1 - this.next();
       if (u < 1 - 0.0331 * x * x * x * x) return d * v * scale;
-      if (Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) {
+      if (log(u) < 0.5 * x * x + d * (1 - v + log(v))) {
         return d * v * scale;
       }
     }
@@ -64,6 +66,6 @@ export class Rng {
   normal(): number {
     const u = 1 - this.next();
     const v = this.next();
-    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+    return Math.sqrt(-2 * log(u)) * cos(2 * Math.PI * v);
   }
 }

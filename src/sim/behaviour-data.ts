@@ -14,6 +14,7 @@
 import type { NodeStats } from './types';
 import type { BehaviourCtx, NodeStateLike, ReqLike } from './engine-types';
 import type { AdmitAction, ComponentBehaviour } from './behaviour';
+import { exp } from './fdlibm';
 
 /** Keyspace the engine draws request keys from; mirrored here for sizing. */
 const KEYSPACE = 64;
@@ -461,7 +462,7 @@ const shard: ComponentBehaviour = {
     ext.lastIntegrateMs = ctx.now;
     if (dt <= 0) return;
     const capacity = clampInt(state.config.shardCapacity, 1, MAX_SHARD_CAPACITY);
-    const alpha = 1 - Math.exp(-dt / 500);
+    const alpha = 1 - exp(-dt / 500);
     let busy = 0;
     for (let i = 0; i < ext.sized; i++) {
       const instant = Math.min(ext.busy[i] / capacity, 1);
