@@ -93,15 +93,25 @@ describe('fault schedule: no faults', () => {
    * recorded from the engine before the schedule existed. A topology with no
    * schedule must still produce exactly these bytes. If a preset is retuned
    * on purpose, regenerate them from that commit's engine.
+   *
+   * event-driven was re-recorded when service, worker and lambda began
+   * holding their slot across the calls they make. Its api now waits on the
+   * broker and topic acks, which moves the random draws, while everything
+   * the preset claims measures the same. The other four were re-recorded
+   * once their presets were retuned for that change: their callers got the
+   * slots to outlast the wait on what they call, and autoscaling-service's
+   * database got faster and its API's own work 2ms shorter, so a slot held
+   * across the database call still turns over in about 25ms. All five are
+   * the x86-64 hashes, the bytes Linux and Windows CI produce.
    */
   const GOLDEN: Record<string, string> = {
-    'single-server': '49bcdb3e01f324691f7e7d302a0d14a99ba1fa76f3224fe8b4998a05927483bf',
+    'single-server': '9491f136831920eeee5f4f461174c811b3d5972d4aa5088c2318079bed1f6277',
     'circuit-breaker':
-      '3eddc5220fd2f72b29003953b9b1c912ab57d865e1a38d29236042426b338203',
+      '4f855031bfce6b6cb6830abd15c00302b0018f5f30751e376eac5605834217d4',
     'autoscaling-service':
-      '3ffe1eb04bd7d161752ac2749e2637f511390e2f29738d5abf6734dd936ec476',
-    'event-driven': '8bb47896a696158599dcdf8c5b6385c564655d75d33d95432aaa2b4e4ee4a574',
-    'multi-region': '4ecca465ea59ec9afb7c502f258fc9c34fe9e04fd64ce073742b580d6dce9ffa',
+      '278c25c15e0dcd3ff0af8be2a3aa4747759bbc3265f3e4590af74a0d615210c6',
+    'event-driven': '88a07c5a2eefdc7ee7de4ef759fd9fd56575a1dcac94ec3fcc445d79bd51d875',
+    'multi-region': 'cbfeda1fec110f5cc12c00f2417ddc356f9d7e0aaffc1951d65c61e20d19601c',
   };
 
   function hash(t: Topology): string {

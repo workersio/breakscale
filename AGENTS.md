@@ -81,7 +81,8 @@ source order wins. Never declare `--k-*` in a class rule; fallbacks belong insid
 
 1. `NodeKind` in `src/sim/types.ts`
 2. Config fields, each with meaning and units in a doc comment
-3. A behaviour object in the matching `src/sim/behaviour-*.ts`
+3. A behaviour object in the matching `src/sim/behaviour-*.ts`, including `blocksOnDownstream`: does
+   a slot stay held while the node waits on the calls it made?
 4. `defaultConfig` entry and label
 5. A readout in `readoutFor`, showing what an engineer would watch. Never a field that is
    structurally always zero for that kind.

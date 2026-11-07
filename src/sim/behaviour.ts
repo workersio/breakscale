@@ -72,6 +72,21 @@ export interface ComponentBehaviour {
    * A queue is a buffer, not a server: its slots mean nothing, so it reports 0.
    */
   servesRequests: boolean;
+  /**
+   * Does a slot stay held while this node waits on the calls it made?
+   *
+   * True for a thread-per-request server: the thread that took the request
+   * sits in the downstream call until the answer comes back, so a slow
+   * dependency fills the caller's slots and the caller queues and sheds while
+   * its own work is idle. False for event-loop proxies, gates, buffers and
+   * stores, which hand the request on and free the slot when their own work
+   * ends.
+   *
+   * Required rather than optional so every kind, and every kind added later,
+   * has to answer the question. A held slot is released when the request
+   * itself resolves, however it ends, so it is taken once and freed once.
+   */
+  blocksOnDownstream: boolean;
   /** Does this node generate root requests (a traffic source)? */
   generatesLoad: boolean;
   /**
@@ -205,6 +220,14 @@ export interface ComponentBehaviour {
   ): void;
   /** A behaviour-owned timer for a request it held during admission. */
   onWake?(ctx: BehaviourCtx, state: NodeStateLike, req: ReqLike): void;
+  /**
+   * The node is being removed by a topology edit. Fail, with ctx.fail(), every
+   * request this kind holds in `ext` where the engine cannot see it: a store's
+   * own queue, a bulkhead's waiters. Without this those requests never
+   * resolve, and a blocking caller waiting on one keeps its slot for good.
+   * Never called on a run whose topology is not edited.
+   */
+  onDiscard?(ctx: BehaviourCtx, state: NodeStateLike): void;
 
   /**
    * Publish this kind's own readouts onto its NodeStats entry at snapshot
@@ -277,6 +300,8 @@ export interface ComponentBehaviour {
  */
 const client: ComponentBehaviour = {
   kind: 'client',
+  // Roots hold nothing: the client's own timeout is the root deadline.
+  blocksOnDownstream: false,
   servesRequests: true,
   generatesLoad: true,
   pullsFromQueues: false,
@@ -297,6 +322,8 @@ const client: ComponentBehaviour = {
  */
 const lb: ComponentBehaviour = {
   kind: 'lb',
+  // An event-loop proxy: its slot is routing work, not a thread per call.
+  blocksOnDownstream: false,
   servesRequests: true,
   instanceModel: 'slots',
   scaleField: 'instances',
@@ -312,6 +339,8 @@ const lb: ComponentBehaviour = {
 /** A plain server: finite slots, a bounded FIFO, then fan-out to everything. */
 const service: ComponentBehaviour = {
   kind: 'service',
+  // Thread per request: the thread waits in the downstream call.
+  blocksOnDownstream: true,
   servesRequests: true,
   instanceModel: 'slots',
   scaleField: 'instances',
@@ -328,6 +357,8 @@ const service: ComponentBehaviour = {
  */
 const cache: ComponentBehaviour = {
   kind: 'cache',
+  // The slot is the lookup. A miss is the caller's wait (cache-aside).
+  blocksOnDownstream: false,
   servesRequests: true,
   instanceModel: 'slots',
   scaleField: 'instances',
@@ -359,6 +390,8 @@ const cache: ComponentBehaviour = {
  */
 const queue: ComponentBehaviour = {
   kind: 'queue',
+  // It acks the caller; the consumers' wait is theirs, not the queue's.
+  blocksOnDownstream: false,
   servesRequests: false,
   generatesLoad: false,
   pullsFromQueues: false,
@@ -379,6 +412,8 @@ const queue: ComponentBehaviour = {
  */
 const worker: ComponentBehaviour = {
   kind: 'worker',
+  // The consumer thread waits on its writes, so a slow store slows the drain.
+  blocksOnDownstream: true,
   servesRequests: true,
   instanceModel: 'slots',
   scaleField: 'instances',

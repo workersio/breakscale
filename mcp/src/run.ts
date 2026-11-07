@@ -131,9 +131,23 @@ export function describeRun(
     .map(([id, s]) => ({ id, s, node: byId.get(id) }))
     .filter((r) => r.node && r.node.kind !== 'client');
 
-  const busy = rows
-    .filter((r) => r.s.utilization > 0)
-    .sort((a, b) => b.s.utilization - a.s.utilization);
+  // A node that blocks on its calls holds a slot while it waits on them, and
+  // utilisation counts only the work, so a server with every slot held on a
+  // slow store reads a few percent busy. Ranked by the larger of the two, it
+  // sorts as the full node it is.
+  const load = (r: (typeof rows)[number]): number => {
+    const waiting = r.s.waitingOnDownstream;
+    // A lambda already reports its concurrency, waits included.
+    if (waiting === undefined || !r.node || r.node.kind === 'lambda')
+      return r.s.utilization;
+    const slots =
+      r.node.config.capacity *
+      Math.max(1, Math.floor(r.s.instances ?? r.node.config.instances ?? 1));
+    return slots > 0
+      ? Math.max(r.s.utilization, (r.s.inFlight + waiting) / slots)
+      : r.s.utilization;
+  };
+  const busy = rows.filter((r) => load(r) > 0).sort((a, b) => load(b) - load(a));
   const failing = rows.filter(
     (r) => r.s.errorRate > 0 || r.s.shedRate > 0 || r.s.timeoutRate > 0,
   );
@@ -144,6 +158,10 @@ export function describeRun(
     for (const { id, s, node } of shown) {
       const parts = [`${perSec(s.arrivalRate)} in, ${perSec(s.throughput)} done`];
       if (s.utilization > 0) parts.push(`${pct(Math.min(s.utilization, 1))} busy`);
+      if ((s.waitingOnDownstream ?? 0) > 0)
+        parts.push(
+          `${Math.round(s.waitingOnDownstream ?? 0)} slots held waiting on its calls`,
+        );
       if (s.queued >= 1) parts.push(`${Math.round(s.queued)} waiting`);
       if (s.throughput > 0) parts.push(`p99 ${ms(s.p99)}`);
       if (s.errorRate > 0) parts.push(`${pct(s.errorRate)} failed`);

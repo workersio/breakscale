@@ -15,6 +15,14 @@ export interface NodeStateLike {
   readonly config: NodeConfig;
   /** Requests occupying a server slot right now. */
   readonly busy: number;
+  /**
+   * Requests whose own work is done but which still hold their slot, because
+   * this kind blocks on its downstream calls and those have not all answered.
+   * A kind that keeps its slots in `ext` counts them there as well; this is
+   * how much of that count is waiting rather than working. Always 0 for a
+   * kind whose `blocksOnDownstream` is false.
+   */
+  readonly parked: number;
   /** Outgoing edges, resolved from the topology. */
   readonly out: readonly SimEdge[];
   /** Queue nodes feeding this node, for pull-based kinds. */
@@ -150,7 +158,10 @@ export interface BehaviourCtx {
   /**
    * A node's smoothed utilisation, 0..1, or null if it does not exist.
    * This is the same figure the UI shows, so a student watching the meter
-   * is watching exactly what the controller reacts to.
+   * is watching exactly what the controller reacts to. For a kind the engine
+   * slots itself it counts work only: a slot held while waiting on a
+   * downstream call is not in it, which is how a CPU-target autoscaler sees a
+   * server that is blocked on its database.
    */
   utilizationOf(nodeId: string): number | null;
   /**

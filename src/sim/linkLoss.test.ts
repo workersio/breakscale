@@ -195,12 +195,13 @@ describe('link loss: none', () => {
    * Copied from faults.test.ts, where they were recorded from the engine
    * before the fault schedule existed. A lossless design must still produce
    * exactly these bytes, which also proves the snapshot has no new key.
+   * Re-recorded with them when the presets were retuned for blocking calls.
    */
   const GOLDEN: Record<string, string> = {
-    'single-server': '49bcdb3e01f324691f7e7d302a0d14a99ba1fa76f3224fe8b4998a05927483bf',
+    'single-server': '9491f136831920eeee5f4f461174c811b3d5972d4aa5088c2318079bed1f6277',
     'circuit-breaker':
-      '3eddc5220fd2f72b29003953b9b1c912ab57d865e1a38d29236042426b338203',
-    'multi-region': '4ecca465ea59ec9afb7c502f258fc9c34fe9e04fd64ce073742b580d6dce9ffa',
+      '4f855031bfce6b6cb6830abd15c00302b0018f5f30751e376eac5605834217d4',
+    'multi-region': 'cbfeda1fec110f5cc12c00f2417ddc356f9d7e0aaffc1951d65c61e20d19601c',
   };
 
   function hash(t: Topology): string {

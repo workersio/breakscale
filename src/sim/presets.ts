@@ -727,7 +727,9 @@ function control(from: string, to: string): SimEdge {
 
 /* ------------------------------------------------------------------ *
  * 1. Single Server
- *    service: 8 slots / 25ms  -> 320 rps
+ *    service: 64 slots / 25ms -> 2560 rps of its own work. Each slot is
+ *             also held while its database call is out, so the pool is
+ *             sized to outlast the database's 6 slots and 48 in line.
  *    db:      6 slots / 30ms  -> 200 rps  <- first bottleneck
  *    default 50 rps, knee around 4x.
  * ------------------------------------------------------------------ */
@@ -736,7 +738,7 @@ const singleServer: Topology = {
   nodes: [
     node('client', 'client', 'Client', 40, 200, { rps: 50, timeoutMs: 2000 }),
     node('api', 'service', 'API Server', 340, 200, {
-      capacity: 8,
+      capacity: 64,
       serviceMs: 25,
       serviceCv: 0.6,
       queueLimit: 64,
@@ -762,8 +764,10 @@ const singleServer: Topology = {
 
 /* ------------------------------------------------------------------ *
  * 2. Load Balanced
- *    3 services: 3 x (6 slots / 25ms) = 720 rps
- *    shared db:  12 slots / 25ms      = 480 rps <- bottleneck anyway
+ *    3 services: 3 x (44 slots / 25ms) = 5280 rps of their own work, with
+ *                room for each one's share of the database's slots and
+ *                line while they wait on it
+ *    shared db:  12 slots / 25ms       = 480 rps <- bottleneck anyway
  *    default 140 rps, db bites around 3.4x.
  * ------------------------------------------------------------------ */
 
@@ -772,19 +776,19 @@ const loadBalanced: Topology = {
     node('client', 'client', 'Client', 40, 220, { rps: 140, timeoutMs: 2000 }),
     node('lb', 'lb', 'Load Balancer', 260, 220, { capacity: 512, serviceMs: 0.5 }),
     node('api1', 'service', 'API 1', 500, 80, {
-      capacity: 6,
+      capacity: 44,
       serviceMs: 25,
       serviceCv: 0.6,
       queueLimit: 48,
     }),
     node('api2', 'service', 'API 2', 500, 220, {
-      capacity: 6,
+      capacity: 44,
       serviceMs: 25,
       serviceCv: 0.6,
       queueLimit: 48,
     }),
     node('api3', 'service', 'API 3', 500, 360, {
-      capacity: 6,
+      capacity: 44,
       serviceMs: 25,
       serviceCv: 0.6,
       queueLimit: 48,
@@ -828,7 +832,7 @@ const cacheAside: Topology = {
   nodes: [
     node('client', 'client', 'Client', 40, 200, { rps: 200, timeoutMs: 2000 }),
     node('api', 'service', 'API Server', 280, 200, {
-      capacity: 24,
+      capacity: 64,
       serviceMs: 8,
       serviceCv: 0.5,
       queueLimit: 128,
@@ -863,7 +867,8 @@ const cacheAside: Topology = {
  * 4. Async Workers
  *    api:     24 slots / 8ms  -> 3000 rps (never the bottleneck)
  *    queue:   ack ~1ms, 5000 deep
- *    workers: 6 slots / 30ms  -> 200 rps drain rate <- the real ceiling
+ *    workers: 10 slots, each held for 30ms of work and a ~20ms database
+ *             call -> 200 rps drain rate <- the real ceiling
  *    default 120 rps drains fine; push past 200 and the backlog grows
  *    without the client ever seeing an error, until the buffer fills.
  * ------------------------------------------------------------------ */
@@ -883,7 +888,7 @@ const asyncWorkers: Topology = {
       queueLimit: 5000,
     }),
     node('worker', 'worker', 'Workers', 730, 200, {
-      capacity: 6,
+      capacity: 10,
       serviceMs: 30,
       serviceCv: 0.6,
     }),
@@ -934,7 +939,7 @@ const retryStorm: Topology = {
   nodes: [
     node('client', 'client', 'Client', 40, 200, { rps: 45, timeoutMs: 3000 }),
     node('api', 'service', 'API Server', 340, 200, {
-      capacity: 32,
+      capacity: 64,
       serviceMs: 5,
       serviceCv: 0.4,
       queueLimit: 256,
@@ -1071,7 +1076,8 @@ const NODE_H = 88;
 /* ------------------------------------------------------------------ *
  * 6. CDN + Origin
  *    cdn:    256 slots / 2ms  -> effectively unbounded
- *    origin:   3 slots / 25ms -> 120 rps ceiling
+ *    origin:   4 slots, each held for 23ms of its own work plus ~10ms
+ *              waiting on the database -> ~120 rps ceiling
  *    At hitRate 0.90 and 400 rps offered the origin sees ~40 rps: a third of
  *    its ceiling. At 4x it sees ~160 rps and is over the ceiling, which is
  *    the same collapse a student can trigger at 1x just by dragging the hit
@@ -1090,8 +1096,8 @@ const cdnOrigin: Topology = {
       queueLimit: 2048,
     }),
     node('origin', 'service', 'Origin Server', COL(2), ROW(1), {
-      capacity: 3,
-      serviceMs: 25,
+      capacity: 4,
+      serviceMs: 23,
       serviceCv: 0.6,
       queueLimit: 64,
     }),
@@ -1117,7 +1123,8 @@ const cdnOrigin: Topology = {
 /* ------------------------------------------------------------------ *
  * 7. Rate Limited API
  *    limiter: 200 rps sustained, 200-token burst
- *    api:       6 slots / 25ms -> 240 rps ceiling
+ *    api:       9 slots, each held ~37ms (25ms of its own work plus the
+ *               database call) -> ~240 rps ceiling
  *    The limiter is set just under what the api can actually serve, so at 1x
  *    (150 rps) every request is admitted and nothing is refused: the limiter
  *    is invisible until it is needed.
@@ -1146,7 +1153,7 @@ const rateLimitedApi: Topology = {
       burst: 200,
     }),
     node('api', 'service', 'API Server', COL(2), ROW(1), {
-      capacity: 6,
+      capacity: 9,
       serviceMs: 25,
       serviceCv: 0.5,
       queueLimit: 48,
@@ -1186,7 +1193,7 @@ const circuitBreaker: Topology = {
   nodes: [
     node('client', 'client', 'Client', COL(0), ROW(1), { rps: 100, timeoutMs: 2000 }),
     node('api', 'service', 'API Server', COL(1), ROW(1), {
-      capacity: 24,
+      capacity: 48,
       serviceMs: 6,
       serviceCv: 0.4,
       queueLimit: 128,
@@ -1219,6 +1226,9 @@ const circuitBreaker: Topology = {
 
 /* ------------------------------------------------------------------ *
  * 9. Read Replicas
+ *    api:     192 slots / 5ms. Each slot is also held while its read or
+ *             write waits on the replica set, so the pool is sized to
+ *             outlast the set's slots and its 128 in line.
  *    replicas: 3 x 4 slots / 20ms -> 600 rps of READ capacity
  *    primary:      4 slots / 20ms -> 200 rps of WRITE capacity
  *    At 85% reads and 300 rps offered that is 255 reads against 600 and 45
@@ -1233,7 +1243,7 @@ const readReplicas: Topology = {
   nodes: [
     node('client', 'client', 'Client', COL(0), ROW(1), { rps: 300, timeoutMs: 2000 }),
     node('api', 'service', 'API Server', COL(1), ROW(1), {
-      capacity: 32,
+      capacity: 192,
       serviceMs: 5,
       serviceCv: 0.4,
       queueLimit: 256,
@@ -1274,7 +1284,7 @@ const shardedDatabase: Topology = {
   nodes: [
     node('client', 'client', 'Client', COL(0), ROW(1), { rps: 400, timeoutMs: 2000 }),
     node('api', 'service', 'API Server', COL(1), ROW(1), {
-      capacity: 32,
+      capacity: 192,
       serviceMs: 5,
       serviceCv: 0.4,
       queueLimit: 256,
@@ -1302,17 +1312,18 @@ const shardedDatabase: Topology = {
 
 /* ------------------------------------------------------------------ *
  * 11. Autoscaling Service
- *     api: 3 INSTANCES x 3 slots each = 9 slots / 25ms -> 360 rps, against
- *     250 rps offered. That is 69% utilisation, which is deliberately the
- *     controller's own setpoint: at 1x the autoscaler has already converged
- *     and holds the fleet steady, so the system is stable and the student
- *     sees a controller at rest.
+ *     api: 3 INSTANCES x 3 slots each = 9 slots, each held for 23ms of its
+ *     own work plus ~2.5ms on the database call -> ~350 rps, against 250 rps
+ *     offered. The controller scales on work-only utilisation, which at 1x
+ *     is 250 x 23ms / 9 = 64%: inside the band just under its 70% setpoint
+ *     where it holds still, so the system is stable and the student sees a
+ *     controller at rest.
  *
  *     RETUNED for the instance model. It used to be one node with `capacity:
  *     9` and the controller moved that 9 up and down -- arithmetically the
  *     same system, but the thing being added was a thread, which is invisible
  *     and is not what "autoscaling" means to anyone. The fleet is now three
- *     machines of three slots: same 9 slots, same 360 rps, same 69% at 1x,
+ *     machines of three slots: same 9 slots, same ceiling, same reading at 1x,
  *     but now the number the controller moves is a number of MACHINES and the
  *     canvas can draw them appearing.
  *
@@ -1324,11 +1335,11 @@ const shardedDatabase: Topology = {
  *     instant, as it is in reality, which is why the recovery looks nothing
  *     like the climb.
  *
- *     maxCapacity 5 instances -> 15 slots -> 600 rps ceiling, so 4x
- *     (1000 rps) outruns the autoscaler no matter how patient it is: past
- *     some point the answer is not more of the same box. (Under the old
- *     slot-based reading this bound was `maxCapacity: 16` slots for the same
- *     640 rps; the ceiling is what was preserved, not the integer.)
+ *     maxCapacity 5 instances -> 15 slots held ~25.5ms each -> ~590 rps
+ *     ceiling, so 4x (1000 rps) outruns the autoscaler no matter how patient
+ *     it is: past some point the answer is not more of the same box. (Under
+ *     the old slot-based reading this bound was `maxCapacity: 16` slots, a
+ *     640 rps ceiling; it is the ceiling that carried over, not the integer.)
  * ------------------------------------------------------------------ */
 
 const autoscalingService: Topology = {
@@ -1338,13 +1349,13 @@ const autoscalingService: Topology = {
       // Three slots on one machine; three machines running right now.
       capacity: 3,
       instances: 3,
-      serviceMs: 25,
+      serviceMs: 23,
       serviceCv: 0.5,
       queueLimit: 256,
     }),
     node('db', 'db', 'Database', COL(2), ROW(1), {
       capacity: 24,
-      serviceMs: 8,
+      serviceMs: 2,
       serviceCv: 0.6,
       queueLimit: 128,
     }),
@@ -1377,9 +1388,10 @@ const autoscalingService: Topology = {
 
 /* ------------------------------------------------------------------ *
  * 12. Multi-Region Failover
- *     Two regions, each 10 slots / 25ms -> 400 rps. Only ONE serves traffic
- *     at a time, so the pair buys availability and not one request per second
- *     of extra capacity -- which is why 4x (1000 rps) melts the active region
+ *     Two regions, each 15 slots, every slot held for 25ms of work plus
+ *     ~12ms on the database call -> ~400 rps. Only ONE serves traffic at a
+ *     time, so the pair buys availability and not one request per second of
+ *     extra capacity -- which is why 4x (1000 rps) melts the active region
  *     while the standby sits at zero.
  *     Crash `us-api` (or cut the edge to it) and traffic lands on `eu-api`
  *     after the 5s failover window, during which every request fails as
@@ -1396,13 +1408,13 @@ const multiRegion: Topology = {
       failoverMs: 5000,
     }),
     node('us-api', 'service', 'US API', COL(2), ROW(0), {
-      capacity: 10,
+      capacity: 15,
       serviceMs: 25,
       serviceCv: 0.5,
       queueLimit: 64,
     }),
     node('eu-api', 'service', 'EU API', COL(2), ROW(2), {
-      capacity: 10,
+      capacity: 15,
       serviceMs: 25,
       serviceCv: 0.5,
       queueLimit: 64,
@@ -1449,7 +1461,8 @@ const multiRegion: Topology = {
  *     600 rps offered, and here is where it goes:
  *       cdn     hitRate 0.70   -> 30% miss, so ~180 rps reach the LB
  *       lb      -> 2 api, ~90 rps each
- *       api     2 x 12 slots / 8ms  -> 3000 rps, never the bottleneck
+ *       api     2 x 24 slots, each held for 8ms plus the cache and shard
+ *               call -> still never the bottleneck at 4x
  *       cache   hitRate 0.60   -> 40% miss, so ~72 rps reach the shards
  *       shards  4 x 2 slots / 25ms  -> 320 rps total, 80 rps per shard
  *       queue   -> workers 6 / 25ms -> 240 rps of async drain
@@ -1483,13 +1496,13 @@ const fullStack: Topology = {
       serviceMs: 0.5,
     }),
     node('api1', 'service', 'API 1', COL(3), ROW(0), {
-      capacity: 12,
+      capacity: 24,
       serviceMs: 8,
       serviceCv: 0.5,
       queueLimit: 128,
     }),
     node('api2', 'service', 'API 2', COL(3), ROW(2), {
-      capacity: 12,
+      capacity: 24,
       serviceMs: 8,
       serviceCv: 0.5,
       queueLimit: 128,
@@ -1604,25 +1617,25 @@ const specialisedStores: Topology = {
       queueLimit: 5000,
     }),
     node('search-api', 'service', 'Search API', COL(2), ROW(0), {
-      capacity: 8,
+      capacity: 16,
       serviceMs: 6,
       serviceCv: 0.4,
       queueLimit: 128,
     }),
     node('recs-api', 'service', 'Recs API', COL(2), ROW(1), {
-      capacity: 8,
+      capacity: 160,
       serviceMs: 6,
       serviceCv: 0.4,
       queueLimit: 128,
     }),
     node('media-api', 'service', 'Media API', COL(2), ROW(2), {
-      capacity: 8,
+      capacity: 48,
       serviceMs: 6,
       serviceCv: 0.4,
       queueLimit: 128,
     }),
     node('archiver', 'worker', 'Archiver', COL(2), LROW(3, 1), {
-      capacity: 2,
+      capacity: 32,
       serviceMs: 40,
       serviceCv: 0.4,
     }),
@@ -1638,9 +1651,11 @@ const specialisedStores: Topology = {
   ],
   edges: [
     edge('client', 'lb'),
-    edge('lb', 'search-api'),
-    edge('lb', 'recs-api'),
-    edge('lb', 'media-api'),
+    // Unequal on purpose: equal weights make the LB route least-loaded, and
+    // it would steer recs traffic onto the other APIs once the vectors slow.
+    edge('lb', 'search-api', 33),
+    edge('lb', 'recs-api', 34),
+    edge('lb', 'media-api', 33),
     // Each API talks to its own store AND emits a metric append; a service
     // fans out to all its downstreams, so the metrics edge is taken for
     // every request, which is exactly what instrumentation does.
@@ -2099,7 +2114,7 @@ const discord: Topology = {
       burst: 200,
     }),
     node('msg-api', 'service', 'Message API', COL(2), ROW(2), {
-      capacity: 16,
+      capacity: 48,
       serviceMs: 6,
       serviceCv: 0.5,
       queueLimit: 128,
@@ -2138,7 +2153,7 @@ const discord: Topology = {
       queueLimit: 5000,
     }),
     node('indexer', 'worker', 'Search Indexer', COL(4), LROW(3, 1), {
-      capacity: 4,
+      capacity: 16,
       serviceMs: 12,
       serviceCv: 0.5,
     }),
@@ -2347,7 +2362,7 @@ const uber: Topology = {
 
     // Trip state and payments.
     node('trips', 'service', 'Trip Service', COL(2), LROW(2, 1), {
-      capacity: 8,
+      capacity: 32,
       serviceMs: 12,
       serviceCv: 0.5,
       queueLimit: 64,
@@ -2393,7 +2408,7 @@ const uber: Topology = {
       queueLimit: 4000,
     }),
     node('geo-upd', 'service', 'Geo Updater', COL(3), LROW(4, 2), {
-      capacity: 8,
+      capacity: 12,
       serviceMs: 6,
       serviceCv: 0.5,
       queueLimit: 64,
@@ -2600,7 +2615,7 @@ const netflix: Topology = {
       authFailRate: 0.005,
     }),
     node('playapi', 'service', 'PlayAPI', COL(2), LROW(2, 1), {
-      capacity: 16,
+      capacity: 48,
       serviceMs: 8,
       serviceCv: 0.5,
       queueLimit: 128,
@@ -2646,7 +2661,7 @@ const netflix: Topology = {
       queueLimit: 48,
     }),
     node('browse', 'service', 'Browse API', COL(2), LROW(5, 2), {
-      capacity: 12,
+      capacity: 16,
       serviceMs: 10,
       serviceCv: 0.5,
       queueLimit: 96,
@@ -2869,7 +2884,7 @@ const spotify: Topology = {
       readFraction: 0.95,
     }),
     node('playlist', 'service', 'Playlist Service', COL(2), LROW(3, 1), {
-      capacity: 10,
+      capacity: 24,
       serviceMs: 7,
       serviceCv: 0.5,
       queueLimit: 96,
@@ -2886,7 +2901,7 @@ const spotify: Topology = {
       readFraction: 0.55,
     }),
     node('recs', 'service', 'Home & Discover Feed', COL(2), LROW(4, 1), {
-      capacity: 10,
+      capacity: 32,
       serviceMs: 8,
       serviceCv: 0.5,
       queueLimit: 96,
@@ -2912,12 +2927,13 @@ const spotify: Topology = {
       serviceCv: 0.2,
       queueLimit: 5000,
     }),
-    // 8 slots / 22ms = ~360 writes/s of drain: deliberately faster than
+    // 2 x 16 slots, each held for its 22ms and then for the vector write
+    // it waits on, drain a burst at ~270 writes/s: deliberately faster than
     // the vector store can absorb on top of its online reads, so each
     // burst briefly queues the store and the online path feels it.
     node('featwork', 'worker', 'Feature Pipeline', COL(2), LROW(5, 2), {
       instances: 2,
-      capacity: 4,
+      capacity: 16,
       serviceMs: 22,
       serviceCv: 0.4,
     }),
@@ -3115,7 +3131,7 @@ const twitter: Topology = {
     // Search: the blender fans queries to the index the firehose feeds.
     // readFraction 0.6 approximates the query:ingest mix it sees.
     node('searchsvc', 'service', 'Search Blender', COL(2), ROW(0), {
-      capacity: 8,
+      capacity: 64,
       serviceMs: 10,
       serviceCv: 0.5,
       queueLimit: 64,
@@ -3307,7 +3323,7 @@ const stripe: Topology = {
       queueLimit: 128,
     }),
     node('paysvc', 'service', 'Payment Service', COL(3), ROW(1), {
-      capacity: 16,
+      capacity: 96,
       serviceMs: 10,
       serviceCv: 0.5,
       queueLimit: 128,
@@ -3315,7 +3331,7 @@ const stripe: Topology = {
     // Radar runs IN the charge path: scoring is worth 30ms of latency
     // on every charge because the alternative is charging fraudsters.
     node('fraud', 'service', 'Radar Fraud Check', COL(4), ROW(0), {
-      capacity: 12,
+      capacity: 96,
       serviceMs: 30,
       serviceCv: 0.5,
       timeoutMs: 1500,
@@ -3376,7 +3392,7 @@ const stripe: Topology = {
       batchSize: 150,
     }),
     node('payoutsvc', 'service', 'Payout Jobs', COL(3), ROW(3), {
-      capacity: 8,
+      capacity: 16,
       serviceMs: 20,
       serviceCv: 0.5,
       queueLimit: 256,
