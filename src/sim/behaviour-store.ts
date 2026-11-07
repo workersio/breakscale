@@ -212,6 +212,11 @@ const coldstorage: ComponentBehaviour = {
     return 'handled';
   },
 
+  load(ctx, state): number {
+    const ext = state.ext as ColdStorageExt;
+    return ext.jobs / Math.max(1, ctx.effectiveCapacity(state));
+  },
+
   onTick(ctx, state): void {
     const ext = state.ext as ColdStorageExt;
     ctx.reportOccupancy(state, ext.jobs, ctx.effectiveCapacity(state));
@@ -348,6 +353,15 @@ function reportPool(ctx: BehaviourCtx, state: NodeStateLike): void {
   ctx.reportOccupancy(state, poolExt(state).busy, ctx.effectiveCapacity(state));
 }
 
+/** Busy plus queued over slots, for the least-loaded edge picker. */
+function poolLoad(ctx: BehaviourCtx, state: NodeStateLike): number {
+  const ext = poolExt(state);
+  return (
+    (ext.busy + (ext.queue.length - ext.head)) /
+    Math.max(1, ctx.effectiveCapacity(state))
+  );
+}
+
 function decoratePool(state: NodeStateLike, stats: NodeStats): void {
   const ext = poolExt(state);
   stats.inFlight = ext.busy;
@@ -443,6 +457,7 @@ const db: ComponentBehaviour = {
   },
 
   onTick: reportPool,
+  load: poolLoad,
 
   decorateStats(ctx, state, stats: NodeStats): void {
     decoratePool(state, stats);
@@ -551,6 +566,7 @@ const searchindex: ComponentBehaviour = {
   },
 
   onTick: reportPool,
+  load: poolLoad,
 
   decorateStats(ctx, state, stats): void {
     decoratePool(state, stats);
@@ -614,6 +630,7 @@ const timeseriesdb: ComponentBehaviour = {
   },
 
   onTick: reportPool,
+  load: poolLoad,
 
   decorateStats(ctx, state, stats): void {
     decoratePool(state, stats);
@@ -668,6 +685,7 @@ const graphdb: ComponentBehaviour = {
   },
 
   onTick: reportPool,
+  load: poolLoad,
 
   decorateStats(ctx, state, stats): void {
     decoratePool(state, stats);
@@ -722,6 +740,7 @@ const vectordb: ComponentBehaviour = {
   },
 
   onTick: reportPool,
+  load: poolLoad,
 
   decorateStats(ctx, state, stats): void {
     decoratePool(state, stats);
