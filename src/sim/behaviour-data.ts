@@ -14,6 +14,7 @@
 import type { NodeStats } from './types';
 import type { BehaviourCtx, NodeStateLike, ReqLike } from './engine-types';
 import type { AdmitAction, ComponentBehaviour } from './behaviour';
+import { exp } from './fdlibm';
 
 /** Keyspace the engine draws request keys from; mirrored here for sizing. */
 const KEYSPACE = 64;
@@ -112,6 +113,9 @@ function writeCapacity(state: NodeStateLike): number {
 
 const replica: ComponentBehaviour = {
   kind: 'replica',
+  // A store: an outgoing edge is a replication feed, not a query thread,
+  // and its drain carries commit bookkeeping that must stay at service end.
+  blocksOnDownstream: false,
   servesRequests: true,
   generatesLoad: false,
   pullsFromQueues: false,
@@ -121,6 +125,26 @@ const replica: ComponentBehaviour = {
   // pools. The engine's single busy/waiting pair cannot express that.
   pump: 'none',
   creditsJoinCompletion: true,
+
+  onDiscard(ctx: BehaviourCtx, state: NodeStateLike): void {
+    // Both lines are emptied before anything is failed: failing a request
+    // runs its caller's code, which may call back into the engine.
+    const ext = replicaExt(state);
+    const writes = ext.writeQueue;
+    const reads = ext.readQueue;
+    const writeHead = ext.writeHead;
+    const readHead = ext.readHead;
+    ext.writeQueue = [];
+    ext.readQueue = [];
+    ext.writeHead = 0;
+    ext.readHead = 0;
+    for (let i = writeHead; i < writes.length; i++) {
+      if (writes[i]) ctx.fail(writes[i], 'no-route', 0);
+    }
+    for (let i = readHead; i < reads.length; i++) {
+      if (reads[i]) ctx.fail(reads[i], 'no-route', 0);
+    }
+  },
 
   initState(_state: NodeStateLike): ReplicaExt {
     const visibleAt = new Float64Array(KEYSPACE);
@@ -412,6 +436,9 @@ function shardIndexFor(
 
 const shard: ComponentBehaviour = {
   kind: 'shard',
+  // A store: an outgoing edge is a replication feed, not a query thread,
+  // and its drain carries commit bookkeeping that must stay at service end.
+  blocksOnDownstream: false,
   servesRequests: true,
   generatesLoad: false,
   pullsFromQueues: false,
@@ -420,6 +447,19 @@ const shard: ComponentBehaviour = {
   creditsJoinCompletion: true,
   // A shard serves from shardCapacity (per partition), never from `capacity`.
   // Without this an autoscaler pointed here writes a field this kind ignores.
+  onDiscard(ctx: BehaviourCtx, state: NodeStateLike): void {
+    // Every partition's line is emptied before anything is failed: failing a
+    // request runs its caller's code, which may call back into the engine.
+    const ext = shardExt(state);
+    const held: ReqLike[] = [];
+    for (let i = 0; i < ext.sized; i++) {
+      const q = ext.queues[i];
+      for (let j = ext.heads[i]; j < q.length; j++) if (q[j]) held.push(q[j]);
+      ext.queues[i] = [];
+      ext.heads[i] = 0;
+    }
+    for (const req of held) ctx.fail(req, 'no-route', 0);
+  },
   scaleField: 'shardCapacity',
   // One unit per partition. This is the kind the instance model exists for:
   // the per-partition numbers are genuinely independent, and the gap between
@@ -483,7 +523,7 @@ const shard: ComponentBehaviour = {
     ext.lastIntegrateMs = ctx.now;
     if (dt <= 0) return;
     const capacity = clampInt(state.config.shardCapacity, 1, MAX_SHARD_CAPACITY);
-    const alpha = 1 - Math.exp(-dt / 500);
+    const alpha = 1 - exp(-dt / 500);
     let busy = 0;
     for (let i = 0; i < ext.sized; i++) {
       const instant = Math.min(ext.busy[i] / capacity, 1);

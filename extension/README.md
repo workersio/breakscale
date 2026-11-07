@@ -49,7 +49,7 @@ To move a design between them, use the share link or the file export.
 
 - [breakscale.tech](https://breakscale.tech) runs the same simulator in a browser
 - [Documentation](https://docs.breakscale.tech)
-- [Source and issues](https://github.com/xevrion/breakscale)
+- [Source and issues](https://github.com/workersio/breakscale)
 
 MIT licensed. The bundled Caveat webfont is licensed separately under the SIL Open Font License
 1.1.

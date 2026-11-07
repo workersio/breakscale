@@ -1,12 +1,22 @@
 /* ==========================================================================
    The challenge panel.
 
-   Floats over the canvas at the top left, in the space the components rail
-   occupies when it is open, because a brief and the diagram it is about have
+   Floats over the canvas, because a brief and the diagram it is about have
    to be readable at the same time. Same island treatment as the bar above
    it: an opaque surface, since live numbers on a moving diagram cannot be
    read.
    ========================================================================== */
+
+/* The panel's width, here so the canvas's uncovered area can leave room for
+   it (see .stage-safe in App.css): a brief laid out under its own panel is
+   a brief whose diagram cannot be seen. */
+.app-body {
+  --chal-w: 340px;
+}
+
+.app-body.has-challenge:not(.has-inspector) .stage-safe {
+  right: calc(var(--chal-w) + var(--sp-3) * 2);
+}
 
 .chal {
   position: absolute;
@@ -21,8 +31,14 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
-  width: 320px;
+  width: var(--chal-w);
   max-width: calc(100vw - var(--sp-3) * 2);
+  /* The brief, two readings, hints and the lesson do not fit every window.
+     The panel scrolls inside itself rather than running off the bottom of
+     the canvas, where its buttons could not be reached. */
+  max-height: calc(100% - var(--bar-clear) - var(--sp-3));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: var(--sp-4);
   border: var(--bw) solid var(--border);
   border-radius: var(--r-lg);
@@ -39,8 +55,16 @@
 
 .chal-head {
   display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+
+.chal-head-text {
+  display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
 }
 
 .chal-kicker {
@@ -54,7 +78,100 @@
   line-height: var(--lh-tight);
 }
 
+/* Focus lands here when a brief starts. It is a heading, not a control, so
+   it shows the ring only to keyboard users. */
+.chal-name:focus {
+  outline: none;
+}
+
+.chal-name:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* The state of the check in one word, readable with the panel collapsed.
+   Coloured text on the recessed surface, never colour alone: the word is
+   the information and the tone only repeats it. */
+.chal-chip {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.chal-chip.is-passed {
+  color: var(--ok);
+}
+
+.chal-chip.is-failed {
+  color: var(--danger);
+}
+
+.chal-chip.is-warn {
+  color: var(--warn);
+}
+
+/* Open, the verdict line under the goals says the same thing in a sentence,
+   so the chip is only for the folded panel. */
+.chal:not(.is-collapsed) .chal-chip {
+  display: none;
+}
+
+.chal-collapse {
+  flex: 0 0 auto;
+}
+
+.chal-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.chal-body[hidden] {
+  display: none;
+}
+
 .chal-brief {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-body);
+}
+
+.chal-budget {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.chal-budget .num {
+  font-weight: var(--fw-num);
+}
+
+.chal-budget.is-over .num {
+  color: var(--danger);
+}
+
+/* Inside the details: the live reading and the check, each a block with its
+   own small title, divided by a rule so the two can never be read as one
+   number. */
+.chal-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding-top: var(--sp-3);
+  border-top: var(--bw) solid var(--border);
+}
+
+.chal-block-title {
+  margin: 0;
+  color: var(--text-faint);
+}
+
+.chal-note {
   margin: 0;
   color: var(--text-dim);
   font-size: var(--fs-sm);
@@ -70,13 +187,14 @@
   list-style: none;
 }
 
-/* A goal is a row of three: what is measured, what it reads now, and what it
-   has to reach. The target stays visible after a goal is met, so the reader
-   can see how much room they have rather than only that they are past it. */
+/* A goal is two lines: what is measured and what the check read, then what
+   it has to reach and whether it did. The target stays visible after a goal
+   is met, so the reader can see how much room they have rather than only
+   that they are past it. */
 .chal-goal {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 0 var(--sp-3);
+  gap: 2px var(--sp-3);
   align-items: baseline;
   padding: var(--sp-2) var(--sp-3);
   border-radius: var(--r-sm);
@@ -90,24 +208,112 @@
 .chal-goal-actual {
   font-size: var(--fs-base);
   font-weight: var(--fw-num);
-  /* Unmet is the loud state, not met: a reader scanning the panel is looking
-     for what is still wrong. */
+  color: var(--text);
+}
+
+/* Unmet is the loud state, not met: a reader scanning the panel is looking
+   for what is still wrong. The word says it and the colour repeats it. Only
+   the check's rows have a state; a live row has no word and no colour,
+   because the live view does not get to say a goal is met. */
+.chal-goal.is-unmet .chal-goal-actual,
+.chal-goal.is-unmet .chal-goal-state {
   color: var(--danger);
 }
 
-.chal-goal.is-met .chal-goal-actual {
+.chal-goal.is-met .chal-goal-actual,
+.chal-goal.is-met .chal-goal-state {
   color: var(--ok);
 }
 
 .chal-goal-target {
-  grid-column: 1 / -1;
   color: var(--text-faint);
+  font-size: var(--fs-sm);
+}
+
+.chal-goal-state {
+  justify-self: end;
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-med);
+  white-space: nowrap;
 }
 
 .chal-verdict {
   margin: 0;
-  color: var(--ok);
   font-size: var(--fs-sm);
+  font-weight: var(--fw-med);
+  line-height: var(--lh-body);
+}
+
+.chal-verdict.is-ok {
+  color: var(--ok);
+}
+
+.chal-verdict.is-danger {
+  color: var(--danger);
+}
+
+.chal-verdict.is-warn {
+  color: var(--warn);
+}
+
+/* The word is the verdict; the sentence after it is why, in body colour so
+   a long reason does not read as one block of red. */
+.chal-verdict .chal-verdict-word {
+  font-weight: var(--fw-num);
+}
+
+.chal-verdict.is-ok,
+.chal-verdict.is-danger,
+.chal-verdict.is-warn {
+  color: var(--text);
+}
+
+.chal-verdict.is-ok .chal-verdict-word {
+  color: var(--ok);
+}
+
+.chal-verdict.is-danger .chal-verdict-word {
+  color: var(--danger);
+}
+
+.chal-verdict.is-warn .chal-verdict-word {
+  color: var(--warn);
+}
+
+.chal-verdict.is-pending {
+  color: var(--text-dim);
+  font-weight: var(--fw-body);
+}
+
+/* How far the check has got. A transform, not a width, so the bar moving
+   costs no layout while the run underneath it is still animating. */
+.chal-progress {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--surface-2);
+}
+
+.chal-progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transform-origin: left center;
+  transition: transform var(--dur-fast) linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chal-progress-fill {
+    transition: none;
+  }
+}
+
+.chal-actions,
+.chal-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
 }
 
 /* Hints and the button that asks for them share one block, so the panel does
@@ -134,12 +340,44 @@
   border-left: var(--bw) solid var(--border);
 }
 
+.chal-actions .btn[aria-disabled='true'],
+.chal-actions .btn[aria-disabled='true']:hover,
+.chal-actions .btn[aria-disabled='true']:active {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-faint);
+  box-shadow: none;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .chal-more {
   align-self: flex-start;
 }
 
-/* The explanation, once it is earned. Given the ok tone the passing frame
-   already uses, so the panel reads as one state rather than two. */
+/* Everything a student does not need to act on, folded by default. */
+.chal-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.chal-details-toggle {
+  align-self: flex-start;
+  gap: var(--sp-1);
+}
+
+.chal-details-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.chal-details-body[hidden] {
+  display: none;
+}
+
+/* The explanation, once it is earned. */
 .chal-lesson {
   margin: 0;
   padding-top: var(--sp-3);
@@ -149,30 +387,121 @@
   line-height: var(--lh-body);
 }
 
-.chal-exit {
-  align-self: flex-start;
+.chal-foot {
+  padding-top: var(--sp-3);
+  border-top: var(--bw) solid var(--border);
 }
 
 /* Selecting a component opens the inspector in this same corner, and the
    inspector is what the reader selected the component to use. The brief
-   steps aside rather than fighting it: still readable, no longer the thing
-   in front. */
+   steps aside rather than fighting it, folded to its heading (see
+   besideInspector) so it covers a strip of the canvas, not the middle of it,
+   and the chip still says how the check went. */
 .app-body.has-inspector .chal {
   right: calc(var(--ins-w) + var(--sp-3) * 2);
 }
 
-/* On a phone the panel is the whole width and sits under the header, where
-   the sheets do not reach. */
+/* On a phone the panel is a sheet at the bottom, above the tab bar, where
+   the thumb is and the header is not. It opens folded to one line (see
+   foldOnStart), and the canvas is framed above that line. Open, it takes at
+   most half of the room between the header and the tab bar, which on a
+   phone is far less than the screen: the header alone can stand a third of
+   it. It scrolls inside itself so every button can be reached at 390px.
+   Below the other sheets: opening one of those covers this rather than
+   stacking two panels on the canvas. */
 @media (max-width: 720px) {
+  .app-body {
+    --chal-fold-h: 60px;
+  }
+
+  .app-body.has-challenge:not(.has-inspector) .stage-safe {
+    right: 0;
+  }
+
+  /* The canvas is framed above the sheet, folded or open. --chal-sheet-h
+     is the sheet's measured height, written onto the sentinel by the shell
+     (see handleSheetResize); the folded height stands in until it lands.
+     The stage already ends at the tab bar, so the tab bar is not counted
+     again; the safe-area inset is, because the sheet sits above it and the
+     stage does not. */
+  .app-body.has-challenge .stage-safe {
+    bottom: calc(
+      var(--chal-sheet-h, var(--chal-fold-h)) + env(safe-area-inset-bottom, 0px)
+    );
+  }
+
   .chal {
-    left: var(--sp-3);
-    right: var(--sp-3);
+    position: fixed;
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
+    z-index: 8;
     width: auto;
+    max-width: none;
+    max-height: calc((100vh - var(--bar-clear) - var(--tabbar-h)) / 2);
+    max-height: calc((100dvh - var(--bar-clear) - var(--tabbar-h)) / 2);
+    padding: var(--sp-3) var(--sp-4) var(--sp-4);
+    border-bottom: 0;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+  }
+
+  /* Folded, the sheet is one line: the name, the chip and the button. */
+  .chal.is-collapsed {
+    min-height: var(--chal-fold-h);
+    padding-bottom: var(--sp-3);
+  }
+
+  .chal.is-collapsed .chal-kicker {
+    display: none;
+  }
+
+  .chal.is-collapsed .chal-head {
+    align-items: center;
+  }
+
+  .chal.is-collapsed .chal-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   /* The inspector is a sheet over the canvas here, not a rail beside it, so
      there is nothing to step aside from. */
   .app-body.has-inspector .chal {
-    right: var(--sp-3);
+    right: 0;
   }
+}
+
+/* --------------------------------------------------------------------------
+   The picker. The examples dialog's cards, in groups by level, scrolling as
+   one list rather than as one scroller per group.
+   -------------------------------------------------------------------------- */
+
+.chal-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.chal-picker .ex-grid {
+  overflow: visible;
+}
+
+.chal-tier {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.chal-tier-title {
+  margin: 0;
+  color: var(--text-faint);
+}
+
+.chal-badge.is-passed {
+  color: var(--ok);
 }

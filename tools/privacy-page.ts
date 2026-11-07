@@ -12,7 +12,7 @@
 import { SITE_ORIGIN as SITE } from './site.ts';
 
 const UPDATED = '27 September 2026';
-const ISSUES = 'https://github.com/xevrion/breakscale/issues';
+const ISSUES = 'https://github.com/workersio/breakscale/issues';
 
 export function renderPrivacyPage(): string {
   return `<!doctype html>

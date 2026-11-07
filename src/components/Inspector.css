@@ -985,3 +985,95 @@
 .ins-field-row.is-locked .ins-hint {
   color: var(--text-dim);
 }
+
+/* --------------------------------------------------------------------------
+   Fault controls ("Break it on purpose")
+
+   The buttons use the shared .btn-danger outline, so breaking a component
+   reads as a deliberate, destructive act and never as the happy path. Fix
+   is the plain .btn, because it is the way back.
+   -------------------------------------------------------------------------- */
+
+.ins-fault {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.ins-fault-status {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-prose);
+  color: var(--status-ink, var(--text-dim));
+  text-wrap: pretty;
+}
+
+.ins-fault-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-1);
+}
+
+.ins-fault-row .row-k {
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+
+.ins-fault-pair {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.ins-fault-sub {
+  margin: 0 0 var(--sp-2);
+  color: var(--text-faint);
+}
+
+.ins-fault-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ins-fault-cable {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.ins-fault-cable .row-k {
+  min-width: 0;
+  /* .row-k sets a plain colour after .is-danger in index.css, so a cut
+     cable's name only turns red through the status token. */
+  color: var(--status-ink, var(--text-dim));
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+/* What Reset will replay, set apart from the controls that add to it. */
+.ins-fault-recorded {
+  padding-top: var(--sp-3);
+  border-top: var(--bw) solid var(--border);
+}
+
+/* A button that would change nothing right now (Crash on a crashed node,
+   Fix on a healthy one). aria-disabled rather than disabled so pressing it
+   does not throw keyboard focus back to the page; the look is the shared
+   disabled state, held against hover and press as well. */
+.ins-fault .btn[aria-disabled='true'],
+.ins-fault .btn[aria-disabled='true']:hover,
+.ins-fault .btn[aria-disabled='true']:active {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text-faint);
+  box-shadow: none;
+  cursor: not-allowed;
+  transform: none;
+}

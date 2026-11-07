@@ -246,3 +246,53 @@ export function formatElapsed(seconds: number | null | undefined): string {
   const rest = Math.floor(v - m * 60);
   return `${m}m ${String(rest).padStart(2, '0')}s`;
 }
+
+/* ------------------------------------------------------------------ *
+ * Against a goal.
+ *
+ * A challenge goal reads "no more than", and a reading set beside one is
+ * rounded in the direction that fails it. Rounded to nearest, a p99 of
+ * 200.4ms printed "200ms" under "needs 200ms or less" on a run that had
+ * missed: the reader saw a pass that the check had not given. Rounded up, a
+ * miss always prints past the line, and a value exactly on it still reads as
+ * on it.
+ * ------------------------------------------------------------------ */
+
+/** Round up to `step`, ignoring the float noise that would push 1.0 to 1.1. */
+function ceilTo(v: number, step: number): number {
+  return Math.ceil(v / step - 1e-9) * step;
+}
+
+/** A latency held against a goal, rounded up. */
+export function formatGoalMs(ms: number | null | undefined): string {
+  const v = finite(ms);
+  if (v === null || v < 0) return NA;
+  if (v === 0) return '0ms';
+  if (v < 10) return `${trim(ceilTo(v, 0.1).toFixed(1))}ms`;
+  if (v < 1000) return `${ceilTo(v, 1).toFixed(0)}ms`;
+  return `${trim(ceilTo(v / 1000, 0.1).toFixed(1))}s`;
+}
+
+/**
+ * A percentage held against a goal, already in percent, rounded up: two
+ * decimals under 1%, where the goals sit, one under 10%, whole above.
+ */
+export function formatGoalPct(pct: number | null | undefined): string {
+  const v = finite(pct);
+  if (v === null || v < 0) return NA;
+  if (v === 0) return '0%';
+  if (v < 1) return `${ceilTo(v, 0.01).toFixed(2).replace(/0$/, '')}%`;
+  if (v < 10) return `${trim(ceilTo(v, 0.1).toFixed(1))}%`;
+  return `${ceilTo(v, 1).toFixed(0)}%`;
+}
+
+/**
+ * A 0..1 share that has to stay ABOVE a floor, as a percentage rounded down,
+ * so a share short of the floor never prints as reaching it.
+ */
+export function formatShareDown(fraction: number | null | undefined): string {
+  const v = finite(fraction);
+  if (v === null || v < 0) return NA;
+  const pct = Math.floor(v * 1000 + 1e-9) / 10;
+  return `${trim(pct.toFixed(1))}%`;
+}

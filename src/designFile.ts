@@ -1,6 +1,8 @@
 import type { Topology } from './sim/types';
 import { isTopology } from './clipboard';
 import { sanitizeAnnotations } from './sim/annotations';
+import { sanitizeFaults } from './sim/faults';
+import { sanitizeSeed } from './sim/seed';
 
 /* ------------------------------------------------------------------ *
  * Saving a design to a file, and reading one back.
@@ -191,14 +193,19 @@ export function parseDesignFile(text: string): DesignParseResult {
   }
 
   // Rebuilt field by field rather than spread, so nothing the file carried
-  // beyond nodes, edges and annotations reaches the engine.
+  // beyond nodes, edges, annotations, its fault schedule and its seed
+  // reaches the engine.
   const annotations = sanitizeAnnotations(
     (raw as { annotations?: unknown }).annotations,
   );
+  const faults = sanitizeFaults((raw as { faults?: unknown }).faults, raw);
+  const seed = sanitizeSeed((raw as { seed?: unknown }).seed);
   const topology: Topology = {
     nodes: structuredClone(raw.nodes),
     edges: structuredClone(raw.edges),
     ...(annotations.length > 0 ? { annotations } : {}),
+    ...(faults.length > 0 ? { faults } : {}),
+    ...(seed !== undefined ? { seed } : {}),
   };
 
   return {

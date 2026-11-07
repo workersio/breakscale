@@ -1,8 +1,8 @@
 blank_issues_enabled: true
 contact_links:
   - name: Question or idea
-    url: https://github.com/xevrion/breakscale/discussions
+    url: https://github.com/workersio/breakscale/discussions
     about: For anything that is not a bug report or a concrete feature request, start a discussion.
   - name: Report a security problem
-    url: https://github.com/xevrion/breakscale/security/policy
+    url: https://github.com/workersio/breakscale/security/policy
     about: Please report vulnerabilities privately rather than in a public issue.

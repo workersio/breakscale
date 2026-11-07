@@ -303,6 +303,8 @@ function pumpAllGroups(ctx: BehaviourCtx, state: NodeStateLike, ext: BrokerExt):
 
 const streambroker: ComponentBehaviour = {
   kind: 'streambroker',
+  // It acks the producer; deliveries are detached and paced per partition.
+  blocksOnDownstream: false,
   // A broker is a buffer with cursors, not a server: its ack slots mean
   // nothing, and its meaningful backlog is lag, published via decorateStats.
   servesRequests: false,
@@ -440,6 +442,8 @@ const streambroker: ComponentBehaviour = {
  */
 const pubsub: ComponentBehaviour = {
   kind: 'pubsub',
+  // It acks the publisher; each delivery is detached.
+  blocksOnDownstream: false,
   servesRequests: false,
   generatesLoad: false,
   pullsFromQueues: false,
@@ -524,6 +528,8 @@ function wsOpenProjected(ext: WsExt, now: number): number {
 
 const websocket: ComponentBehaviour = {
   kind: 'websocket',
+  // Its resource is connection lifetime, not a thread per call.
+  blocksOnDownstream: false,
   servesRequests: true,
   generatesLoad: false,
   pullsFromQueues: false,
@@ -536,6 +542,9 @@ const websocket: ComponentBehaviour = {
   // engine through reportOccupancy below.
   instanceModel: 'slots',
   scaleField: 'instances',
+  // A connection slot is released by its expiry timer, not by any request
+  // finishing, so the engine cannot say which machine holds it.
+  slotsOutliveService: true,
 
   initState(): WsExt {
     return { expiry: [], head: 0 };
@@ -657,6 +666,8 @@ function gwProjectedTokens(
 
 const apigateway: ComponentBehaviour = {
   kind: 'apigateway',
+  // An event-loop proxy: its slot is routing work, not a thread per call.
+  blocksOnDownstream: false,
   servesRequests: true,
   generatesLoad: false,
   pullsFromQueues: false,
@@ -762,6 +773,8 @@ function sidecarOpenMs(state: NodeStateLike): number {
 
 const sidecar: ComponentBehaviour = {
   kind: 'sidecar',
+  // An event-loop proxy: its slot is routing work, not a thread per call.
+  blocksOnDownstream: false,
   servesRequests: true,
   generatesLoad: false,
   pullsFromQueues: false,
@@ -915,6 +928,9 @@ function lambdaWarmProjected(ext: LambdaExt, now: number): number {
 
 const lambda: ComponentBehaviour = {
   kind: 'lambda',
+  // An invocation awaiting a call still counts against concurrency and is
+  // still billed, so a slow dependency throttles the function.
+  blocksOnDownstream: true,
   servesRequests: true,
   generatesLoad: false,
   pullsFromQueues: false,
@@ -945,6 +961,8 @@ const lambda: ComponentBehaviour = {
       ctx.countCustom(state, 'warmStart', 1);
     } else {
       ctx.countCustom(state, 'coldStart', 1);
+      // Booked as the function's own work: starting the runtime and running
+      // its init code, which a slowed function does slowly too.
       ctx.addServiceDelay(req, Math.max(0, state.config.coldStartMs ?? 350));
     }
 
@@ -978,8 +996,12 @@ const lambda: ComponentBehaviour = {
     stats.coldStartRate = started > 0 ? cold / started : 0;
     stats.coldStartsPerSec = cold;
     stats.warmIdle = lambdaWarmProjected(ext, ctx.now);
+    // An invocation waiting on a call it made is still running and still
+    // counts against maxConcurrency, so runningNow and the meter keep it.
+    // inFlight is the part doing work, the same meaning it has elsewhere;
+    // the engine publishes the rest as waitingOnDownstream.
     stats.runningNow = ext.busy;
-    stats.inFlight = ext.busy;
+    stats.inFlight = ext.busy > state.parked ? ext.busy - state.parked : 0;
     // The 'throttled' counter was already being booked at admission; publish
     // it so the UI can show refusals instead of inferring them from errors.
     stats.throttledRate = ctx.counterRate(state, 'throttled');
@@ -1047,6 +1069,8 @@ function cronBatch(state: NodeStateLike): number {
 
 const cron: ComponentBehaviour = {
   kind: 'cron',
+  // It emits detached work and waits on none of it.
+  blocksOnDownstream: false,
   servesRequests: false,
   generatesLoad: false,
   pullsFromQueues: false,

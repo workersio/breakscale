@@ -93,7 +93,54 @@ describe('round trip', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.topology.annotations).toBeUndefined();
+    expect(result.topology.faults).toBeUndefined();
     expect(result.name).toBeNull();
+  });
+
+  it('keeps a fault schedule and drops the entries that name nothing', () => {
+    const t = makeTopology();
+    const [client, svc] = t.nodes;
+    const good = [
+      {
+        atMs: 1000,
+        action: 'inject' as const,
+        nodeId: svc!.id,
+        kind: 'crash' as const,
+      },
+      { atMs: 2000, action: 'cut' as const, edgeId: `${client!.id}->${svc!.id}` },
+    ];
+    const text = buildDesignFile(
+      {
+        ...t,
+        faults: [
+          ...good,
+          { atMs: 3000, action: 'clear', nodeId: 'ghost' },
+          { atMs: Number.NaN, action: 'clear', nodeId: svc!.id },
+        ],
+      },
+      null,
+    );
+    const result = parseDesignFile(text);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.topology.faults).toEqual(good);
+  });
+});
+
+describe('the run seed', () => {
+  it('survives the file, and a seed the engine would fold does not', () => {
+    const t = makeTopology();
+    const back = parseDesignFile(buildDesignFile({ ...t, seed: 31337 }, null));
+    expect(back.ok && back.topology.seed).toBe(31337);
+    for (const seed of [-1, 2.5, 2 ** 32, '5']) {
+      const text = buildDesignFile(t, null).replace(
+        '"topology": {',
+        `"topology": { "seed": ${JSON.stringify(seed)},`,
+      );
+      const r = parseDesignFile(text);
+      expect(r.ok).toBe(true);
+      if (r.ok) expect('seed' in r.topology).toBe(false);
+    }
   });
 });
 

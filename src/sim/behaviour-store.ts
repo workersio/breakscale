@@ -32,6 +32,7 @@
 import type { NodeStats } from './types';
 import type { BehaviourCtx, NodeStateLike, ReqLike } from './engine-types';
 import type { AdmitAction, ComponentBehaviour } from './behaviour';
+import { log2, pow } from './fdlibm';
 
 /** Keyspace the engine draws request keys from; mirrored here for sizing. */
 const KEYSPACE = 64;
@@ -110,6 +111,10 @@ function objectRefill(
 
 const objectstore: ComponentBehaviour = {
   kind: 'objectstore',
+  // A store: an outgoing edge is a replication or index feed, not a query
+  // thread, and its drain carries commit bookkeeping that must stay at
+  // service end.
+  blocksOnDownstream: false,
   servesRequests: true,
   generatesLoad: false,
   pullsFromQueues: false,
@@ -179,6 +184,10 @@ const coldDrained = (_ctx: BehaviourCtx, state: NodeStateLike, _req: ReqLike): v
 
 const coldstorage: ComponentBehaviour = {
   kind: 'coldstorage',
+  // A store: an outgoing edge is a replication or index feed, not a query
+  // thread, and its drain carries commit bookkeeping that must stay at
+  // service end.
+  blocksOnDownstream: false,
   servesRequests: true,
   generatesLoad: false,
   pullsFromQueues: false,
@@ -323,6 +332,22 @@ function initPool(): PoolExt {
   return { busy: 0, queue: [], head: 0 };
 }
 
+/**
+ * The node is being removed: fail everything still in its line. The queue is
+ * emptied first, because failing a request runs its caller's code, which may
+ * call back into the engine.
+ */
+function discardPool(ctx: BehaviourCtx, state: NodeStateLike): void {
+  const ext = poolExt(state);
+  const q = ext.queue;
+  const head = ext.head;
+  ext.queue = [];
+  ext.head = 0;
+  for (let i = head; i < q.length; i++) {
+    if (q[i]) ctx.fail(q[i], 'no-route', 0);
+  }
+}
+
 /** Occupancy publishing shared by every pooled kind (see replica for why). */
 function reportPool(ctx: BehaviourCtx, state: NodeStateLike): void {
   ctx.reportOccupancy(state, poolExt(state).busy, ctx.effectiveCapacity(state));
@@ -394,7 +419,10 @@ const dbStart = (ctx: BehaviourCtx, state: NodeStateLike, req: ReqLike): void =>
   const lockMs = Math.max(0, num(state.config.lockMs, 0));
   const wait = lockMs * ext.writers;
   if (wait > 0) {
-    ctx.addServiceDelay(req, wait);
+    // Waiting, not work, so a slow fault does not stretch it. It still grows
+    // under one: slowed writes hold their slots longer, so more of them are
+    // in flight for the next write to wait behind.
+    ctx.addWaitDelay(req, wait);
     ctx.countCustom(state, 'lockWaitMs', wait);
   }
   ext.writers++;
@@ -408,6 +436,10 @@ const dbDrained = makeDrained(dbStart, (_ctx, state, req) => {
 
 const db: ComponentBehaviour = {
   kind: 'db',
+  // A store: an outgoing edge is a replication or index feed, not a query
+  // thread, and its drain carries commit bookkeeping that must stay at
+  // service end.
+  blocksOnDownstream: false,
   servesRequests: true,
   instanceModel: 'slots',
   scaleField: 'instances',
@@ -419,6 +451,7 @@ const db: ComponentBehaviour = {
 
   initState: (): DbExt => ({ ...initPool(), writers: 0 }),
 
+  onDiscard: discardPool,
   onAdmit(ctx, state, req): AdmitAction {
     return poolAdmit(ctx, state, req, dbClassify, dbStart, dbDrained);
   },
@@ -508,6 +541,10 @@ function searchClassify(ctx: BehaviourCtx, state: NodeStateLike, req: ReqLike): 
 
 const searchindex: ComponentBehaviour = {
   kind: 'searchindex',
+  // A store: an outgoing edge is a replication or index feed, not a query
+  // thread, and its drain carries commit bookkeeping that must stay at
+  // service end.
+  blocksOnDownstream: false,
   servesRequests: true,
   instanceModel: 'slots',
   scaleField: 'instances',
@@ -523,6 +560,7 @@ const searchindex: ComponentBehaviour = {
     return { ...initPool(), visibleAt };
   },
 
+  onDiscard: discardPool,
   onAdmit(ctx, state, req): AdmitAction {
     return poolAdmit(ctx, state, req, searchClassify, searchStart, searchDrained);
   },
@@ -571,6 +609,10 @@ function tsdbClassify(ctx: BehaviourCtx, state: NodeStateLike, req: ReqLike): vo
 
 const timeseriesdb: ComponentBehaviour = {
   kind: 'timeseriesdb',
+  // A store: an outgoing edge is a replication or index feed, not a query
+  // thread, and its drain carries commit bookkeeping that must stay at
+  // service end.
+  blocksOnDownstream: false,
   servesRequests: true,
   instanceModel: 'slots',
   scaleField: 'instances',
@@ -582,6 +624,7 @@ const timeseriesdb: ComponentBehaviour = {
 
   initState: initPool,
 
+  onDiscard: discardPool,
   onAdmit(ctx, state, req): AdmitAction {
     return poolAdmit(ctx, state, req, tsdbClassify, tsdbStart, tsdbDrained);
   },
@@ -613,7 +656,7 @@ const GRAPH_FANOUT = 3;
 function graphClassify(ctx: BehaviourCtx, state: NodeStateLike, req: ReqLike): void {
   const depth = Math.max(1, Math.floor(num(state.config.traversalDepth, 1)));
   const base = Math.max(0, state.config.serviceMs);
-  const mult = Math.pow(GRAPH_FANOUT, Math.min(depth, 8) - 1);
+  const mult = pow(GRAPH_FANOUT, Math.min(depth, 8) - 1);
   ctx.addServiceDelay(req, base * (mult - 1));
 }
 
@@ -621,6 +664,10 @@ const graphDrained = makeDrained(null, null);
 
 const graphdb: ComponentBehaviour = {
   kind: 'graphdb',
+  // A store: an outgoing edge is a replication or index feed, not a query
+  // thread, and its drain carries commit bookkeeping that must stay at
+  // service end.
+  blocksOnDownstream: false,
   servesRequests: true,
   instanceModel: 'slots',
   scaleField: 'instances',
@@ -632,6 +679,7 @@ const graphdb: ComponentBehaviour = {
 
   initState: initPool,
 
+  onDiscard: discardPool,
   onAdmit(ctx, state, req): AdmitAction {
     return poolAdmit(ctx, state, req, graphClassify, null, graphDrained);
   },
@@ -663,7 +711,7 @@ function vectorClassify(ctx: BehaviourCtx, state: NodeStateLike, req: ReqLike): 
   const sizeK = Math.max(0, num(state.config.indexSizeK, 0));
   const recall = Math.min(0.99, Math.max(0, num(state.config.recallTarget, 0)));
   const base = Math.max(0, state.config.serviceMs);
-  const mult = Math.log2(2 + sizeK) / (1 - recall);
+  const mult = log2(2 + sizeK) / (1 - recall);
   if (mult > 1) ctx.addServiceDelay(req, base * (mult - 1));
 }
 
@@ -671,6 +719,10 @@ const vectorDrained = makeDrained(null, null);
 
 const vectordb: ComponentBehaviour = {
   kind: 'vectordb',
+  // A store: an outgoing edge is a replication or index feed, not a query
+  // thread, and its drain carries commit bookkeeping that must stay at
+  // service end.
+  blocksOnDownstream: false,
   servesRequests: true,
   instanceModel: 'slots',
   scaleField: 'instances',
@@ -682,6 +734,7 @@ const vectordb: ComponentBehaviour = {
 
   initState: initPool,
 
+  onDiscard: discardPool,
   onAdmit(ctx, state, req): AdmitAction {
     return poolAdmit(ctx, state, req, vectorClassify, null, vectorDrained);
   },

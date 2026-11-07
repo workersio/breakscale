@@ -2,6 +2,8 @@ import { NODE_KINDS, isTopology } from '../../src/clipboard';
 import { WIRE_FIELDS, WIRE_SCHEMA } from '../../src/share/wire';
 import { sanitizeAnnotations } from '../../src/sim/annotations';
 import { behaviourFor } from '../../src/sim/behaviour';
+import { sanitizeFaults } from '../../src/sim/faults';
+import { MAX_SEED, sanitizeSeed } from '../../src/sim/seed';
 import { defaultConfig } from '../../src/sim/presets';
 import {
   BULKHEAD_MODES,
@@ -212,6 +214,24 @@ export function buildTopology(input: unknown): DesignResult {
     edges.push(edge);
   });
 
+  // The fault schedule is optional. An entry the engine could not play is an
+  // error here, not a silent drop as in the app, so the model can fix it.
+  if (body.faults !== undefined && !Array.isArray(body.faults)) {
+    fail('`faults` must be an array.');
+  }
+  const faults = sanitizeFaults(body.faults, { nodes, edges }, (i, why) =>
+    fail(`faults[${i}] ${why}`),
+  );
+  // The seed is optional too, and refused rather than rounded: the engine
+  // would fold 1.5 into some other seed and the run would not be the one
+  // the design asked for.
+  const seed = sanitizeSeed(body.seed);
+  if (body.seed !== undefined && seed === undefined) {
+    fail(
+      `\`seed\` is ${JSON.stringify(body.seed)}; use a whole number from 0 to ${MAX_SEED}.`,
+    );
+  }
+
   if (errors.length > 0) return { ok: false, errors };
 
   if (placed.size < nodes.length) layout(nodes, edges, placed);
@@ -221,6 +241,8 @@ export function buildTopology(input: unknown): DesignResult {
     nodes,
     edges,
     ...(annotations.length > 0 ? { annotations } : {}),
+    ...(faults.length > 0 ? { faults } : {}),
+    ...(seed !== undefined ? { seed } : {}),
   };
   // Belt and braces: the same gate the app puts every stored or pasted
   // design through. Anything that passed the checks above and fails here

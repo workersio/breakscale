@@ -12,7 +12,7 @@ import { useEffect, useState } from 'react';
  * on GitHub.
  */
 
-const REPO = 'xevrion/breakscale';
+const REPO = 'workersio/breakscale';
 const STORAGE_KEY = 'bs-stars';
 /* Five minutes. Long enough that a reader clicking around the app is not
    spending requests against the unauthenticated rate limit, short enough

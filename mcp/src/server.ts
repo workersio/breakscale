@@ -61,11 +61,15 @@ const design = {
   nodes: z.array(node).optional(),
   edges: z.array(edge).optional(),
   annotations: z.array(z.unknown()).optional(),
+  faults: z.array(z.unknown()).optional(),
+  seed: z.unknown().optional(),
   topology: z
     .looseObject({
       nodes: z.array(node).optional(),
       edges: z.array(edge).optional(),
       annotations: z.array(z.unknown()).optional(),
+      faults: z.array(z.unknown()).optional(),
+      seed: z.unknown().optional(),
     })
     .optional()
     .describe('An exported .breakscale file can be passed in as it is'),

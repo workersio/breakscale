@@ -4,8 +4,8 @@ import type { Topology } from './sim/types';
  * Undo / redo for the shell.
  *
  * FULL SNAPSHOTS, NOT DELTAS. The topology is a few dozen plain-data nodes,
- * so a complete copy of `{ topology, selectedIds, rps, presetId }` per entry
- * is a few kilobytes. Excalidraw's delta machinery exists for multiplayer
+ * so a complete copy of `{ topology, selectedIds, rps, presetId, challengeId }`
+ * per entry is a few kilobytes. Excalidraw's delta machinery exists for multiplayer
  * reconciliation, which this app does not have; snapshots are the version
  * that is obviously correct.
  *
@@ -30,6 +30,12 @@ export interface HistorySnapshot {
   selectedIds: ReadonlySet<string>;
   rps: number;
   presetId: string | null;
+  /**
+   * The challenge the canvas belonged to, or null for the reader's own
+   * design. A brief is a different workspace, so undoing past the moment one
+   * started is leaving it, and redoing is going back in.
+   */
+  challengeId: string | null;
 }
 
 /**
@@ -122,7 +128,8 @@ function edgesEqual(a: Topology, b: Topology): boolean {
       d.from !== e.from ||
       d.to !== e.to ||
       d.weight !== e.weight ||
-      d.control !== e.control
+      d.control !== e.control ||
+      d.lossRate !== e.lossRate
     ) {
       return false;
     }
@@ -140,6 +147,7 @@ function snapshotEqual(a: HistorySnapshot, b: HistorySnapshot): boolean {
   return (
     a.rps === b.rps &&
     a.presetId === b.presetId &&
+    a.challengeId === b.challengeId &&
     selectionEqual(a.selectedIds, b.selectedIds) &&
     topologyEqual(a.topology, b.topology)
   );
@@ -156,6 +164,7 @@ function cloneSnapshot(s: HistorySnapshot): HistorySnapshot {
     selectedIds: new Set(s.selectedIds),
     rps: s.rps,
     presetId: s.presetId,
+    challengeId: s.challengeId,
   };
 }
 
@@ -172,12 +181,22 @@ export class SessionHistory {
   private pending: HistoryEntry | null = null;
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
 
-  /** Notified after any stack change, so a UI can re-derive its buttons. */
-  private readonly onChange: (() => void) | undefined;
+  /**
+   * Notified after any stack change, so a UI can re-derive its buttons.
+   * `edited` is false when nothing moved: an Undo or Redo pressed with
+   * nothing left to apply. That press is not the reader changing anything,
+   * and treating it as one let an empty Undo on a freshly opened share link
+   * switch autosave back on and write the shared design over their own.
+   */
+  private readonly onChange: ((edited: boolean) => void) | undefined;
   private readonly limit: number;
   private readonly settleMs: number;
 
-  constructor(opts?: { onChange?: () => void; limit?: number; settleMs?: number }) {
+  constructor(opts?: {
+    onChange?: (edited: boolean) => void;
+    limit?: number;
+    settleMs?: number;
+  }) {
     this.onChange = opts?.onChange;
     this.limit = opts?.limit ?? HISTORY_LIMIT;
     this.settleMs = opts?.settleMs ?? SETTLE_MS;
@@ -220,8 +239,8 @@ export class SessionHistory {
       this.past.splice(0, this.past.length - this.limit);
   }
 
-  private notify(): void {
-    this.onChange?.();
+  private notify(edited = true): void {
+    this.onChange?.(edited);
   }
 
   /**
@@ -302,7 +321,8 @@ export class SessionHistory {
     if (
       topologyEqual(base.topology, after.topology) &&
       base.rps === after.rps &&
-      base.presetId === after.presetId
+      base.presetId === after.presetId &&
+      base.challengeId === after.challengeId
     ) {
       return;
     }
@@ -326,7 +346,7 @@ export class SessionHistory {
       this.notify();
       return entry;
     }
-    this.notify();
+    this.notify(false);
     return null;
   }
 
@@ -340,7 +360,7 @@ export class SessionHistory {
       this.notify();
       return entry;
     }
-    this.notify();
+    this.notify(false);
     return null;
   }
 }

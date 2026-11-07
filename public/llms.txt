@@ -39,5 +39,5 @@ system fail in the specific way that example is about.
 ## Links
 
 - App: https://breakscale.vercel.app/
-- Source: https://github.com/xevrion/breakscale
+- Source: https://github.com/workersio/breakscale
 - Licence: MIT

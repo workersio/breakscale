@@ -28,16 +28,26 @@ import './Share.css';
    since every look would otherwise spend a write out of the day's
    budget for a link nobody ever sends.
 
+   REPLAY LINKS. Once the run has faults in it, made by hand or loaded
+   with the design, the dialog offers a second link: the design with the
+   run's seed and fault schedule, so the person who opens it watches the
+   same run from t=0 with each fault landing at the same simulated moment.
+   It opens the way every shared design opens, reset to the start with
+   the clock running. The plain link stays the design alone, so sending
+   someone a design never sends them the faults you were trying out.
+   A design with no faults sees the dialog exactly as it was.
+
    WHAT IT DELIBERATELY DOES NOT DO. No expiry picker, no "who can view",
    no account. The store cannot read a design and has no idea who made it,
    so there is nothing to configure that would mean anything.
    ========================================================================== */
 
+/** `replay` says which link is being built: true for a replay link. */
 export type ShareState =
   | { status: 'idle' }
-  | { status: 'working' }
-  | { status: 'ready'; url: string }
-  | { status: 'failed'; message: string };
+  | { status: 'working'; replay?: boolean }
+  | { status: 'ready'; url: string; replay?: boolean }
+  | { status: 'failed'; message: string; replay?: boolean };
 
 interface Props {
   open: boolean;
@@ -45,11 +55,26 @@ interface Props {
   onClose: () => void;
   /** Build the link. Driven by the reader, never by opening the dialog. */
   onShare: () => void;
+  /**
+   * Whether the run has faults a replay link would carry. Without it, or
+   * without `onShareReplay`, the dialog offers the design link alone.
+   */
+  replayable?: boolean;
+  /** Build a replay link: the design, its seed and the fault schedule. */
+  onShareReplay?: () => void;
   /** Save the design to a file instead, for anything a link cannot carry. */
   onExport: () => void;
 }
 
-export function Share({ open, state, onClose, onShare, onExport }: Props) {
+export function Share({
+  open,
+  state,
+  onClose,
+  onShare,
+  replayable = false,
+  onShareReplay,
+  onExport,
+}: Props) {
   const presence = usePresence(open);
   const inputRef = useRef<HTMLInputElement>(null);
   // Which URL the clipboard holds, rather than a boolean: generating a
@@ -74,6 +99,9 @@ export function Share({ open, state, onClose, onShare, onExport }: Props) {
   }, [state]);
 
   if (!presence.mounted) return null;
+
+  const offerReplay = replayable && onShareReplay !== undefined;
+  const replay = state.status !== 'idle' && state.replay === true;
 
   const copy = async () => {
     if (state.status !== 'ready') return;
@@ -130,10 +158,32 @@ export function Share({ open, state, onClose, onShare, onExport }: Props) {
               part of the address your browser never sends anywhere, so the store cannot
               read it.
             </p>
+            {offerReplay && (
+              <p className="sh-note">
+                This run has faults in it. A replay link sends them too, so whoever
+                opens it watches the same run from the start, with each fault at the
+                moment it happened. A plain link sends the design without them.
+              </p>
+            )}
             <div className="sh-row">
-              <button type="button" className="sh-btn sh-btn-go" onClick={onShare}>
-                Generate link
-              </button>
+              {offerReplay ? (
+                <>
+                  <button
+                    type="button"
+                    className="sh-btn sh-btn-go"
+                    onClick={onShareReplay}
+                  >
+                    Generate replay link
+                  </button>
+                  <button type="button" className="sh-btn" onClick={onShare}>
+                    Generate link
+                  </button>
+                </>
+              ) : (
+                <button type="button" className="sh-btn sh-btn-go" onClick={onShare}>
+                  Generate link
+                </button>
+              )}
               <button type="button" className="sh-btn sh-btn-quiet" onClick={onExport}>
                 Save to a file
               </button>
@@ -147,7 +197,11 @@ export function Share({ open, state, onClose, onShare, onExport }: Props) {
           <>
             <p className="sh-note sh-note-bad">{state.message}</p>
             <div className="sh-row">
-              <button type="button" className="sh-btn" onClick={onShare}>
+              <button
+                type="button"
+                className="sh-btn"
+                onClick={replay && onShareReplay ? onShareReplay : onShare}
+              >
                 Try again
               </button>
               <button type="button" className="sh-btn sh-btn-quiet" onClick={onExport}>
@@ -166,15 +220,20 @@ export function Share({ open, state, onClose, onShare, onExport }: Props) {
                 readOnly
                 value={state.url}
                 onFocus={(e) => e.currentTarget.select()}
-                aria-label="Link to this design"
+                aria-label={replay ? 'Link to this replay' : 'Link to this design'}
               />
               <button type="button" className="sh-btn sh-btn-go" onClick={copy}>
-                {copiedUrl === state.url ? 'Copied' : 'Copy link'}
+                {copiedUrl === state.url
+                  ? 'Copied'
+                  : replay
+                    ? 'Copy replay link'
+                    : 'Copy link'}
               </button>
             </div>
             <p className="sh-note">
-              Anyone with this link can open the design. Sharing it again later makes a
-              new link rather than changing this one.
+              {replay
+                ? 'Anyone with this link sees the same run from the start. If you changed the design partway through, the replay uses the design as it is now from the beginning.'
+                : 'Anyone with this link can open the design. Sharing it again later makes a new link rather than changing this one.'}
             </p>
           </>
         )}

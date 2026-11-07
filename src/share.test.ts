@@ -405,6 +405,18 @@ describe('older links', () => {
     });
   });
 
+  it('keeps a fault schedule a JSON link carries, minus entries that name nothing', async () => {
+    const good = { atMs: 1500, action: 'inject', nodeId: 'service-1', kind: 'crash' };
+    const doc = JSON.stringify({
+      ...SIMPLE,
+      faults: [good, { atMs: 10, action: 'cut', edgeId: 'nowhere' }],
+    });
+    const out = await decodeTopology(legacyRawLink(doc, 'd1'));
+    expect(out.status).toBe('ok');
+    if (out.status !== 'ok') return;
+    expect(out.topology.faults).toEqual([good]);
+  });
+
   it('opens a generation-1 link, which carried every field', async () => {
     const out = await decodeTopology(legacyRawLink(JSON.stringify(ANNOTATED), 'd1'));
     expect(out.status).toBe('ok');

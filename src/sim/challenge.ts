@@ -1,4 +1,4 @@
-import type { SimSnapshot, Topology } from './types';
+import type { FaultEvent, NodeConfig, NodeKind, SimSnapshot, Topology } from './types';
 
 /**
  * A brief with a pass condition the engine can check.
@@ -15,6 +15,13 @@ import type { SimSnapshot, Topology } from './types';
  */
 export interface Challenge {
   id: string;
+  /**
+   * Bumped whenever a change to the brief could change its verdict: the load,
+   * a goal, a fault, the budget or the preset it starts from. A check is
+   * keyed to it, so a pass recorded against an older version reads as stale
+   * rather than as a pass of something the reader never attempted.
+   */
+  version: number;
   /** Shown as the heading. A short imperative: "Survive the spike". */
   name: string;
   /**
@@ -27,9 +34,51 @@ export interface Challenge {
    */
   brief: string;
   presetId: string;
+  /**
+   * Changes to the preset's nodes, by id, that make it this brief's system:
+   * a database a size the preset never had, a standby kept small. Applied by
+   * `startDesign`, so the canvas, the locks and the slot budget all start
+   * from the same design.
+   */
+  startOverrides?: Readonly<Record<string, Partial<NodeConfig>>>;
+  /**
+   * Kinds from `SHORTCUT_KINDS` in judge.ts that this brief lets the reader
+   * add one of, because adding one is an answer here rather than a way round
+   * the question.
+   */
+  allowedNewKinds?: readonly NodeKind[];
   /** Offered load the design is judged at, in requests per second. */
   loadRps: number;
   goals: Goal[];
+  /**
+   * Seconds the check runs before it starts counting, so a queue has had time
+   * to form or drain and the verdict is about the design rather than about
+   * its first moments. 15 when absent.
+   */
+  warmupS?: number;
+  /** Seconds the check counts for after the warm-up. 45 when absent. */
+  windowS?: number;
+  /**
+   * Faults that are part of the brief, timed from the start of the run. The
+   * check replaces whatever faults the reader scheduled with these, because
+   * a design is judged against the trouble the brief promised and not
+   * against trouble the reader chose.
+   */
+  faults?: readonly FaultEvent[];
+  /**
+   * Extra slots the design may add over the one it starts from, or absent for
+   * no limit. A slot is one request a component can work on at once; see
+   * `slotsOf` in judge.ts for how each kind counts them. 0 means the answer
+   * has to come from somewhere other than more room.
+   */
+  budget?: number;
+  /** Difficulty, for grouping in the picker. 1 is the first. */
+  tier?: number;
+  /**
+   * Fields held still on top of `DEFAULT_LOCKS`, for a brief whose lesson
+   * would be skipped by changing one of them.
+   */
+  locks?: readonly FieldLock[];
   /**
    * Nudges, in order, from the smallest one that helps to the one that names
    * the component.
@@ -69,7 +118,20 @@ export interface Goal {
   max: number;
 }
 
-export type GoalMetric = 'p99' | 'errorRate' | 'p95';
+/**
+ * `lostWrites` counts writes a write-behind cache said were saved that never
+ * reached the store. `lostJobs` counts jobs a queue accepted that then failed
+ * once a worker took them. `queueDepth` is the longest line in any queue at
+ * the end of the check, in messages. None of them can be read off a single
+ * snapshot, so only the check measures them.
+ */
+export type GoalMetric =
+  'p99' | 'errorRate' | 'p95' | 'lostWrites' | 'lostJobs' | 'queueDepth';
+
+/** The metrics a snapshot can be read for, in the live view. */
+export function isLiveMetric(metric: GoalMetric): boolean {
+  return metric === 'p99' || metric === 'p95' || metric === 'errorRate';
+}
 
 /** How one goal came out, with the number that decided it. */
 export interface GoalResult {
@@ -99,6 +161,11 @@ function actualFor(metric: GoalMetric, snapshot: SimSnapshot): number {
       return s.p95;
     case 'errorRate':
       return s.errorRate * 100;
+    case 'lostWrites':
+    case 'lostJobs':
+    case 'queueDepth':
+      // Filtered out by isLiveMetric before this is reached.
+      return Number.NaN;
   }
 }
 
@@ -115,10 +182,12 @@ function actualFor(metric: GoalMetric, snapshot: SimSnapshot): number {
  */
 export function evaluate(challenge: Challenge, snapshot: SimSnapshot): ChallengeResult {
   const dead = snapshot.system.goodputRps <= 0;
-  const goals = challenge.goals.map((goal) => {
-    const actual = actualFor(goal.metric, snapshot);
-    return { goal, actual, met: !dead && actual <= goal.max };
-  });
+  const goals = challenge.goals
+    .filter((g) => isLiveMetric(g.metric))
+    .map((goal) => {
+      const actual = actualFor(goal.metric, snapshot);
+      return { goal, actual, met: !dead && actual <= goal.max };
+    });
   return { passed: !dead && goals.every((g) => g.met), goals };
 }
 
@@ -142,17 +211,103 @@ export function evaluate(challenge: Challenge, snapshot: SimSnapshot): Challenge
  * makes visible later. The brief is not trying to stop anyone, it is trying
  * to keep the question honest.
  */
-export const FIXED_DURING_CHALLENGE: readonly string[] = ['serviceMs', 'serviceCv'];
+export const FIXED_DURING_CHALLENGE: readonly string[] = [
+  'serviceMs',
+  'serviceCv',
+  // How often a component fails on its own is a bug in the work, and the
+  // read/write mix and how long a write holds its lock are facts about the
+  // data. None of them is something a design gets to declare.
+  'errorRate',
+  'readFraction',
+  'lockMs',
+];
 
 export function isFixedDuringChallenge(field: string): boolean {
   return FIXED_DURING_CHALLENGE.includes(field);
 }
 
-/** The load a challenge is judged at, applied to every traffic source. */
+/**
+ * One field held still, on every node of one kind or, with `'*'`, on all of
+ * them. The check puts it back to the value the brief started with, so
+ * changing it can never be what passes.
+ */
+export interface FieldLock {
+  kind: NodeKind | '*';
+  field: keyof NodeConfig;
+}
+
+/**
+ * What every brief holds still: the work, everywhere, and the traffic
+ * source. A client stands for the people sending requests, so how long they
+ * wait and how often they try again are part of the brief. Its rate is the
+ * brief's load, and the check sets that separately.
+ */
+export const DEFAULT_LOCKS: readonly FieldLock[] = [
+  ...FIXED_DURING_CHALLENGE.map((field) => ({
+    kind: '*' as const,
+    field: field as keyof NodeConfig,
+  })),
+  { kind: 'client', field: 'rps' },
+  { kind: 'client', field: 'timeoutMs' },
+  { kind: 'client', field: 'retries' },
+  { kind: 'client', field: 'traffic' },
+  { kind: 'client', field: 'trafficPeriodS' },
+];
+
+/** Every lock a brief holds: the defaults and its own. */
+export function locksFor(challenge: Challenge): readonly FieldLock[] {
+  return challenge.locks ? [...DEFAULT_LOCKS, ...challenge.locks] : DEFAULT_LOCKS;
+}
+
+/** The fields a brief holds still on a node of this kind, for the inspector. */
+export function lockedFieldsFor(challenge: Challenge, kind: NodeKind): string[] {
+  const out: string[] = [];
+  for (const lock of locksFor(challenge)) {
+    if ((lock.kind === '*' || lock.kind === kind) && !out.includes(lock.field)) {
+      out.push(lock.field);
+    }
+  }
+  return out;
+}
+
+/**
+ * Split `loadRps` across the clients, in proportion to the rates in `weights`
+ * and in whole requests a second that add up to it exactly.
+ *
+ * Largest remainder: each share is rounded down, and the requests left over
+ * go one each to the shares that lost the most to rounding, earliest first
+ * on a tie. Rounding each share on its own is what this replaced, and it
+ * missed the total: 200 over three clients came to 201. Weights that are all
+ * zero, or not numbers, split evenly.
+ */
+export function splitLoad(loadRps: number, weights: readonly number[]): number[] {
+  const n = weights.length;
+  if (n === 0) return [];
+  const total = Math.max(0, Math.round(loadRps));
+  const clean = weights.map((w) => (Number.isFinite(w) && w > 0 ? w : 0));
+  const sum = clean.reduce((a, b) => a + b, 0);
+  const exact = clean.map((w) => (sum > 0 ? (total * w) / sum : total / n));
+  const shares = exact.map(Math.floor);
+  let left = total - shares.reduce((a, b) => a + b, 0);
+  const order = exact
+    .map((x, i) => ({ i, rest: x - Math.floor(x) }))
+    .sort((a, b) => b.rest - a.rest || a.i - b.i);
+  for (let k = 0; left > 0; k = (k + 1) % n, left--) shares[order[k].i] += 1;
+  return shares;
+}
+
+/**
+ * The load a challenge is judged at, split across every traffic source in
+ * the mix they already have. Changes `topology` in place and returns it.
+ */
 export function applyLoad(topology: Topology, loadRps: number): Topology {
   const clients = topology.nodes.filter((n) => n.kind === 'client');
-  if (clients.length === 0) return topology;
-  const each = Math.max(1, Math.round(loadRps / clients.length));
-  for (const c of clients) c.config.rps = each;
+  const shares = splitLoad(
+    loadRps,
+    clients.map((c) => c.config.rps),
+  );
+  clients.forEach((c, i) => {
+    c.config.rps = shares[i];
+  });
   return topology;
 }

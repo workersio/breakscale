@@ -53,6 +53,16 @@ export class MinHeap<T extends Timed> {
   clear(): void {
     this.items.length = 0;
   }
+
+  /**
+   * Visit every item, in storage order rather than time order. The heap must
+   * not be changed while this runs, so a caller that acts on what it finds
+   * collects first and acts after.
+   */
+  each(visit: (item: T) => void): void {
+    const a = this.items;
+    for (let i = 0; i < a.length; i++) visit(a[i]);
+  }
 }
 
 function less(a: Timed, b: Timed): boolean {

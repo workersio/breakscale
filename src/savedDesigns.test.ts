@@ -43,6 +43,24 @@ describe('saving', () => {
     expect(back!.topology.annotations?.length).toBeGreaterThan(0);
   });
 
+  it('carries the fault schedule and the seed, so a saved run replays', () => {
+    const t = topo();
+    const [first] = t.nodes;
+    const faults = [
+      {
+        atMs: 2000,
+        action: 'inject' as const,
+        nodeId: first!.id,
+        kind: 'crash' as const,
+      },
+      { atMs: 4000, action: 'clear' as const, nodeId: first!.id },
+    ];
+    saveDesign('broken', { ...t, faults, seed: 77 });
+    const back = getDesign(listDesigns()[0]!.id)!.topology;
+    expect(back.faults).toEqual(faults);
+    expect(back.seed).toBe(77);
+  });
+
   it('does not alias the live topology', () => {
     // Saving must take a copy: editing the canvas afterwards has to leave
     // the saved version alone, which is the whole point of saving it.

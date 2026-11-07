@@ -75,9 +75,17 @@ export interface NodeConfig {
   hitRate: number;
   /** Probability a request fails on its own (bad deploy, bug). */
   errorRate: number;
-  /** ms after which the caller gives up. 0 = no timeout. */
+  /**
+   * ms after which the caller gives up on one downstream call, per attempt.
+   * 0 = no timeout. A caller that blocks on its calls (a service, a worker, a
+   * lambda) holds its slot until the answer or this deadline, so this is also
+   * the longest a slow dependency can pin one of its threads per attempt.
+   */
   timeoutMs: number;
-  /** Retries on failure/timeout. */
+  /**
+   * Retries on failure/timeout. A blocking caller keeps its slot through the
+   * backoff and every retry, as a thread inside a retry loop does.
+   */
   retries: number;
   /** Client only: requests per second offered to the system. */
   rps: number;
@@ -598,9 +606,9 @@ export interface SimEdge {
   control?: boolean;
 
   /* ---- link characteristics (networking phase) ---------------------- *
-   * All optional and absent from every topology today, so nothing changes
-   * until one is set. Only latencyMs is implemented; the other two are
-   * declared now so the shape does not have to churn later.
+   * All optional and absent from every preset, so nothing changes until one
+   * is set. latencyMs and lossRate are implemented; bandwidthRps is declared
+   * now so the shape does not have to churn later.
    * ------------------------------------------------------------------- */
 
   /**
@@ -616,9 +624,12 @@ export interface SimEdge {
    */
   bandwidthRps?: number;
   /**
-   * DECLARED BUT UNUSED. Fraction of requests the link drops, 0..1. The
-   * networking phase will fail crossings against this; today the engine
-   * ignores it entirely.
+   * Fraction of crossings the link drops, 0..1. Each request offered to the
+   * edge is lost with this probability, drawn from the seeded RNG, and the
+   * CALLER sees it fail as 'packet-loss' at once, the way it sees a cut edge. A
+   * retry is a fresh crossing with a fresh draw. Undefined, 0 or not a
+   * number means a perfect link, and draws nothing, so the run is the same
+   * one it was before the field was read. 1 or more drops everything.
    */
   lossRate?: number;
 }
@@ -634,19 +645,57 @@ export interface Topology {
    * for it belongs.
    */
   annotations?: import('./annotations').Annotation[];
+  /**
+   * A timed fault schedule: crashes, slowdowns, error bursts and cut links,
+   * each pinned to a moment of simulated time. The engine plays it from the
+   * event loop, so the same seed, topology and schedule replay the same run
+   * however the frames happen to fall. Optional, and absent from every
+   * topology written before it existed, which therefore runs exactly as it
+   * always did. See `FaultEvent`.
+   */
+  faults?: FaultEvent[];
+  /**
+   * The seed for the run's random draws (arrival gaps, service times, cache
+   * hits), a whole number from 0 to 2^32 - 1. Saved with a design so that a
+   * shared run replays exactly; the engine uses it when it is not handed a
+   * seed of its own. Optional, and a topology without one runs on seed 1, as
+   * every topology did before the field existed.
+   */
+  seed?: number;
 }
 
 /** Rolling stats for one node over the last window. */
 export interface NodeStats {
-  /** Requests currently being served. */
+  /**
+   * Requests currently being served: doing this node's own work. A slot held
+   * while waiting on a downstream call is not in it; see waitingOnDownstream.
+   */
   inFlight: number;
+  /**
+   * Requests whose own work is done but which still hold a slot, because this
+   * node blocks on its downstream calls and they have not all answered yet: a
+   * thread sitting in a call to a slow database. These slots count against
+   * capacity, so a node can queue and shed with a low utilisation.
+   *
+   * Present only on a kind that blocks (service, worker, lambda) and has at
+   * least one outgoing request edge, and absent everywhere else, where it
+   * could only ever read zero. `inFlight + waitingOnDownstream` is how many
+   * slots are taken; a lambda's `runningNow` is the same total.
+   */
+  waitingOnDownstream?: number;
   /** Requests waiting for a slot. */
   queued: number;
   /** Completed requests per second. */
   throughput: number;
   /** Offered load per second (including those later dropped). */
   arrivalRate: number;
-  /** Fraction of slots busy, 0..1. Can exceed 1 conceptually if oversubscribed. */
+  /**
+   * Fraction of slots doing work, 0..1, smoothed over about a second. Can
+   * exceed 1 conceptually if oversubscribed. Work only: a slot waiting on a
+   * downstream call (waitingOnDownstream) is not counted. A lambda reports
+   * its concurrency instead, waiting invocations included, because that is
+   * what it throttles and bills on.
+   */
   utilization: number;
   p50: number;
   p95: number;
@@ -749,6 +798,14 @@ export interface NodeStats {
    * the whole teaching point of warm-up lag.
    */
   instancesPending?: number;
+  /**
+   * Machines that are down because of a 'crash-instance' fault. Present only
+   * while one is, so a healthy snapshot is unchanged. The first
+   * `instancesDown` entries of `perInstance` are those machines and read 0;
+   * the waterline is poured into the rest. Counted inside `instances`, which
+   * stays the fleet size the design asked for.
+   */
+  instancesDown?: number;
   /**
    * Utilisation per unit, 0..1, with `length === instances`. Undefined
    * whenever `instances` is. Index meaning is per-kind and fixed by the table
@@ -1053,7 +1110,10 @@ export interface NodeStats {
   coldStartsPerSec?: number;
   /** Lambda only: warm instances sitting idle, ready to serve instantly. */
   warmIdle?: number;
-  /** Lambda only: invocations running right now, against `maxConcurrency`. */
+  /**
+   * Lambda only: invocations running right now, against `maxConcurrency`,
+   * including those waiting on a call they made (waitingOnDownstream).
+   */
   runningNow?: number;
 
   /* ---- cron readouts --------------------------------------------------- */
@@ -1279,6 +1339,8 @@ export type FailureReason =
   | 'crashed'
   /** The edge the call needed is cut by an injected network partition. */
   | 'partitioned'
+  /** Lost crossing an edge with a lossRate: the link dropped it. */
+  | 'packet-loss'
   /** No region was serving: the active one is down and failover has not landed. */
   | 'region-down'
   /** Refused by a websocket gateway: every connection slot was already held. */
@@ -1292,6 +1354,16 @@ export type FailureReason =
   /** Dropped by a load shedder protecting higher-priority traffic. */
   | 'deprioritized';
 
+/**
+ * Lifetime failure counts by reason. `packet-loss` is the one optional key: it
+ * appears only once a lossy edge has dropped a request, so a design with no
+ * lossRate snapshots byte for byte as it did before the reason existed.
+ * Read it with `?? 0`.
+ */
+export type FailureCounts = Record<Exclude<FailureReason, 'packet-loss'>, number> & {
+  'packet-loss'?: number;
+};
+
 /* ------------------------------------------------------------------ *
  * Failure injection
  *
@@ -1302,12 +1374,35 @@ export type FailureReason =
 export type FailureKind =
   /** The node is dead: in-flight work fails now, new work fails on arrival. */
   | 'crash'
+  /**
+   * One machine of the node is dead and the rest keep serving. The work that
+   * machine held fails now, including threads parked on its downstream calls,
+   * and its slots are gone until the fault is cleared, so the node runs at
+   * `(instances - 1) * capacity` slots. Requests waiting in the node's line
+   * are not on any one machine and stay in it. With a single instance there
+   * is nothing left to serve, so it is exactly 'crash'. Only a kind that
+   * scales by `instances` and holds slots only while it works can lose one;
+   * see `canCrashOneInstance`.
+   */
+  | 'crash-instance'
   /** The node still works, but every service time is multiplied by `factor`. */
   | 'slow'
   /** The node returns errors at `rate`, on top of its configured errorRate. */
   | 'errors'
   /** Named edges are cut: a request offered to one fails as 'partitioned'. */
   | 'partition';
+
+/**
+ * The same list at runtime, for the validators that cannot read a type.
+ * Written out beside the type for the reason TRAFFIC_PATTERNS is.
+ */
+export const FAILURE_KINDS: readonly FailureKind[] = [
+  'crash',
+  'slow',
+  'errors',
+  'partition',
+  'crash-instance',
+];
 
 /** Knobs for an injected failure. Which ones apply depends on the kind. */
 export interface FailureOpts {
@@ -1328,6 +1423,34 @@ export interface FailureOpts {
    */
   edgeIds?: string[];
 }
+
+/**
+ * One entry in a topology's fault schedule.
+ *
+ * `atMs` is simulated time, never wall clock. An entry lands after every
+ * event already due at that same millisecond, which is exactly where a fault
+ * the student clicks in between two frames lands too, so a recorded run and
+ * its replay agree. Entries sharing an `atMs` apply in list order.
+ *
+ *   inject   attach a fault to a node, as `Engine.injectFailure` does. It
+ *            replaces whatever fault that node already had.
+ *   clear    heal the node, as `Engine.clearFailure` does.
+ *   cut      sever one edge, as `Engine.cutEdge` does. Independent of any
+ *            node fault, so a node can be slow AND have one wire cut.
+ *   restore  reconnect an edge that a `cut` severed. An edge cut by a
+ *            node's 'partition' fault stays cut until that fault is cleared.
+ */
+export type FaultEvent =
+  | {
+      atMs: number;
+      action: 'inject';
+      nodeId: string;
+      kind: FailureKind;
+      opts?: FailureOpts;
+    }
+  | { atMs: number; action: 'clear'; nodeId: string }
+  | { atMs: number; action: 'cut'; edgeId: string }
+  | { atMs: number; action: 'restore'; edgeId: string };
 
 /** An injected failure as reported back to the UI. */
 export interface ActiveFailure {
@@ -1394,7 +1517,7 @@ export interface SimSnapshot {
    * differently.
    */
   edgeState: Record<string, EdgeState>;
-  failuresByReason: Record<FailureReason, number>;
+  failuresByReason: FailureCounts;
   /**
    * Injected failures in force right now, one entry per faulted node. Empty
    * on a healthy system, so the UI can render a chaos indicator from this
@@ -1454,4 +1577,52 @@ export interface HistoryPoint {
   goodput: number;
   offered: number;
   errorRate: number;
+}
+
+/**
+ * Every client request that settled inside a tally window, as
+ * `Engine.readTally()` reports it.
+ *
+ * The snapshot's percentiles come from a ring of the last 5 seconds, which is
+ * the right thing to draw and the wrong thing to grade: a verdict has to see
+ * every request in its window, not the ones that happened to fit. This is
+ * that record, kept only while a tally is running.
+ *
+ * `arrived` counts requests the clients sent inside the window. `completed`
+ * and `failed` count requests that finished inside it, wherever they started,
+ * so the two halves need not add up to `arrived`: work still in flight at
+ * either edge of the window is the difference.
+ */
+export interface RunTally {
+  /** Simulated ms the tally started. */
+  fromMs: number;
+  /** Simulated ms it stopped, or the current time while it runs. */
+  toMs: number;
+  /** Client requests sent inside the window, the engine's own sheds included. */
+  arrived: number;
+  /** Client requests that succeeded inside the window. */
+  completed: number;
+  /** Client requests that failed inside the window. */
+  failed: number;
+  /** `failed`, split by why. A reason that never happened is absent. */
+  failuresByReason: Partial<Record<FailureReason, number>>;
+  /**
+   * End-to-end ms of every success, in the order they finished, measured as
+   * the client measured it. `length === completed`. A copy the caller owns.
+   */
+  latencies: Float64Array;
+  /** Writes a write-behind cache acknowledged inside the window. */
+  writesAcked: number;
+  /**
+   * How many of `writesAcked` have landed at the store so far, counted past
+   * the window's end for as long as the engine has run since.
+   */
+  writesLanded: number;
+  /** Jobs a queue accepted inside the window. */
+  jobsQueued: number;
+  /**
+   * How many of `jobsQueued` failed once a worker took them, counted past the
+   * window's end. The client heard yes for each, so none shows in `failed`.
+   */
+  jobsFailed: number;
 }

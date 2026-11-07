@@ -1,4 +1,5 @@
 import { Engine } from '../../src/sim/engine';
+import { sanitizeSeed } from '../../src/sim/seed';
 import type { FailureReason, SimSnapshot, Topology } from '../../src/sim/types';
 
 /* ------------------------------------------------------------------ *
@@ -34,6 +35,8 @@ export interface RunResult {
   snapshot: SimSnapshot;
   /** How far the simulation actually got, which is less than asked when it ran out of budget. */
   simulatedMs: number;
+  /** The seed the run used: the design's own when it carries one, else the option's. */
+  seed?: number;
 }
 
 /*
@@ -52,7 +55,11 @@ export function runDesign(
   topology: Topology,
   opts: RunOptions = DEFAULT_RUN,
 ): RunResult {
-  const engine = new Engine(topology, opts.seed);
+  // A design that carries a seed is asking to be replayed, so its seed wins
+  // over the default. Its fault schedule needs nothing here: the engine
+  // plays it from the topology.
+  const seed = sanitizeSeed(topology.seed) ?? opts.seed;
+  const engine = new Engine(topology, seed);
   const target = opts.seconds * 1000;
   const start = performance.now();
   let simulatedMs = 0;
@@ -60,7 +67,7 @@ export function runDesign(
     engine.advance(STEP_MS);
     simulatedMs += STEP_MS;
   }
-  return { snapshot: engine.snapshot(), simulatedMs };
+  return { snapshot: engine.snapshot(), simulatedMs, seed };
 }
 
 const REASON_WORDS: Record<FailureReason, string> = {
@@ -79,6 +86,7 @@ const REASON_WORDS: Record<FailureReason, string> = {
   'bulkhead-full': 'were refused by a full bulkhead',
   'acquire-timeout': 'gave up waiting for a pool slot',
   deprioritized: 'were dropped by a load shedder',
+  'packet-loss': 'were lost on a lossy network link (lossRate)',
 };
 
 const ms = (v: number) =>
@@ -100,7 +108,7 @@ export function describeRun(
     run.simulatedMs < opts.seconds * 1000
       ? ` (stopped at ${secs}s of ${opts.seconds}s: the design is too heavy to simulate further here)`
       : '';
-  lines.push(`Simulated ${secs}s with seed ${opts.seed}${short}.`);
+  lines.push(`Simulated ${secs}s with seed ${run.seed ?? opts.seed}${short}.`);
   lines.push(
     `Offered ${perSec(system.offeredRps)}, served ${perSec(system.goodputRps)}, ` +
       `${pct(system.errorRate)} failed. ` +
@@ -123,9 +131,23 @@ export function describeRun(
     .map(([id, s]) => ({ id, s, node: byId.get(id) }))
     .filter((r) => r.node && r.node.kind !== 'client');
 
-  const busy = rows
-    .filter((r) => r.s.utilization > 0)
-    .sort((a, b) => b.s.utilization - a.s.utilization);
+  // A node that blocks on its calls holds a slot while it waits on them, and
+  // utilisation counts only the work, so a server with every slot held on a
+  // slow store reads a few percent busy. Ranked by the larger of the two, it
+  // sorts as the full node it is.
+  const load = (r: (typeof rows)[number]): number => {
+    const waiting = r.s.waitingOnDownstream;
+    // A lambda already reports its concurrency, waits included.
+    if (waiting === undefined || !r.node || r.node.kind === 'lambda')
+      return r.s.utilization;
+    const slots =
+      r.node.config.capacity *
+      Math.max(1, Math.floor(r.s.instances ?? r.node.config.instances ?? 1));
+    return slots > 0
+      ? Math.max(r.s.utilization, (r.s.inFlight + waiting) / slots)
+      : r.s.utilization;
+  };
+  const busy = rows.filter((r) => load(r) > 0).sort((a, b) => load(b) - load(a));
   const failing = rows.filter(
     (r) => r.s.errorRate > 0 || r.s.shedRate > 0 || r.s.timeoutRate > 0,
   );
@@ -136,6 +158,10 @@ export function describeRun(
     for (const { id, s, node } of shown) {
       const parts = [`${perSec(s.arrivalRate)} in, ${perSec(s.throughput)} done`];
       if (s.utilization > 0) parts.push(`${pct(Math.min(s.utilization, 1))} busy`);
+      if ((s.waitingOnDownstream ?? 0) > 0)
+        parts.push(
+          `${Math.round(s.waitingOnDownstream ?? 0)} slots held waiting on its calls`,
+        );
       if (s.queued >= 1) parts.push(`${Math.round(s.queued)} waiting`);
       if (s.throughput > 0) parts.push(`p99 ${ms(s.p99)}`);
       if (s.errorRate > 0) parts.push(`${pct(s.errorRate)} failed`);

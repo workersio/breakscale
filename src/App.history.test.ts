@@ -33,6 +33,7 @@ function snap(
     selectedIds: new Set(selected),
     rps,
     presetId: null,
+    challengeId: null,
   };
 }
 
@@ -50,6 +51,19 @@ describe('SessionHistory', () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('keeps an entry that differs only in which brief the canvas belonged to', () => {
+    // Starting a brief on the example it is built from changes nothing on
+    // the canvas but the workspace. Skipping that entry as a no-op would
+    // make undo walk straight past the start instead of leaving the brief.
+    const h = new SessionHistory();
+    const t = makeTopology();
+    h.commit('challenge start', snap(t));
+    const entry = h.undo({ ...snap(t), challengeId: 'hold-the-line' });
+    expect(entry?.challengeId).toBeNull();
+    const back = h.redo(snap(t));
+    expect(back?.challengeId).toBe('hold-the-line');
   });
 
   it('records one entry for a whole drag, not one per frame', () => {
@@ -219,6 +233,23 @@ describe('SessionHistory', () => {
     const entry = h.undo(snap(moved(t0, t0.nodes[1]!.id, 50, 0)));
     expect(entry!.topology.nodes[1]!.x).toBe(t0.nodes[1]!.x);
   });
+
+  it('reports an empty undo or redo as no edit', () => {
+    // App resumes autosaving a design opened from a share link on the
+    // first edit. An Undo pressed with nothing to undo is not one, or it
+    // would write the shared design over the reader's own saved session.
+    const calls: boolean[] = [];
+    const h = new SessionHistory({ onChange: (edited) => calls.push(edited) });
+    const t0 = makeTopology();
+
+    expect(h.undo(snap(t0))).toBeNull();
+    expect(h.redo(snap(t0))).toBeNull();
+    expect(calls).toEqual([false, false]);
+
+    h.commit('add', snap(t0));
+    h.undo(snap(moved(t0, t0.nodes[1]!.id, 50, 0)));
+    expect(calls).toEqual([false, false, true, true]);
+  });
 });
 
 describe('note text edits', () => {
@@ -278,6 +309,16 @@ describe('note text edits', () => {
 });
 
 describe('syncEngine', () => {
+  it('pushes an edge lossRate undo into the engine', () => {
+    const t0 = makeTopology();
+    const lossy = structuredClone(t0);
+    lossy.edges[0]!.lossRate = 0.25;
+    const engine = new Engine(lossy);
+    const setTopo = vi.spyOn(engine, 'setTopology');
+    syncEngine(engine, lossy, t0);
+    expect(setTopo).toHaveBeenCalledWith(t0);
+  });
+
   it('applies a config-only undo through updateNodeConfig, without reset', () => {
     const t0 = makeTopology();
     const svcId = t0.nodes[1]!.id;

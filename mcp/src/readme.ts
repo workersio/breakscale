@@ -145,6 +145,10 @@ as real queueing, latency and failures, measured from simulated requests.
   per second. Do this arithmetic when you pick numbers: a design that is
   meant to hold should sit well under it, and one meant to show a
   bottleneck should cross it.
+- A \`service\`, \`worker\` or \`lambda\` that calls something keeps its slot
+  until those calls answer, retries and backoff included. For one of those,
+  use \`serviceMs\` plus the slowest call it waits on in that sum, or the
+  caller will run out of slots well before the arithmetic says it should.
 
 ## Components
 
@@ -202,6 +206,27 @@ To change a design, call create_view again with the whole updated design,
 keeping node ids and positions so the canvas does not jump. If the user
 edited the design on the canvas, their latest version is in your context;
 start from that one.
+
+## Breaking it on a schedule
+
+A design can carry \`faults\`, a list of things that go wrong at set times,
+so a run shows what happens when a part fails and then recovers. \`atMs\`
+is simulated time in milliseconds from the start of the run.
+
+- \`{ "atMs": 10000, "action": "inject", "nodeId": "db", "kind": "crash" }\`
+  takes a node down. Other kinds: \`slow\` with \`"opts": { "factor": 3 }\`
+  (three times slower), \`errors\` with \`"opts": { "rate": 0.2 }\` (20% of
+  requests fail), \`partition\` (its outgoing edges stop carrying
+  requests), and \`crash-instance\` (one of its \`instances\` dies and the
+  rest keep serving, which is how scaling out survives losing a machine
+  and scaling up does not).
+- \`{ "atMs": 20000, "action": "clear", "nodeId": "db" }\` heals it.
+- \`{ "atMs": 5000, "action": "cut", "edgeId": "api->db" }\` cuts one edge
+  and \`restore\` reconnects it. An edge's id is \`from->to\` unless you gave
+  it one.
+
+\`seed\` (a whole number, default 1) picks the random draws. The same
+design, seed and faults always give the same numbers.
 
 ## Saving to a file
 
