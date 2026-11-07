@@ -945,6 +945,8 @@ const lambda: ComponentBehaviour = {
       ctx.countCustom(state, 'warmStart', 1);
     } else {
       ctx.countCustom(state, 'coldStart', 1);
+      // Booked as the function's own work: starting the runtime and running
+      // its init code, which a slowed function does slowly too.
       ctx.addServiceDelay(req, Math.max(0, state.config.coldStartMs ?? 350));
     }
 

@@ -254,6 +254,31 @@ describe('fault controls on a selected node', () => {
     expect(engine.faultSchedule()).toHaveLength(3);
   });
 
+  it('Slow is inert on a kind with no service time, and says why', () => {
+    const { engine } = mount();
+    press(hit('node', 'breaker'));
+
+    const slow = button('Slow');
+    expect(slow.getAttribute('aria-disabled')).toBe('true');
+    const factor = container.querySelector<HTMLSelectElement>(
+      '#' + labelFor('How much slower'),
+    );
+    expect(factor?.disabled).toBe(true);
+    const hint = document.getElementById(slow.getAttribute('aria-describedby') ?? '');
+    expect(hint?.textContent).toBe(
+      'It does no work of its own that takes time, so there is nothing here to slow down. Try it on a component that handles requests.',
+    );
+
+    slow.focus();
+    press(slow);
+    expect(engine.faultSchedule()).toEqual([]);
+    expect(document.activeElement).toBe(slow);
+
+    // The other faults still mean something here.
+    expect(button('Crash').getAttribute('aria-disabled')).toBe('false');
+    expect(button('Glitch').getAttribute('aria-disabled')).toBe('false');
+  });
+
   it('lists the node cables with names that say which cable', () => {
     const { engine } = mount();
     press(hit('node', 'breaker'));

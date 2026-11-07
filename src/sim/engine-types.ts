@@ -205,11 +205,19 @@ export interface BehaviourCtx {
   ): void;
 
   /**
-   * Add `extraMs` to the service time of a request the behaviour is about to
-   * serve -- replication lag on a write, for instance. Applied by
-   * serveWithin() on top of the drawn service time.
+   * Add `extraMs` of this node's own work to a request the behaviour is about
+   * to serve -- a write's indexing cost, for instance. Applied by
+   * serveWithin() on top of the drawn service time, and stretched with it by
+   * a 'slow' fault.
    */
   addServiceDelay(req: ReqLike, extraMs: number): void;
+
+  /**
+   * Add `extraMs` of waiting that is not this node's own work, such as a
+   * write queued behind other writers' locks. Applied by serveWithin() like
+   * addServiceDelay(), but a 'slow' fault leaves it as it is.
+   */
+  addWaitDelay(req: ReqLike, extraMs: number): void;
 
   /**
    * Publish a per-shard utilisation vector for the snapshot. The engine

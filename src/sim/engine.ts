@@ -190,8 +190,17 @@ interface Req {
   key: number;
   /** True when this request is a write. Classified once, inherited downstream. */
   isWrite: boolean;
-  /** Extra service time (ms) a behaviour asked for, consumed by serveWithin(). */
+  /**
+   * Extra work (ms) a behaviour asked for at this node, consumed when its
+   * service starts. Stretched by a 'slow' fault like the drawn time.
+   */
   extraServiceMs: number;
+  /**
+   * Extra waiting (ms) inside service that is not this node's own work, such
+   * as a write's lock wait or a write-behind flush delay. Consumed when its
+   * service starts, and never stretched by a 'slow' fault.
+   */
+  extraWaitMs: number;
   /**
    * Callback a self-managing kind (a sharded store) registers via
    * serveWithin(), fired when this request's service time elapses so the
@@ -789,9 +798,11 @@ export class Engine implements BehaviourCtx {
    *              is failed at injection time. The caller sees a failed call
    *              like any other, so its retry budget and its breaker's error
    *              window both observe it.
-   *   slow       serviceTimeFor() multiplies the drawn service time. Nothing
-   *              else changes, so the caller's timeout starts firing on its
-   *              own -- which is the lesson.
+   *   slow       serviceTimeFor() and ownServiceMs() multiply the node's own
+   *              work: the drawn service time and any surcharge its kind
+   *              adds, on every path, the self-managed stores included.
+   *              Nothing else changes, so the caller's timeout starts firing
+   *              on its own -- which is the lesson.
    *   errors     onServiceComplete() rolls it after the node's own errorRate.
    *   partition  sendChild() refuses to cross a cut edge, so the CALLER sees
    *              the failure. That is what a network partition looks like
@@ -1983,17 +1994,48 @@ export class Engine implements BehaviourCtx {
   /**
    * Draw one service time for a node, with any injected 'slow' fault applied.
    *
-   * Every service-time draw in the engine goes through here, so a slow fault
-   * cannot be bypassed by whichever path a kind happens to take. The RNG is
-   * consumed identically whether or not a fault is present -- the multiplier
-   * scales the drawn value rather than changing the distribution's parameters
-   * -- which keeps a faulted run's random stream aligned with a healthy one.
+   * The acks of ackAndBuffer() and ackAndRelay() and a pass-through's hop
+   * draw through here. A whole service, in startService() or serveWithin(),
+   * goes through ownServiceMs() instead, which stretches the kind's
+   * surcharges too. Between them a slow fault cannot be bypassed by whichever
+   * path a kind happens to take. The RNG is consumed identically whether or
+   * not a fault is present -- the multiplier scales the drawn value rather
+   * than changing the distribution's parameters -- which keeps a faulted
+   * run's random stream aligned with a healthy one.
    */
   private serviceTimeFor(state: NodeState): number {
+    const ms = this.drawServiceMs(state);
+    const factor = this.slowFactorOf(state);
+    return factor > 1 ? ms * factor : ms;
+  }
+
+  /** One unslowed service-time draw, or 0 without a draw when serviceMs is 0. */
+  private drawServiceMs(state: NodeState): number {
     if (!(state.config.serviceMs > 0)) return 0;
-    const ms = this.rng.serviceTime(state.config.serviceMs, state.config.serviceCv);
+    return this.rng.serviceTime(state.config.serviceMs, state.config.serviceCv);
+  }
+
+  /** The 'slow' multiplier in force at a node, or 1 when it has none. */
+  private slowFactorOf(state: NodeState): number {
     const fault = this.faults.get(state.id);
-    if (fault && fault.kind === 'slow') return ms * fault.factor;
+    return fault && fault.kind === 'slow' ? fault.factor : 1;
+  }
+
+  /**
+   * One request's whole time in service at a node: its own work, stretched
+   * by any 'slow' fault, plus any waiting, which is not. Consumes both
+   * extras, so a request entering service again starts clean.
+   */
+  private ownServiceMs(state: NodeState, req: Req, drawnMs: number): number {
+    const factor = this.slowFactorOf(state);
+    const extra = req.extraServiceMs;
+    const wait = req.extraWaitMs;
+    req.extraServiceMs = 0;
+    req.extraWaitMs = 0;
+    // Exactly the old sum when nothing is slowed and nothing waits, so a
+    // healthy run's timings are unchanged to the last bit.
+    let ms = factor > 1 ? (drawnMs + extra) * factor : drawnMs + extra;
+    if (wait > 0) ms += wait;
     return ms;
   }
 
@@ -2072,7 +2114,9 @@ export class Engine implements BehaviourCtx {
     msg.detached = true;
     msg.key = req.key;
     msg.isWrite = req.isWrite;
-    if (extraDeliveryMs > 0) msg.extraServiceMs = extraDeliveryMs;
+    // The flush delay is the time a write sits dirty, not work, so it goes
+    // in as waiting and a 'slow' fault leaves it alone.
+    if (extraDeliveryMs > 0) msg.extraWaitMs = extraDeliveryMs;
 
     // Start delivering now if a slot is free, else park it in the waiting
     // list for pumpQueue to drain. Started BEFORE the caller is acked, in
@@ -2114,14 +2158,12 @@ export class Engine implements BehaviourCtx {
     state.busy++;
     req.holdingSlot = true;
     req.enterMs = this.now;
-    // Any extra service time a behaviour attached to this request (a
-    // write-behind cache's flush residence, booked via ackAndRelay) is
-    // consumed here, exactly as serveWithin() consumes it for the
-    // self-managed kinds. Zero for every request on the ordinary path, so
-    // no existing kind's timing changes.
-    const extra = req.extraServiceMs;
-    if (extra > 0) req.extraServiceMs = 0;
-    const ms = this.serviceTimeFor(state) + extra;
+    // Any extra time a behaviour attached to this request (a write-behind
+    // cache's flush residence, booked via ackAndRelay) is consumed here,
+    // exactly as serveWithin() consumes it for the self-managed kinds. Zero
+    // for every request on the ordinary path, so no existing kind's timing
+    // changes.
+    const ms = this.ownServiceMs(state, req, this.drawServiceMs(state));
     req.ownMs = ms;
     if (ms > 0) {
       this.push(this.now + ms, EV_SERVICE_DONE, state.id, req, req.token);
@@ -2758,10 +2800,13 @@ export class Engine implements BehaviourCtx {
     const req = reqLike as Req;
     req.enterMs = this.now;
     req.onDrained = onDrained;
-    const ms =
-      this.rng.serviceTime(state.config.serviceMs, state.config.serviceCv) +
-      req.extraServiceMs;
-    req.extraServiceMs = 0;
+    // Drawn even when serviceMs is 0, unlike drawServiceMs(): this path has
+    // always drawn, and skipping it would move every later draw in the run.
+    const ms = this.ownServiceMs(
+      state,
+      req,
+      this.rng.serviceTime(state.config.serviceMs, state.config.serviceCv),
+    );
     req.ownMs = ms;
     if (ms > 0) {
       this.push(this.now + ms, EV_SERVICE_DONE, state.id, req, req.token);
@@ -2773,6 +2818,11 @@ export class Engine implements BehaviourCtx {
   addServiceDelay(reqLike: ReqLike, extraMs: number): void {
     if (!(extraMs > 0)) return;
     (reqLike as Req).extraServiceMs += extraMs;
+  }
+
+  addWaitDelay(reqLike: ReqLike, extraMs: number): void {
+    if (!(extraMs > 0)) return;
+    (reqLike as Req).extraWaitMs += extraMs;
   }
 
   markWrite(reqLike: ReqLike, isWrite: boolean): void {
@@ -3064,6 +3114,7 @@ export class Engine implements BehaviourCtx {
       pooled.key = 0;
       pooled.isWrite = false;
       pooled.extraServiceMs = 0;
+      pooled.extraWaitMs = 0;
       pooled.onDrained = null;
       return pooled;
     }
@@ -3093,6 +3144,7 @@ export class Engine implements BehaviourCtx {
       key: 0,
       isWrite: false,
       extraServiceMs: 0,
+      extraWaitMs: 0,
       onDrained: null,
     };
   }

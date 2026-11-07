@@ -381,7 +381,10 @@ const dbStart = (ctx: BehaviourCtx, state: NodeStateLike, req: ReqLike): void =>
   const lockMs = Math.max(0, num(state.config.lockMs, 0));
   const wait = lockMs * ext.writers;
   if (wait > 0) {
-    ctx.addServiceDelay(req, wait);
+    // Waiting, not work, so a slow fault does not stretch it. It still grows
+    // under one: slowed writes hold their slots longer, so more of them are
+    // in flight for the next write to wait behind.
+    ctx.addWaitDelay(req, wait);
     ctx.countCustom(state, 'lockWaitMs', wait);
   }
   ext.writers++;
