@@ -230,6 +230,9 @@
 .mx-line-p99 {
   stroke: var(--text-dim);
   stroke-width: 2;
+  /* Eases with the readout above it, which .is-warn / .is-danger already
+     ease in index.css. The global reduced-motion rule shortens it. */
+  transition: stroke var(--dur-slow) var(--ease);
 }
 
 .mx-line-p99.is-warn {

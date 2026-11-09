@@ -384,6 +384,17 @@
   .pal-row {
     min-height: 44px;
   }
+
+  .pal-search-input {
+    height: 44px;
+    padding-right: 44px;
+  }
+
+  .pal-search-clear {
+    width: 44px;
+    height: 44px;
+    right: 0;
+  }
 }
 
 .pal-row:hover {

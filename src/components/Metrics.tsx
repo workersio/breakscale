@@ -8,6 +8,7 @@ import {
   healthOfLatency,
   type Health,
 } from './format';
+import { useSettledHealth } from './settledHealth';
 import { Term } from './Tooltip';
 import { Trace } from './Trace';
 import { Cost } from './Cost';
@@ -462,6 +463,8 @@ interface LatencyChartProps {
   p50: number;
   p95: number;
   p99: number;
+  /** Sim time of the snapshot, which steps the settled tone. */
+  timeMs: number;
 }
 
 const LatencyChart = memo(function LatencyChart({
@@ -469,6 +472,7 @@ const LatencyChart = memo(function LatencyChart({
   p50,
   p95,
   p99,
+  timeMs,
 }: LatencyChartProps) {
   const { ref, w } = useMeasuredWidth<HTMLDivElement>();
   const { at } = useXScale(history);
@@ -491,8 +495,9 @@ const LatencyChart = memo(function LatencyChart({
   );
 
   // The chart line and the headline number are toned by the same
-  // function, so they can never disagree about what a value means.
-  const tone = healthOfLatency(p99);
+  // function, so they can never disagree about what a value means. Settled
+  // so a p99 hovering on 200ms does not flicker the line (settledHealth.ts).
+  const tone = useSettledHealth(healthOfLatency(p99), timeMs);
   // The frame always renders; the message only claims "no data" when
   // there genuinely is none. A single sample draws its own mark.
   const empty = history.length === 0;
@@ -1161,6 +1166,7 @@ export function Metrics({ snapshot, nodeNames, nodes }: MetricsProps) {
         p50={system.p50}
         p95={system.p95}
         p99={system.p99}
+        timeMs={system.timeMs}
       />
       <ThroughputChart
         history={windowed}

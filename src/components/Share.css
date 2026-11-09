@@ -49,6 +49,30 @@
   animation: sh-scrim-out var(--dur-base) var(--ease) forwards;
 }
 
+/* On a phone the card becomes a bottom sheet, rising from the same edge
+   with the same motion as the panels the tab bar opens. app-sheet-in /
+   app-sheet-out are declared in App.css. */
+@media (max-width: 720px) {
+  .sh-root {
+    place-items: end stretch;
+    padding: 0;
+  }
+
+  .sh-card {
+    width: 100%;
+    max-height: calc(100dvh - var(--sp-7));
+    overflow-y: auto;
+    padding-bottom: calc(var(--sp-5) + env(safe-area-inset-bottom, 0px));
+    border-bottom: 0;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    animation: app-sheet-in var(--dur-base) var(--ease-out);
+  }
+
+  .sh-root.is-closing .sh-card {
+    animation: app-sheet-out var(--dur-base) var(--ease) forwards;
+  }
+}
+
 @keyframes sh-card-in {
   from {
     opacity: 0;
@@ -184,4 +208,19 @@
 
 .sh-note-bad {
   color: var(--danger);
+}
+
+/* The 44px touch floor the shared .btn takes in index.css. Desktop density
+   is unchanged. */
+@media (pointer: coarse) {
+  .sh-close {
+    width: 44px;
+    height: 44px;
+    /* Grows outward rather than pushing the title down. */
+    margin: calc(var(--sp-2) * -1);
+  }
+
+  .sh-btn {
+    min-height: 44px;
+  }
 }

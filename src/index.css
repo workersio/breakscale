@@ -194,7 +194,7 @@
      kept deliberately light: it marks the layer above as active without
      hiding the running simulation, which is the thing the student opened
      that layer to understand. */
-  --scrim: rgba(60, 50, 40, 0.16);
+  --scrim: rgba(60, 50, 40, 0.28);
 
   /* The 1px inset highlight along the top edge of a button.
      A literal white was fine while there was one theme; on a dark ground the
@@ -266,17 +266,22 @@
      Measured, on --bg / --surface / --surface-2 / --surface-3:
        --text        14.60 / 15.35 / 14.11 / 13.24
        --text-dim     6.71 /  7.06 /  6.49 /  6.08
-       --text-faint   5.17 /  5.43 /  5.00 /  4.69
-     ALL THREE pass AA body text (4.5:1) on ALL FOUR surfaces. --text-faint
+       --text-faint   5.32 /  5.59 /  5.14 /  4.82
+     ALL THREE pass AA body text (4.5:1) on ALL FOUR surfaces, and on --track. --text-faint
      was darkened specifically so it is never a trap: there is no surface in
      this app on which it silently fails.
      ------------------------------------------------------------------------ */
   --text: #1e242e;
   --text-dim: #525862;
-  --text-faint: #646972;
+  --text-faint: #626770;
 
   /* On a saturated fill (accent, danger) text is always white. */
   --text-on-fill: #ffffff;
+
+  /* The slider thumb, and the select chevron drawn in --text-faint. A data
+     URI cannot read a custom property, so each theme carries its own. */
+  --thumb-fill: #ffffff;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23626770' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
   /* ------------------------------------------------------------------------
      Accent — a single warm-leaning indigo. Four permitted uses, all meaning
@@ -295,6 +300,7 @@
   --accent-soft: #e3edff; /* tinted chip background; --text on it = 13.23:1 */
   --accent-ink: #2d5277; /* text on --accent-soft = 6.90:1 */
   --accent-ring: rgba(50, 92, 189, 0.32); /* focus halo, flat not glowing */
+  --accent-soft-hover: #d7e5ff; /* hover on a pressed toggle; --accent-ink on it = 6.39:1 */
 
   /* ------------------------------------------------------------------------
      Semantic metric states.
@@ -310,13 +316,13 @@
                                        saturated, never used as text.
 
      Measured as text, worst case across all four surfaces (--surface-3):
-       ok 4.59, warn 5.01, danger 4.74. On --bg: ok 5.06, warn 5.53,
-       danger 5.23. All clear AA on every surface in the app.
+       ok 4.85, warn 5.01, danger 4.74. On --bg: ok 5.35, warn 5.52,
+       danger 5.22. All clear AA on every surface in the app.
      Measured as marks on --bg: ok 3.46, warn 3.24, danger 4.45.
      --warn is a dark bronze, not a yellow. A yellow that passes 4.5:1 on
      paper does not exist; this is the honest answer.
      ------------------------------------------------------------------------ */
-  --ok: #187a3b;
+  --ok: #127638;
   --warn: #945500;
   --danger: #c52b30;
 
@@ -327,6 +333,8 @@
   --ok-soft: #e6f4ea;
   --warn-soft: #fbeedb;
   --danger-soft: #fdeceb;
+  --danger-press: #a8232a; /* white on it = 7.14:1 */
+  --danger-ring: rgba(197, 43, 48, 0.28);
 
   /* ==========================================================================
      PER-KIND COLOUR SYSTEM — the heart of the redesign.
@@ -717,16 +725,19 @@
   --line-5: #c4c1cf;
   --track: #2b2a32;
 
-  /* Text ramp. Ratios on --bg / --surface:
-       --text        15.23 / 14.19
-       --text-dim     7.52 /  7.01
-       --text-faint   5.38 /  5.01
-     All three clear AA; --text and --text-dim clear AAA. */
+  /* Text ramp. Ratios on --bg / --surface / --surface-3:
+       --text        15.23 / 14.19 / 11.25
+       --text-dim     7.52 /  7.01 /  5.56
+       --text-faint   6.27 /  5.84 /  4.63
+     All three clear AA on every surface, --track and the soft plates.
+     --text-faint was 4.0:1 on --surface-3 before it was lifted. */
   --text: #eceaf2;
   --text-dim: #a8a5b4;
-  --text-faint: #8d8a99;
+  --text-faint: #9996a5;
   /* Ink used ON a saturated fill, so it inverts to the dark ground. */
   --text-on-fill: #16151a;
+  --thumb-fill: #eceaf2;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239996a5' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
   --cat-violet: #b491dd;
   --cat-blue: #78aee0;
@@ -740,12 +751,13 @@
   --accent-soft: #1b2740;
   --accent-ink: #a9c6ff; /* on --accent-soft = 8.65:1 */
   --accent-ring: rgba(111, 155, 240, 0.38);
+  --accent-soft-hover: #223150; /* --accent-ink on it = 7.52:1 */
 
-  /* Status. Each clears 4.5:1 on both --bg and --surface, and each -soft
-     plate carries its own ink above 4.5:1. */
+  /* Status. Each clears 4.5:1 on all four surfaces and on --track, and each
+     -soft plate carries its own ink above 4.5:1. */
   --ok: #4ac06e;
   --warn: #d79a2b;
-  --danger: #f0656a;
+  --danger: #f66a6f;
 
   --ok-mark: #3fae61;
   --warn-mark: #c98a1c;
@@ -754,6 +766,8 @@
   --ok-soft: #16301f;
   --warn-soft: #332616;
   --danger-soft: #3a1d1f;
+  --danger-press: #e0585d; /* --text-on-fill on it = 4.94:1 */
+  --danger-ring: rgba(246, 106, 111, 0.38);
 
   /* Shadows read as depth on light and as noise on dark, so they become a
      near-black spread that darkens the ground under a panel instead of a
@@ -937,8 +951,10 @@
 
     --text: #eceaf2;
     --text-dim: #a8a5b4;
-    --text-faint: #8d8a99;
+    --text-faint: #9996a5;
     --text-on-fill: #16151a;
+    --thumb-fill: #eceaf2;
+    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239996a5' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
     --cat-violet: #b491dd;
     --cat-blue: #78aee0;
@@ -950,10 +966,11 @@
     --accent-soft: #1b2740;
     --accent-ink: #a9c6ff;
     --accent-ring: rgba(111, 155, 240, 0.38);
+    --accent-soft-hover: #223150; /* --accent-ink on it = 7.52:1 */
 
     --ok: #4ac06e;
     --warn: #d79a2b;
-    --danger: #f0656a;
+    --danger: #f66a6f;
 
     --ok-mark: #3fae61;
     --warn-mark: #c98a1c;
@@ -962,6 +979,8 @@
     --ok-soft: #16301f;
     --warn-soft: #332616;
     --danger-soft: #3a1d1f;
+    --danger-press: #e0585d; /* --text-on-fill on it = 4.94:1 */
+    --danger-ring: rgba(246, 106, 111, 0.38);
 
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
     --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.36), 0 4px 10px rgba(0, 0, 0, 0.44);
@@ -1767,8 +1786,8 @@ h4 {
 }
 
 .btn-danger:active:not(:disabled) {
-  background: #a8232a;
-  border-color: #a8232a;
+  background: var(--danger-press);
+  border-color: var(--danger-press);
   color: var(--text-on-fill);
   box-shadow: none;
   transform: translateY(1px);
@@ -1776,7 +1795,7 @@ h4 {
 
 .btn-danger:focus-visible {
   outline-color: var(--danger);
-  box-shadow: 0 0 0 4px rgba(197, 43, 48, 0.28);
+  box-shadow: 0 0 0 4px var(--danger-ring);
 }
 
 /* Size variants. */
@@ -1813,13 +1832,6 @@ h4 {
     min-width: 44px;
     min-height: 44px;
   }
-
-  /* The slider's hit band grows the same way: the 32px band that suits a
-     mouse is a miss-prone strip under a finger. Track and thumb keep their
-     size; only the input's touchable height changes. */
-  .slider {
-    height: 44px;
-  }
 }
 
 /* Disabled. Opacity alone would drag the label under 4.5:1, so the disabled
@@ -1849,7 +1861,7 @@ h4 {
 
 .btn[aria-pressed='true']:hover:not(:disabled),
 .btn[data-active='true']:hover:not(:disabled) {
-  background: #d7e5ff;
+  background: var(--accent-soft-hover);
 }
 
 /* --------------------------------------------------------------------------
@@ -1888,6 +1900,17 @@ h4 {
   --fill-pct: 0%;
 }
 
+/* The hit band grows under a finger: the 32px band that suits a mouse is a
+   miss-prone strip under a thumb. Track and thumb keep their size; only the
+   input's touchable height changes. Declared AFTER the rule above: in the
+   shared coarse block it lost to that rule's 32px by source order and never
+   applied. */
+@media (pointer: coarse) {
+  .slider {
+    height: 44px;
+  }
+}
+
 .slider:active {
   cursor: grabbing;
 }
@@ -1917,7 +1940,7 @@ h4 {
   height: var(--thumb);
   margin-top: calc((var(--track-h) - var(--thumb)) / 2);
   border-radius: 50%;
-  background: #ffffff;
+  background: var(--thumb-fill);
   border: 2px solid var(--accent);
   box-shadow: var(--shadow-sm);
   transition:
@@ -1960,7 +1983,7 @@ h4 {
   width: var(--thumb);
   height: var(--thumb);
   border-radius: 50%;
-  background: #ffffff;
+  background: var(--thumb-fill);
   border: 2px solid var(--accent);
   box-shadow: var(--shadow-sm);
   transition:
@@ -2055,9 +2078,8 @@ input[type='number'] {
 select {
   padding-right: var(--sp-7);
   cursor: pointer;
-  /* Neutral chevron, inlined so no network request is needed.
-     Stroke is --text-faint (#646972). */
-  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23646972' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  /* Neutral chevron, inlined so no network request is needed. */
+  background-image: var(--select-chevron);
   background-repeat: no-repeat;
   background-position: right var(--sp-3) center;
   -webkit-appearance: none;

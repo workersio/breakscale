@@ -52,6 +52,14 @@ describe('fit with the challenge sheet up on a phone', () => {
     expect((r.left + r.right) / 2).toBeCloseTo(195, 5);
   });
 
+  it('fits all three cards on a 360px phone', () => {
+    const surface: FitRect = { left: 0, top: 160, width: 360, height: 524 };
+    const r = onScreen(threeInARow, surface, surface);
+    expect(r.k).toBeGreaterThanOrEqual(FIT_MIN_NARROW);
+    expect(r.left).toBeGreaterThanOrEqual(0);
+    expect(r.right).toBeLessThanOrEqual(360);
+  });
+
   it('stops at the phone floor and centres what overflows', () => {
     const wide: FitBounds = { minX: 0, minY: 0, maxX: 2000, maxY: 300 };
     const r = onScreen(wide, phoneSurface, above(sheetFolded));

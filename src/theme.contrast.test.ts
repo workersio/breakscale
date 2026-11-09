@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { ratio } from './theme/contrast';
 import { readTokens, resolve } from './theme/tokens';
 import type { Tokens } from './theme/tokens';
@@ -29,6 +29,11 @@ const THEMES: Array<[string, Tokens]> = [
 const AA = 4.5;
 /** WCAG AA for large text and for non-text UI components. */
 const AA_LARGE = 3;
+
+/** Every opaque ground in the app, plus the meter trough. */
+const SURFACES = ['--bg', '--surface', '--surface-2', '--surface-3', '--track'];
+const SOFT_PLATES = ['--accent-soft', '--ok-soft', '--warn-soft', '--danger-soft'];
+const TEXT_GROUNDS = [...SURFACES, ...SOFT_PLATES];
 
 function colour(t: Tokens, name: string): string {
   const v = resolve(t, name);
@@ -55,14 +60,15 @@ describe.each(THEMES)('%s theme', (_name, tokens) => {
     }
   });
 
-  it('keeps the faintest text above the large-text floor', () => {
-    // --text-faint is used for labels set in caps at a larger optical size,
-    // which is why it is held to AA_LARGE rather than AA.
-    for (const surface of ['--bg', '--surface']) {
+  it('carries the faintest text at AA wherever text is painted', () => {
+    // --text-faint used to be held only to the large-text floor, on two
+    // surfaces. It captions small mono numbers inside chips, table bands and
+    // meter rows, so it gets the body-text bar on every plate it lands on.
+    for (const surface of TEXT_GROUNDS) {
       expect(
         ratio(colour(tokens, '--text-faint'), colour(tokens, surface)),
         `--text-faint on ${surface}`,
-      ).toBeGreaterThanOrEqual(AA_LARGE);
+      ).toBeGreaterThanOrEqual(AA);
     }
   });
 
@@ -81,9 +87,11 @@ describe.each(THEMES)('%s theme', (_name, tokens) => {
     }
   });
 
-  it('carries status colours at AA on both surfaces', () => {
+  it('carries status colours at AA on every surface and on the track', () => {
+    // A health word sits in a pressed row as often as on a panel, and the
+    // dark --danger was 4.32 on --surface-3 while both surfaces passed.
     for (const status of ['--ok', '--warn', '--danger', '--accent']) {
-      for (const surface of ['--bg', '--surface']) {
+      for (const surface of SURFACES) {
         expect(
           ratio(colour(tokens, status), colour(tokens, surface)),
           `${status} on ${surface}`,
@@ -103,6 +111,52 @@ describe.each(THEMES)('%s theme', (_name, tokens) => {
         ratio(colour(tokens, ink!), colour(tokens, soft!)),
         `${ink} on ${soft}`,
       ).toBeGreaterThanOrEqual(AA);
+    }
+  });
+
+  it('keeps neutral text readable on every soft plate', () => {
+    // Chips put a caption beside the coloured word, so the plate has to carry
+    // the neutral ramp too, not only its own ink.
+    for (const ink of ['--text', '--text-dim', '--text-faint']) {
+      for (const soft of SOFT_PLATES) {
+        expect(
+          ratio(colour(tokens, ink), colour(tokens, soft)),
+          `${ink} on ${soft}`,
+        ).toBeGreaterThanOrEqual(AA);
+      }
+    }
+  });
+
+  it('keeps pressed and hovered fills readable', () => {
+    // These were literal hex in the button rules, tuned for light only. In
+    // dark the pressed toggle's hover put --accent-ink on a pale blue at
+    // 1.35:1, and a pressed delete put dark text on a dark red at 2.54:1.
+    for (const [ink, fill] of [
+      ['--accent-ink', '--accent-soft-hover'],
+      ['--text-on-fill', '--danger'],
+      ['--text-on-fill', '--danger-press'],
+    ]) {
+      expect(
+        ratio(colour(tokens, ink!), colour(tokens, fill!)),
+        `${ink} on ${fill}`,
+      ).toBeGreaterThanOrEqual(AA);
+    }
+  });
+
+  it("draws the select chevron in this theme's faint ink", () => {
+    // A data URI cannot read a custom property, so the stroke is spelled out
+    // per theme. The light one used to be the only one, at 2.78:1 on a dark
+    // input.
+    const stroke = /stroke='%23([0-9a-f]{6})'/i.exec(
+      tokens['--select-chevron'] ?? '',
+    )?.[1];
+    expect(stroke, 'chevron stroke').toBeDefined();
+    expect(`#${stroke}`).toBe(colour(tokens, '--text-faint'));
+    for (const surface of ['--surface', '--surface-2']) {
+      expect(
+        ratio(`#${stroke}`, colour(tokens, surface)),
+        `chevron on ${surface}`,
+      ).toBeGreaterThanOrEqual(AA_LARGE);
     }
   });
 
@@ -257,5 +311,63 @@ describe('theme parity', () => {
       expect(dark[k], `${k} drifted between the explicit and OS dark blocks`).toBe(v);
     }
     expect(Object.keys(auto).length).toBeGreaterThan(140);
+  });
+});
+
+describe('stylesheets', () => {
+  // Every stylesheet the app ships, read off disk for the same reason as
+  // index.css above.
+  const sheets = ['.', './components'].flatMap((dir) =>
+    readdirSync(new URL(dir, import.meta.url))
+      .filter((f) => f.endsWith('.css'))
+      .map((f) => {
+        const path = `${dir}/${f}`;
+        return [path, readFileSync(new URL(path, import.meta.url), 'utf8')] as const;
+      }),
+  );
+
+  // Blank comments out but keep their newlines, so line numbers still match.
+  const stripComments = (text: string) =>
+    text.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ''));
+
+  it('finds the stylesheets it is meant to check', () => {
+    expect(sheets.map(([p]) => p)).toEqual(
+      expect.arrayContaining(['./index.css', './App.css', './components/Canvas.css']),
+    );
+  });
+
+  it('writes colour only as a token declaration', () => {
+    // AGENTS.md: all colour comes from tokens. A literal in a rule is how the
+    // dark theme picked up a light-only pressed fill, so any hex or rgb()
+    // outside a `--name:` line fails here.
+    const offenders: string[] = [];
+    for (const [path, text] of sheets) {
+      stripComments(text)
+        .split('\n')
+        .forEach((line, i) => {
+          if (
+            /#[0-9a-f]{3,8}\b|rgba?\(/i.test(line) &&
+            !/^\s*--[a-z0-9-]+:/i.test(line)
+          ) {
+            offenders.push(`${path}:${i + 1} ${line.trim()}`);
+          }
+        });
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('never dims a disabled control with opacity', () => {
+    // Opacity takes the label down with it: the disabled Inspect tab read at
+    // 1.89:1. Disabled states are expressed with tokens instead.
+    const offenders: string[] = [];
+    for (const [path, text] of sheets) {
+      for (const m of stripComments(text).matchAll(
+        /([^{}]*:disabled[^{}]*)\{([^}]*)\}/g,
+      )) {
+        if (/\bopacity\s*:/.test(m[2] ?? ''))
+          offenders.push(`${path}: ${(m[1] ?? '').trim()}`);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });

@@ -157,7 +157,10 @@
   background: var(--ok-mark);
   /* No width transition: this is a 10Hz readout, and transitioning it kept
      the bar permanently animating under load, always ~200ms behind the
-     number beside it. It steps with the digits instead. */
+     number beside it. It steps with the digits instead. The colour does
+     ease, like the digits' own, because it only moves when a threshold is
+     crossed. */
+  transition: background-color var(--dur-slow) var(--ease);
 }
 
 /* The bar uses the -mark tokens: they are fills, never text, and they carry
@@ -918,13 +921,21 @@
     min-width: 0;
   }
 
+  /* The slider shares its line with the transport, which sits on its
+     right. With the transport on the value line the three no longer fit
+     beside the load and p99, so they wrapped onto a line of their own and
+     the control stood 162px tall. Paired with the slider it is about 100. */
   .traffic-load-track {
-    flex: 1 1 100%;
+    /* The width left once the transport (a 48px play button, two 44px touch
+       buttons, two 4px gaps) and one column gap are taken, plus 4px of
+       slack. A basis this wide can never fit beside the readouts, so the
+       track always starts the second line. */
+    flex: 1 1 calc(100% - 164px);
     min-width: 0;
     order: 1;
   }
 
-  /* p99 and the transport share the load figure's line, pushed right. */
+  /* p99 shares the load figure's line, pushed right. */
   .traffic-headline {
     flex: 0 1 auto;
     align-items: baseline;
@@ -946,7 +957,7 @@
 
   .traffic-actions {
     flex: none;
-    order: 0;
+    order: 1;
     gap: var(--sp-1);
   }
 
