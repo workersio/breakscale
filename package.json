@@ -21,9 +21,9 @@
   },
   "dependencies": {
     "@vercel/analytics": "^2.0.1",
-    "@vercel/speed-insights": "^2.0.0",
-    "lucide": "^1.62.0",
-    "lucide-react": "^1.62.0",
+    "@vercel/speed-insights": "^2.1.0",
+    "lucide": "^1.70.0",
+    "lucide-react": "^1.70.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
