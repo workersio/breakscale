@@ -1242,6 +1242,18 @@
     justify-content: center;
   }
 
+  /* "Can you break it?" keeps a word here (see .app-break-short), since a
+     bare bolt says nothing to someone who has not used it. The glyph gives
+     up its room instead, which is what lets the word fit the one row. */
+  .app-break-btn {
+    width: auto;
+    padding: 0 var(--sp-2);
+  }
+
+  .app-break-btn svg {
+    display: none;
+  }
+
   /* The load control is the one thing a reader touches constantly, so it
      gets its own full-width row under the identity row, with a rule
      between them. */
@@ -1370,6 +1382,37 @@
   .cv-ledger,
   .stage-toggle {
     display: none;
+  }
+}
+
+/* The narrowest common phones (360px) need about 30px more for that word
+   than the row has. The islands' spacing gives it up, so the row stays one
+   row rather than wrapping the menu island under the wordmark. */
+@media (max-width: 379px) {
+  .app-island {
+    gap: var(--sp-1);
+    padding-inline: var(--sp-2);
+  }
+
+  .app-island-menu,
+  .app-history {
+    gap: var(--sp-1);
+  }
+
+  .app-island-menu {
+    padding-left: 0;
+  }
+
+  .app-break-btn {
+    padding: 0 var(--sp-1);
+  }
+}
+
+/* Narrower still, the menu island wraps under the wordmark, and there it
+   starts at the screen edge unless it keeps its own inset. */
+@media (max-width: 339px) {
+  .app-island-menu {
+    padding-left: var(--sp-2);
   }
 }
 

@@ -1474,8 +1474,8 @@ export default function App() {
    * On a phone the brief is a sheet over the foot of the canvas, and the
    * part of the canvas above it is all the student has to look at. A fixed
    * guess at its height framed the diagram partly under it. The measured
-   * height goes straight onto the sentinel as --chal-sheet-h (read by the
-   * phone rule in Challenge.css) rather than through React state, so a
+   * height goes straight onto the sentinel's parent as --chal-sheet-h, which
+   * the sentinel inherits (read by the phone rule in Challenge.css) rather than through React state, so a
    * resize refit already queued for the next frame measures the new rect.
    *
    * Folding or opening the sheet, or its first measurement on a new start
@@ -1496,7 +1496,12 @@ export default function App() {
       sheetShutRef.current = null;
       return;
     }
-    stageSafeRef.current?.style.setProperty('--chal-sheet-h', `${height}px`);
+    // On the stage, so the sentinel and the canvas chrome beside it ("What
+    // just happened", above the sheet on a phone) both inherit it.
+    stageSafeRef.current?.parentElement?.style.setProperty(
+      '--chal-sheet-h',
+      `${height}px`,
+    );
     const was = sheetShutRef.current;
     sheetShutRef.current = shut;
     if (phoneRef.current && was !== shut) setFitNonce((n) => n + 1);
@@ -3086,6 +3091,11 @@ export default function App() {
   /* ---------------- can you break it? ---------------- */
 
   const breakShown = breakOpen && !challenge;
+  /* The tour's card and the break panel share the column under the bar, so
+     the tour steps aside while the panel is open and comes back where it
+     was when it closes. Hidden, not ended: its first step says to break it
+     on purpose, and that is not a reason to lose it. */
+  const tourShown = tour.open && !breakShown;
   const breakSearch = useBreakSearch(breakShown, topology);
   const breakView = breakSearch.view;
 
@@ -4074,7 +4084,9 @@ export default function App() {
               breakMarks={breakMarks}
               emptyActions={emptyActions}
               fitTight={challenge !== undefined}
-              spotlightId={tour.spotlight ?? spotlightOf(shownFinding)}
+              spotlightId={
+                (tourShown ? tour.spotlight : null) ?? spotlightOf(shownFinding)
+              }
             />
             <RouteAlert routes={routes} nodeNames={nodeNames} />
             {/* Hidden in a challenge, where finding it is the exercise. */}
@@ -4091,7 +4103,7 @@ export default function App() {
             {!challenge ? (
               <WhatHappened topology={topology} snapshot={snapshot} />
             ) : null}
-            {tour.open ? (
+            {tourShown ? (
               <Tour
                 tour={tour}
                 topology={topology}

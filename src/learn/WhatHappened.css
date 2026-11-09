@@ -33,6 +33,15 @@
   right: calc(var(--ins-w) + var(--sp-3) * 2);
 }
 
+/* "Can you break it?" takes the right-hand column under the bar, the way a
+   brief does (this panel is hidden in a brief), so this sits beside it. On
+   a phone the break panel is a bottom sheet; see the phone block below. */
+@media (min-width: 721px) {
+  .app-body.has-challenge:not(.has-inspector) .wh {
+    right: calc(var(--chal-w) + var(--sp-3) * 2);
+  }
+}
+
 .app-body.has-metrics .wh {
   bottom: calc(var(--strip-shown) + var(--sp-3) * 2 + var(--wh-zoom-h) + var(--sp-2));
 }
@@ -131,6 +140,22 @@
      up, it and this panel together would cover the part it points at, so
      this steps aside until the answer is put away. */
   .app-body:has(.fp-answer) .wh {
+    display: none;
+  }
+
+  /* "Can you break it?" is a sheet at the foot of a phone's canvas (this
+     panel is hidden in a brief, the other sheet there). Folded, this sits
+     above it, clear by the sheet's measured height (see handleSheetResize).
+     Open, the sheet is what is being read, and this steps aside the same
+     way until it is folded or closed. */
+  .app-body.has-challenge .wh {
+    bottom: calc(
+      var(--chal-sheet-h, var(--chal-fold-h)) + env(safe-area-inset-bottom, 0px) +
+        var(--sp-3)
+    );
+  }
+
+  .app-body:has(.chal:not(.is-collapsed)) .wh {
     display: none;
   }
 }
