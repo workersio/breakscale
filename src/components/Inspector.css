@@ -144,6 +144,47 @@
   margin-bottom: var(--sp-2);
 }
 
+/* The words printed on the node's box, defined. A key rather than a
+   readout, so it stays one step quieter than the stats: label-size caps in
+   the box's own register on the left, the definition in dim prose beside it.
+   --text-dim on --surface is 7.06:1 light and 7.01:1 dark. */
+.ins-box-key {
+  margin-bottom: var(--sp-5);
+}
+
+.ins-box-key > .label {
+  margin: 0 0 var(--sp-1);
+}
+
+.ins-box-key dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--sp-1) var(--sp-3);
+  margin: 0;
+}
+
+.ins-box-key-row {
+  display: contents;
+}
+
+.ins-box-key dt {
+  font-size: var(--fs-label);
+  font-weight: var(--fw-num);
+  line-height: var(--lh-sm);
+  letter-spacing: var(--tr-label);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.ins-box-key dd {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  color: var(--text-dim);
+  text-wrap: pretty;
+}
+
 .ins-meter {
   height: 6px;
   border-radius: var(--r-pill);

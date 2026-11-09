@@ -17,13 +17,14 @@ import type { VendorId } from './vendors/types';
 
 export interface Preferences {
   /**
-   * Show the dotted underlines and hover explanations on metric terms.
+   * Explain metric terms on hover, focus and tap.
    *
-   * OFF by default, deliberately. Forty dotted underlines on one screen make
-   * the interface look busier than it is, and a student who wants the
-   * explanations can turn them on. The glossary panel stays available either
-   * way, so nothing becomes unreachable when this is off; it just stops
-   * decorating every number.
+   * ON by default. It shipped off because forty dotted underlines made the
+   * first screen look busy, and the cost was that a student who did not know
+   * what p99 meant never found out the answer was one hover away. Terms are
+   * now unmarked at rest (Tooltip.css), so the default can be the useful one.
+   * Turning it off also drops the forty tab stops, for anyone who would
+   * rather keyboard past them; the glossary panel stays available either way.
    */
   tooltips: boolean;
   /** Draw the small trend line on each node. */
@@ -64,7 +65,7 @@ export type ThemeChoice = 'light' | 'dark' | 'system';
 export const THEME_CHOICES: readonly ThemeChoice[] = ['light', 'dark', 'system'];
 
 export const DEFAULT_PREFERENCES: Preferences = {
-  tooltips: false,
+  tooltips: true,
   sparklines: true,
   snapToGrid: true,
   minimap: false,

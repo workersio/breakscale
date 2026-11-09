@@ -83,6 +83,16 @@ describe('the term affordance', () => {
     expect(contrast(TOKEN.line3, background)).toBeGreaterThanOrEqual(GRAPHIC_MIN);
   });
 
+  /* On a touch screen the underline stays on at rest (Tooltip.css), so the
+     dark theme's ink has to clear the same bar. */
+  it.each([
+    ['bg', '#16151a'],
+    ['surface', '#1d1c22'],
+    ['surface-2', '#25242b'],
+  ])('is visible on dark %s', (_name, background) => {
+    expect(contrast('#807d8c', background)).toBeGreaterThanOrEqual(GRAPHIC_MIN);
+  });
+
   it('would have failed with the quieter divider ink', () => {
     // Pins the defect this file was written for, so nobody "tidies" the
     // underline back to --border-strong.

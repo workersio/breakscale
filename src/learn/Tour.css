@@ -1,0 +1,140 @@
+/* --------------------------------------------------------------------------
+   First-visit tour
+
+   Canvas chrome in the top-right corner, under the inspector toggle, so it
+   steps left of an open inspector rather than covering the field step 3
+   points at. Nothing is dimmed: the canvas and the bar keep every gesture.
+   -------------------------------------------------------------------------- */
+
+.tour {
+  position: absolute;
+  z-index: 6;
+  top: calc(var(--bar-clear) + 32px + var(--sp-2));
+  right: var(--sp-3);
+  pointer-events: none;
+  transition: right var(--dur-base) var(--ease);
+}
+
+.tour > * {
+  pointer-events: auto;
+}
+
+.app-body.has-inspector .tour {
+  right: calc(var(--ins-w) + var(--sp-3) * 2);
+}
+
+.tour-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: min(340px, calc(100vw - var(--sp-4) * 2));
+  padding: var(--sp-3);
+  background: var(--surface);
+  border: var(--bw) solid var(--border-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-btn);
+  box-shadow: var(--shadow-lg);
+}
+
+/* Focus lands on the card only so a screen reader starts each step at its
+   title; the card is not a control, so it draws no focus ring. */
+.tour-card:focus {
+  outline: none;
+}
+
+.tour-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  /* The skip button's own padding lines its text up with the card edge. */
+  margin: calc(var(--sp-1) * -1) calc(var(--sp-1) * -1) 0 0;
+}
+
+.tour-step {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.tour-step .num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+.tour-skip {
+  color: var(--text-dim);
+}
+
+.tour-title {
+  margin: 0;
+  font-size: var(--fs-base);
+  font-weight: var(--fw-med);
+  line-height: var(--lh-base);
+  color: var(--text);
+}
+
+.tour-body p {
+  margin: 0;
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+  color: var(--text);
+  text-wrap: pretty;
+}
+
+.tour-body p + p {
+  margin-top: var(--sp-2);
+}
+
+.tour-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+/* The control a step points at. An outline, so it draws outside the
+   element's own border and moves nothing. */
+[data-tour-ring] {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: var(--r-sm);
+}
+
+/* The tour already says what is happening, step by step, so "What just
+   happened" waits until it ends rather than telling the same story in a
+   second panel over the part the tour is pointing at. */
+.app-body:has(.tour) .wh {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  /* Docked on the tab bar, where "What just happened" sits: the diagram
+     keeps the middle of the screen. Over the inspector sheet too (z 10),
+     since step 3 happens in that sheet. */
+  .tour,
+  .app-body.has-inspector .tour {
+    position: fixed;
+    z-index: 12;
+    top: auto;
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + var(--sp-2));
+    left: var(--sp-3);
+    right: var(--sp-3);
+  }
+
+  .tour-card {
+    width: auto;
+    gap: var(--sp-1);
+    padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  }
+
+  .tour-body p {
+    font-size: var(--fs-sm);
+    line-height: var(--lh-sm);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tour {
+    transition: none;
+  }
+}

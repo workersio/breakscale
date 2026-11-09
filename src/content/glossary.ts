@@ -220,7 +220,7 @@ export const GLOSSARY: GlossaryEntry[] = [
     id: 'capacity',
     term: 'Capacity',
     short: 'How many requests a component can work on at once',
-    why: 'Think of it as the number of checkout tills open. Anything beyond that waits in line. Capacity times (1000 ÷ service time) gives the most requests per second a component can possibly handle.',
+    why: 'Think of it as the number of checkout tills open; each one is a slot. Anything beyond that waits in line. Capacity times (1000 ÷ service time) gives the most requests per second a component can possibly handle.',
     category: 'capacity',
     aliases: ['slots', 'concurrency'],
     see: ['service-time', 'utilisation', 'instances'],
@@ -267,6 +267,24 @@ export const GLOSSARY: GlossaryEntry[] = [
     why: 'A system is only as fast as its narrowest point. Adding capacity anywhere else changes nothing, which is why finding the bottleneck matters more than optimising everything.',
     category: 'capacity',
     see: ['utilisation', 'instances'],
+  },
+  {
+    id: 'waiting-on-calls',
+    term: 'Waiting on its calls',
+    short: 'Slots held while a request waits on a component it called',
+    why: 'A server that calls a database keeps the request\u2019s slot for the whole time it waits for the answer, even though it is doing no work. That is how a server can look barely busy with every slot taken: the slow part is further down, and its wait is being held here.',
+    category: 'capacity',
+    aliases: ['waiting on downstream', 'held slots', 'blocked'],
+    see: ['backpressure', 'capacity', 'bottleneck'],
+  },
+  {
+    id: 'backpressure',
+    term: 'Backpressure',
+    short: 'A slow part pushing its wait back onto whoever calls it',
+    why: 'When one component falls behind, everything that calls it waits longer and holds its slots longer, so the callers fill up too, all the way back to your users. The part that looks full is often not the cause. Follow the slots waiting on calls down the chain until you reach the part busy doing real work.',
+    category: 'capacity',
+    aliases: ['back pressure', 'back-pressure', 'blocking'],
+    see: ['waiting-on-calls', 'bottleneck', 'queue'],
   },
 
   /* ---- components ----------------------------------------------------- */

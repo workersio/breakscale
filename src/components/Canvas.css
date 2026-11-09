@@ -296,6 +296,34 @@
   pointer-events: none;
 }
 
+/* "Find the problem" points here. A solid ring in the danger mark plus a
+   word, so the answer never rests on colour alone. Inert: it sits above the
+   nodes but every press goes through to the node under it. */
+.cv-spotlight {
+  pointer-events: none;
+}
+
+.cv-spotlight-ring {
+  fill: none;
+  stroke: var(--danger-mark);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.cv-spotlight-tag {
+  fill: var(--danger-soft);
+  stroke: var(--danger-mark);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.cv-spotlight-label {
+  fill: var(--danger);
+  font-family: var(--sans);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
 /* --------------------------------------------------------------------------
    Nodes
 

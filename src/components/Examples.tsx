@@ -27,6 +27,8 @@ export interface ExamplesProps {
   presets: readonly Preset[];
   activePresetId: string | null;
   onLoad: (preset: Preset) => void;
+  /** Opens the learning path, which orders these with the challenges. */
+  onOpenPath?: () => void;
 }
 
 export function Examples({
@@ -35,6 +37,7 @@ export function Examples({
   presets,
   activePresetId,
   onLoad,
+  onOpenPath,
 }: ExamplesProps) {
   const { mounted, closing, unmount } = usePresence(open);
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -109,9 +112,23 @@ export function Examples({
               Load a system that already works, then take it apart.
             </p>
           </div>
-          <button type="button" className="btn" onClick={onClose}>
-            Close
-          </button>
+          <div className="ex-head-actions">
+            {onOpenPath ? (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  onClose();
+                  onOpenPath();
+                }}
+              >
+                Learning path
+              </button>
+            ) : null}
+            <button type="button" className="btn" onClick={onClose}>
+              Close
+            </button>
+          </div>
         </header>
 
         <input

@@ -126,6 +126,10 @@ export const NODE_W = 184;
 export const NODE_H = 88;
 /** Radii come from the design scale (3/4/6). The node body is the 6. */
 const NODE_R = 6;
+/** The spotlight ring's gap from the node, and its tag's size. */
+const SPOT_PAD = 8;
+const SPOT_TAG_W = 48;
+const SPOT_TAG_H = 22;
 /**
  * Gap between the node's outline and the selection ring drawn around it.
  *
@@ -502,6 +506,12 @@ export interface CanvasProps {
    * rather than leave a box under the brief's panel; see FIT_MIN_TIGHT.
    */
   fitTight?: boolean;
+  /**
+   * A node to point at: a ring and a "Here" tag around it, drawn above the
+   * nodes and never hit-tested. Set by the shell's "Find the problem", and
+   * panned into view when it changes. Null or absent draws nothing.
+   */
+  spotlightId?: string | null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -584,7 +594,7 @@ function worstHealth(a: Health, b: Health): Health {
  * The share of a blocking node's slots that are taken, working or waiting on
  * a call it made, or `util` for a node that cannot wait (the field is absent).
  */
-function heldShare(s: NodeStats, cfg: NodeConfig, util: number): number {
+export function heldShare(s: NodeStats, cfg: NodeConfig, util: number): number {
   const waiting = s.waitingOnDownstream;
   if (waiting === undefined) return util;
   const slots =
@@ -3462,6 +3472,7 @@ export default function Canvas({
   breakMarks,
   emptyActions,
   fitTight = false,
+  spotlightId = null,
 }: CanvasProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
@@ -5770,6 +5781,62 @@ export default function Canvas({
       .join(', ');
   }, [topology.nodes]);
 
+  const spotNode = spotlightId ? (nodeById.get(spotlightId) ?? null) : null;
+
+  /* Pan a spotlit node into view when it is off screen or under a panel,
+     keeping the zoom. Keyed on the id alone, so the camera moves once per
+     answer and never fights a pan the student makes afterwards. */
+  useEffect(() => {
+    if (!spotlightId) return;
+    const n = topoRef.current.nodes.find((x) => x.id === spotlightId);
+    const rects = visibleRect();
+    if (!n || !rects) return;
+    const { surface, view } = rects;
+    const v = viewRef.current;
+    const left = surface.left + (n.x - SPOT_PAD) * v.k + v.x;
+    const top = surface.top + (n.y - SPOT_PAD - SPOT_TAG_H - 4) * v.k + v.y;
+    const right = surface.left + (n.x + NODE_W + SPOT_PAD) * v.k + v.x;
+    const bottom = surface.top + (n.y + NODE_H + SPOT_PAD) * v.k + v.y;
+    /* Panels marked [data-spot-avoid] (the answer that named this node,
+       an open "What just happened") cover the canvas. One that overlaps
+       the node trims the band it sits in, top or bottom, from the area the
+       node is centred in. On a phone that band is most of the strip. */
+    let visTop = view.top;
+    let visBottom = view.bottom;
+    let covered = false;
+    for (const el of document.querySelectorAll('[data-spot-avoid]')) {
+      const o = el.getBoundingClientRect();
+      if (o.width === 0 || o.height === 0) continue;
+      const mid = (view.top + view.bottom) / 2;
+      if ((o.top + o.bottom) / 2 < mid) visTop = Math.max(visTop, o.bottom);
+      else visBottom = Math.min(visBottom, o.top);
+      if (o.left < right && o.right > left && o.top < bottom && o.bottom > top) {
+        covered = true;
+      }
+    }
+    if (
+      !covered &&
+      left >= view.left &&
+      right <= view.right &&
+      top >= view.top &&
+      bottom <= view.bottom
+    ) {
+      return;
+    }
+    // Panels taller than the room between them leave nothing to centre in.
+    if (visBottom - visTop < (bottom - top) / 2) {
+      visTop = view.top;
+      visBottom = view.bottom;
+    }
+    const cx = view.left + view.width / 2 - surface.left;
+    const cy = (visTop + visBottom) / 2 - surface.top;
+    setView({
+      k: v.k,
+      x: cx - (n.x + NODE_W / 2) * v.k,
+      y: cy - (n.y + NODE_H / 2) * v.k,
+    });
+  }, [spotlightId, visibleRect]);
+
   const detail: 0 | 1 | 2 = view.k >= DETAIL_ZOOM ? 2 : view.k >= MINIMAL_ZOOM ? 1 : 0;
   const showEdgeLabels = view.k >= 1;
 
@@ -6128,6 +6195,38 @@ export default function Canvas({
                 />
               ))}
             </g>
+
+            {spotNode && (
+              <g className="cv-spotlight" aria-hidden="true">
+                <rect
+                  className="cv-spotlight-ring"
+                  x={spotNode.x - SPOT_PAD}
+                  y={spotNode.y - SPOT_PAD}
+                  width={NODE_W + SPOT_PAD * 2}
+                  height={NODE_H + SPOT_PAD * 2}
+                  rx={NODE_R + SPOT_PAD}
+                />
+                <g
+                  transform={`translate(${spotNode.x - SPOT_PAD} ${spotNode.y - SPOT_PAD - SPOT_TAG_H - 4})`}
+                >
+                  <rect
+                    className="cv-spotlight-tag"
+                    width={SPOT_TAG_W}
+                    height={SPOT_TAG_H}
+                    rx={NODE_R}
+                  />
+                  <text
+                    className="cv-spotlight-label"
+                    x={SPOT_TAG_W / 2}
+                    y={SPOT_TAG_H / 2}
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                  >
+                    Here
+                  </text>
+                </g>
+              </g>
+            )}
 
             {/* Notes LAST among content: commentary is never hidden by the
                 diagram it comments on. */}

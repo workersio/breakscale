@@ -1,0 +1,239 @@
+/* ==========================================================================
+   The learning path dialog.
+
+   Rides the examples shell (.ex-root, .ex-card, .ex-head). Narrower than the
+   gallery, because this is one column read top to bottom and a row of prose
+   980px wide is not readable.
+   ========================================================================== */
+
+.lp-card {
+  width: min(680px, 100%);
+}
+
+.lp-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-height: 0;
+  margin-right: calc(var(--sp-1) * -1);
+  padding-right: var(--sp-1);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+  overscroll-behavior: contain;
+}
+
+.lp-num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------------------
+   Up next
+   -------------------------------------------------------------------------- */
+
+.lp-next {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: var(--sp-3);
+  background: var(--surface-2);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--r-btn);
+}
+
+.lp-next-label {
+  margin: 0;
+}
+
+.lp-next-open {
+  max-width: 100%;
+}
+
+.lp-next-learn,
+.lp-all-done {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-prose);
+  color: var(--text-dim);
+}
+
+.lp-rule {
+  margin: calc(var(--sp-2) * -1) 0 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-prose);
+  color: var(--text-faint);
+  text-wrap: pretty;
+}
+
+/* --------------------------------------------------------------------------
+   Tracks
+   -------------------------------------------------------------------------- */
+
+.lp-track {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.lp-track-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.lp-track-title {
+  margin: 0;
+  font-size: var(--fs-base);
+  font-weight: var(--fw-med);
+  line-height: var(--lh-sm);
+  color: var(--text);
+}
+
+.lp-track-count {
+  flex: none;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.lp-track-about {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  color: var(--text-dim);
+}
+
+.lp-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* One step: a mark, the name and what it teaches, and where it stands. */
+.lp-step {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: var(--sp-3);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  text-align: left;
+  font: inherit;
+  background: transparent;
+  border: var(--bw) solid transparent;
+  border-radius: var(--r-btn);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.lp-step:hover {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.lp-step:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The step to do next is marked by its border and a word, as the loaded
+   example is in the gallery, never by colour alone. */
+.lp-step[data-next] {
+  border-color: var(--accent);
+}
+
+.lp-mark {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-pill);
+}
+
+.lp-step[data-status='done'] .lp-mark {
+  color: var(--ok);
+  border-color: var(--ok-mark);
+}
+
+.lp-step-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.lp-step-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--sp-2);
+  font-size: var(--fs-base);
+  font-weight: var(--fw-med);
+  line-height: var(--lh-sm);
+  color: var(--text);
+}
+
+.lp-kind {
+  font-size: var(--fs-label);
+  font-weight: var(--fw-med);
+  letter-spacing: var(--tr-label);
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.lp-step-learn {
+  font-size: var(--fs-sm);
+  line-height: var(--lh-prose);
+  color: var(--text-dim);
+  text-wrap: pretty;
+}
+
+.lp-status {
+  padding-top: 3px;
+  font-size: var(--fs-label);
+  font-weight: var(--fw-med);
+  letter-spacing: var(--tr-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--accent-ink);
+}
+
+.lp-step[data-status='done'] .lp-status {
+  color: var(--ok);
+}
+
+/* A phone has no room for a third column beside the prose, so where a step
+   stands goes under its name instead. */
+@media (max-width: 520px) {
+  .lp-step {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .lp-status {
+    grid-column: 2;
+    padding-top: var(--sp-1);
+  }
+
+  .lp-status:empty {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-step {
+    transition: none;
+  }
+}

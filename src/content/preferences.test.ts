@@ -19,11 +19,11 @@ import {
 describe('defaults', () => {
   beforeEach(() => __resetPreferences());
 
-  it('starts with tooltips off', () => {
-    // The whole point of the preference: a first-time student meets a clean
-    // interface, not forty dotted underlines.
-    expect(DEFAULT_PREFERENCES.tooltips).toBe(false);
-    expect(getPreferences().tooltips).toBe(false);
+  it('starts with tooltips on', () => {
+    // A first-time student is the reader who most needs to find out what p99
+    // means, so the explanations are there before anyone goes looking.
+    expect(DEFAULT_PREFERENCES.tooltips).toBe(true);
+    expect(getPreferences().tooltips).toBe(true);
   });
 
   it('starts with the visual helpers on', () => {
@@ -36,32 +36,32 @@ describe('setting and toggling', () => {
   beforeEach(() => __resetPreferences());
 
   it('records a change', () => {
-    setPreference('tooltips', true);
-    expect(getPreferences().tooltips).toBe(true);
+    setPreference('tooltips', false);
+    expect(getPreferences().tooltips).toBe(false);
   });
 
   it('toggles', () => {
     togglePreference('tooltips');
-    expect(getPreferences().tooltips).toBe(true);
-    togglePreference('tooltips');
     expect(getPreferences().tooltips).toBe(false);
+    togglePreference('tooltips');
+    expect(getPreferences().tooltips).toBe(true);
   });
 
   it('leaves the other preferences alone', () => {
-    setPreference('tooltips', true);
+    setPreference('tooltips', false);
     expect(getPreferences().sparklines).toBe(DEFAULT_PREFERENCES.sparklines);
     expect(getPreferences().snapToGrid).toBe(DEFAULT_PREFERENCES.snapToGrid);
   });
 
   it('replaces the object so a subscriber sees a new reference', () => {
     const before = getPreferences();
-    setPreference('tooltips', true);
+    setPreference('tooltips', false);
     expect(getPreferences()).not.toBe(before);
   });
 
   it('does nothing when the value is unchanged', () => {
     const before = getPreferences();
-    setPreference('tooltips', false);
+    setPreference('tooltips', true);
     expect(getPreferences()).toBe(before);
   });
 });
@@ -70,10 +70,10 @@ describe('persistence', () => {
   beforeEach(() => __resetPreferences());
 
   it('writes the change to storage', () => {
-    setPreference('tooltips', true);
+    setPreference('tooltips', false);
     const raw = localStorage.getItem('breakscale.preferences.v1');
     expect(raw).toBeTruthy();
-    expect(JSON.parse(raw as string).tooltips).toBe(true);
+    expect(JSON.parse(raw as string).tooltips).toBe(false);
   });
 
   it('survives a corrupt stored value', () => {
@@ -103,12 +103,12 @@ describe('persistence', () => {
 describe('the tooltips preference gates the Term component', () => {
   beforeEach(() => __resetPreferences());
 
-  it('is the one preference that ships off', () => {
-    // Guards the product decision, not just the plumbing. A future change that
-    // flips this default would put dotted underlines under forty terms on a
-    // student's first screen, which is exactly what this preference exists to
-    // prevent. If you mean to change it, change this test deliberately.
-    expect(DEFAULT_PREFERENCES.tooltips).toBe(false);
+  it('ships on', () => {
+    // Guards the product decision, not just the plumbing. Explanations are on
+    // because terms are unmarked at rest; if the rest state ever grows a
+    // permanent underline again, revisit this default rather than shipping
+    // forty of them. If you mean to change it, change this test deliberately.
+    expect(DEFAULT_PREFERENCES.tooltips).toBe(true);
     expect(DEFAULT_PREFERENCES.sparklines).toBe(true);
     expect(DEFAULT_PREFERENCES.snapToGrid).toBe(true);
   });
