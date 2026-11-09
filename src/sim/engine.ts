@@ -24,6 +24,9 @@ import type {
   SimEdge,
   SimNode,
   RequestTrace,
+  RoutePoint,
+  RouteStats,
+  RouteTally,
   RunTally,
   SimSnapshot,
   SystemStats,
@@ -58,6 +61,8 @@ const LATENCY_RING = 4096;
 const PERCENTILE_SAMPLE_CAP = 512;
 /** Latencies a tally holds before its first doubling: 40s at 100 rps. */
 const TALLY_INITIAL = 4096;
+/** Starting length of each client's own tally buffer; it doubles as needed. */
+const TALLY_ROUTE_INITIAL = 1024;
 /** Trailing window for rate (per-second) measurements. */
 /* Traffic pattern shape. Chosen so a spike's MEAN over one cycle stays near
    the baseline: the reader compares the same work arriving unevenly, not more
@@ -452,9 +457,36 @@ interface Tally {
    * tally's stop, like `writesLanded`.
    */
   jobsFailed: number;
+  /** The same record per client, by node id, created on its first request. */
+  routes: Map<string, TallyCounts>;
 }
 
-function tallyLatency(t: Tally, ms: number): void {
+/** The part of a tally that is kept for the whole system and per client. */
+interface TallyCounts {
+  arrived: number;
+  completed: number;
+  failed: number;
+  failures: Partial<Record<FailureReason, number>>;
+  latencies: Float64Array;
+}
+
+/** A client's counts in `t`, created the first time that client is seen. */
+function tallyRoute(t: Tally, clientId: string): TallyCounts {
+  let r = t.routes.get(clientId);
+  if (r === undefined) {
+    r = {
+      arrived: 0,
+      completed: 0,
+      failed: 0,
+      failures: {},
+      latencies: new Float64Array(TALLY_ROUTE_INITIAL),
+    };
+    t.routes.set(clientId, r);
+  }
+  return r;
+}
+
+function tallyLatency(t: TallyCounts, ms: number): void {
   if (t.completed === t.latencies.length) {
     // Doubling keeps the copies to about one per element over a whole run.
     const grown = new Float64Array(t.latencies.length * 2);
@@ -464,9 +496,57 @@ function tallyLatency(t: Tally, ms: number): void {
   t.latencies[t.completed++] = ms;
 }
 
-function tallyFailure(t: Tally, reason: FailureReason): void {
+function tallyFailure(t: TallyCounts, reason: FailureReason): void {
   t.failed++;
   t.failures[reason] = (t.failures[reason] ?? 0) + 1;
+}
+
+/* ------------------------------------------------------------------ *
+ * Routes
+ *
+ * Each client is a route, and these are its own end-to-end figures: what
+ * the people behind that client saw. Counted at the same place the system
+ * figures are, so the routes always add up to the system. Nothing here
+ * draws from the RNG or reaches the snapshot.
+ * ------------------------------------------------------------------ */
+
+interface RouteState {
+  good: RateCounter;
+  failed: RateCounter;
+  latency: LatencyRing;
+  /** Failures per reason, created the first time a reason happens here. */
+  failedBy: Map<FailureReason, RateCounter>;
+  totalRequests: number;
+  totalCompleted: number;
+  totalFailed: number;
+  failures: Partial<Record<FailureReason, number>>;
+  history: RoutePoint[];
+}
+
+function createRouteState(): RouteState {
+  return {
+    good: new RateCounter(),
+    failed: new RateCounter(),
+    latency: new LatencyRing(),
+    failedBy: new Map(),
+    totalRequests: 0,
+    totalCompleted: 0,
+    totalFailed: 0,
+    failures: {},
+    history: [],
+  };
+}
+
+function routeFailed(r: RouteState, now: number, reason: FailureReason): void {
+  r.failed.add(now, 1);
+  let c = r.failedBy.get(reason);
+  if (c === undefined) {
+    c = new RateCounter();
+    r.failedBy.set(reason, c);
+  }
+  c.add(now, 1);
+  r.totalFailed++;
+  r.failures[reason] = (r.failures[reason] ?? 0) + 1;
 }
 
 interface Fault {
@@ -644,6 +724,9 @@ interface NodeState {
    * scaling it down.
    */
   ownOccupancy: { busy: number; capacity: number } | null;
+
+  /** This client's route figures, or null for a kind that sends no load. */
+  route: RouteState | null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -747,6 +830,7 @@ export class Engine implements BehaviourCtx {
 
   private pctScratch = new Float64Array(3);
   private nodePctScratch = new Float64Array(3);
+  private routePctScratch = new Float64Array(3);
 
   /** Reused snapshot containers so 10Hz polling does not churn the heap. */
   private snapNodes: Record<string, NodeStats> = {};
@@ -1186,6 +1270,7 @@ export class Engine implements BehaviourCtx {
       writesLanded: 0,
       jobsQueued: 0,
       jobsFailed: 0,
+      routes: new Map(),
     };
   }
 
@@ -1217,6 +1302,18 @@ export class Engine implements BehaviourCtx {
       writesLanded: t.writesLanded,
       jobsQueued: t.jobsQueued,
       jobsFailed: t.jobsFailed,
+      byRoute: Object.fromEntries(
+        Array.from(t.routes, ([id, r]): [string, RouteTally] => [
+          id,
+          {
+            arrived: r.arrived,
+            completed: r.completed,
+            failed: r.failed,
+            failuresByReason: { ...r.failures },
+            latencies: r.latencies.slice(0, r.completed),
+          },
+        ]),
+      ),
     };
   }
 
@@ -2044,10 +2141,18 @@ export class Engine implements BehaviourCtx {
       state.totalFailed++;
       this.failures.shed++;
       this.sysFailed.add(this.now, 1);
+      const route = state.route;
+      if (route !== null) {
+        route.totalRequests++;
+        routeFailed(route, this.now, 'shed');
+      }
       const tally = this.tally;
       if (tally !== null) {
         tally.arrived++;
         tallyFailure(tally, 'shed');
+        const rt = tallyRoute(tally, state.id);
+        rt.arrived++;
+        tallyFailure(rt, 'shed');
       }
       return;
     }
@@ -2078,7 +2183,11 @@ export class Engine implements BehaviourCtx {
     this.totalRequests++;
     this.sysOffered.add(this.now, 1);
     state.arrivals.add(this.now, 1);
-    if (this.tally !== null) this.tally.arrived++;
+    if (state.route !== null) state.route.totalRequests++;
+    if (this.tally !== null) {
+      this.tally.arrived++;
+      tallyRoute(this.tally, state.id).arrived++;
+    }
 
     this.dispatchDownstream(state, root);
   }
@@ -3044,10 +3153,26 @@ export class Engine implements BehaviourCtx {
         this.tracing = null;
       }
       const client = this.nodes.get(req.nodeId);
+      const route = client?.route ?? null;
       const tally = this.tally;
       if (tally !== null) {
-        if (ok) tallyLatency(tally, total);
-        else tallyFailure(tally, reason);
+        const rt = tallyRoute(tally, req.nodeId);
+        if (ok) {
+          tallyLatency(tally, total);
+          tallyLatency(rt, total);
+        } else {
+          tallyFailure(tally, reason);
+          tallyFailure(rt, reason);
+        }
+      }
+      if (route !== null) {
+        if (ok) {
+          route.good.add(this.now, 1);
+          route.latency.add(this.now, total);
+          route.totalCompleted++;
+        } else {
+          routeFailed(route, this.now, reason);
+        }
       }
       if (ok) {
         this.sysGood.add(this.now, 1);
@@ -3774,7 +3899,71 @@ export class Engine implements BehaviourCtx {
       if (this.history.length > HISTORY_MAX) {
         this.history.splice(0, this.history.length - HISTORY_MAX);
       }
+      for (let i = 0; i < this.clientIds.length; i++) {
+        const route = this.nodes.get(this.clientIds[i])?.route;
+        if (route) this.recordRoutePoint(route, t);
+      }
     }
+  }
+
+  private recordRoutePoint(route: RouteState, t: number): void {
+    route.latency.percentiles(this.now, this.routePctScratch);
+    const good = route.good.rate(this.now);
+    const failed = route.failed.rate(this.now);
+    const done = good + failed;
+    route.history.push({
+      t,
+      goodput: good,
+      errorRate: done > 0 ? failed / done : Number.NaN,
+      p99: good > 0 ? this.routePctScratch[2] : Number.NaN,
+    });
+    if (route.history.length > HISTORY_MAX) {
+      route.history.splice(0, route.history.length - HISTORY_MAX);
+    }
+  }
+
+  /**
+   * Each client's own end-to-end figures, in topology order. Built fresh on
+   * every call; `history` is the one live array in it.
+   *
+   * Deliberately not in snapshot(): adding a field there would change the
+   * bytes of every snapshot a test or a replay has ever pinned, and a caller
+   * that does not draw routes should not pay for them.
+   */
+  routes(): RouteStats[] {
+    const now = this.now;
+    const out: RouteStats[] = [];
+    for (let i = 0; i < this.clientIds.length; i++) {
+      const id = this.clientIds[i];
+      const client = this.nodes.get(id);
+      const route = client?.route;
+      if (!client || !route) continue;
+      route.latency.percentiles(now, this.routePctScratch);
+      const good = route.good.rate(now);
+      const failed = route.failed.rate(now);
+      const failureRates: Partial<Record<FailureReason, number>> = {};
+      for (const [reason, counter] of route.failedBy) {
+        const r = counter.rate(now);
+        if (r > 0) failureRates[reason] = r;
+      }
+      out.push({
+        clientId: id,
+        offeredRps: client.arrivals.rate(now),
+        goodputRps: good,
+        failedRps: failed,
+        errorRate: good + failed > 0 ? failed / (good + failed) : 0,
+        p50: this.routePctScratch[0],
+        p95: this.routePctScratch[1],
+        p99: this.routePctScratch[2],
+        failureRates,
+        totalRequests: route.totalRequests,
+        totalCompleted: route.totalCompleted,
+        totalFailed: route.totalFailed,
+        failuresByReason: { ...route.failures },
+        history: route.history,
+      });
+    }
+    return out;
   }
 
   /* ---------------- pools ---------------- */
@@ -4004,6 +4193,7 @@ function createNodeState(node: SimNode): NodeState {
     ext: null,
     custom: null,
     ownOccupancy: null,
+    route: behaviourFor(node.kind).generatesLoad ? createRouteState() : null,
   };
 }
 

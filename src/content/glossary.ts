@@ -142,6 +142,15 @@ export const GLOSSARY: GlossaryEntry[] = [
     see: ['throughput', 'offered', 'dropped'],
   },
   {
+    id: 'traffic-source',
+    term: 'Traffic source',
+    short: 'One group of users, drawn as a client, and what it sends',
+    why: 'The system numbers average every group together, so checkout users failing badly can hide inside a small overall error rate while browsers are fine. Watching each source on its own shows who is actually hurting, and following that source on the canvas shows where.',
+    category: 'throughput',
+    aliases: ['route', 'client', 'per route', 'by user'],
+    see: ['goodput', 'error-rate', 'p99'],
+  },
+  {
     id: 'dropped',
     term: 'Dropped',
     short: 'Requests that arrived but were never served successfully',

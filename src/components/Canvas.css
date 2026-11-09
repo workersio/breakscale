@@ -2168,3 +2168,43 @@
     display: none;
   }
 }
+
+/* --------------------------------------------------------------------------
+   "Can you break it?" marks.
+
+   A dashed ring around a part the search is faulting now, and a numbered
+   badge on each fault of a break it found. Danger, because these are the
+   parts that fail; dashed and numbered, so neither is colour alone.
+   -------------------------------------------------------------------------- */
+.cv-break-ring {
+  fill: none;
+  stroke: var(--danger-mark);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  pointer-events: none;
+}
+
+.cv-break-wire {
+  fill: none;
+  stroke: var(--danger-mark);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  pointer-events: none;
+}
+
+.cv-break-badge {
+  pointer-events: none;
+}
+
+.cv-break-badge circle {
+  fill: var(--danger);
+}
+
+.cv-break-badge text {
+  fill: var(--surface);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-anchor: middle;
+}

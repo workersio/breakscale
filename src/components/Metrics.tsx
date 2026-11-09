@@ -1,5 +1,12 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { FailureReason, HistoryPoint, SimNode, SimSnapshot } from '../sim/types';
+import type {
+  FailureReason,
+  HistoryPoint,
+  RoutePoint,
+  RouteStats,
+  SimNode,
+  SimSnapshot,
+} from '../sim/types';
 import {
   formatCompact,
   formatMs,
@@ -8,6 +15,7 @@ import {
   healthOfLatency,
   type Health,
 } from './format';
+import { routeCondition } from './routeHealth';
 import { Term } from './Tooltip';
 import { Trace } from './Trace';
 import { Cost } from './Cost';
@@ -990,6 +998,195 @@ const FailureChart = memo(function FailureChart({
 });
 
 /* ------------------------------------------------------------------ *
+ * By traffic source -- one line per client
+ *
+ * The system charts average every client together, which is exactly how a
+ * group of users failing badly hides inside a modest overall error rate.
+ * This draws each client's own requests on one axis, so the route that is
+ * hurting is the line that leaves the others.
+ *
+ * Series are told apart by weight and dash, as everywhere in the strip,
+ * never by hue. The only colour is the health colour, on a route the app
+ * already calls hurting.
+ * ------------------------------------------------------------------ */
+
+type RouteMode = 'failing' | 'p99';
+
+/** Distinct strokes before the styles repeat. */
+const ROUTE_STYLES = 4;
+
+/**
+ * A path through a route's samples that breaks where a sample is NaN. A gap
+ * is the truth there: nothing settled, or nothing succeeded, and a line
+ * drawn through it at zero would claim a reading that was never taken.
+ */
+function gappedPath(
+  points: readonly RoutePoint[],
+  xAt: (t: number) => number,
+  value: (p: RoutePoint) => number,
+  top: number,
+): string {
+  let d = '';
+  let pen = false;
+  for (const p of points) {
+    const v = value(p);
+    if (!Number.isFinite(v)) {
+      pen = false;
+      continue;
+    }
+    d += `${pen ? 'L' : 'M'}${xAt(p.t).toFixed(2)},${yOf(v, top).toFixed(2)}`;
+    pen = true;
+  }
+  return d;
+}
+
+const ROUTE_VALUE: Record<RouteMode, (p: RoutePoint) => number> = {
+  failing: (p) => p.errorRate * 100,
+  p99: (p) => p.p99,
+};
+
+const formatPctTick = (v: number) => `${formatCompact(v)}%`;
+
+interface RouteChartProps {
+  routes: readonly RouteStats[];
+  /** The system history in the window, for the shared time axis. */
+  history: HistoryPoint[];
+  nameOf: (id: string) => string;
+}
+
+const RouteChart = memo(function RouteChart({
+  routes,
+  history,
+  nameOf,
+}: RouteChartProps) {
+  const [mode, setMode] = useState<RouteMode>('failing');
+  const { ref, w } = useMeasuredWidth<HTMLDivElement>();
+  const { at } = useXScale(history);
+  const tEnd = history.length > 0 ? history[history.length - 1]!.t : 0;
+
+  const windowed = useMemo(
+    () =>
+      routes.map((r) => ({
+        route: r,
+        points: r.history.filter((p) => p.t >= tEnd - WINDOW_MS),
+      })),
+    [routes, tEnd],
+  );
+
+  const value = ROUTE_VALUE[mode];
+  const max = useMemo(() => {
+    let m = 0;
+    for (const { points } of windowed) {
+      for (const p of points) {
+        const v = value(p);
+        if (Number.isFinite(v) && v > m) m = v;
+      }
+    }
+    return m;
+  }, [windowed, value]);
+
+  // A share failing never passes 100%, so neither does its axis: the sticky
+  // axis pads the maximum by 15% and would otherwise round 100 up to 200.
+  const { top, ticks } = useStickyAxis(
+    mode === 'failing' ? Math.min(max, 100 / 1.15) : max,
+    mode === 'failing' ? 10 : 100,
+  );
+
+  const series = useMemo(
+    () =>
+      windowed.map(({ route, points }, i) => ({
+        route,
+        style: i % ROUTE_STYLES,
+        hurting: routeCondition(route) === 'hurting',
+        d: gappedPath(points, at, value, top),
+      })),
+    [windowed, at, value, top],
+  );
+
+  const empty = windowed.every(({ points }) => points.length === 0);
+
+  /* The legend reads the live figure, not the last chart sample, so it
+     agrees with the client card on the canvas. A route with nothing settled
+     has no share failing, and one with nothing succeeding has no p99. */
+  const reading = (r: RouteStats): string => {
+    if (mode === 'failing') {
+      return r.goodputRps + r.failedRps > 0 ? formatPct(r.errorRate) : 'idle';
+    }
+    return r.goodputRps > 0 ? formatMs(r.p99) : 'none';
+  };
+
+  return (
+    <section
+      className="mx-chart"
+      aria-label="Each traffic source over the last 60 seconds"
+    >
+      <header className="mx-head">
+        <span className="label mx-eyebrow">
+          <Term id="traffic-source">By traffic source</Term>
+        </span>
+        <span className="mx-seg" role="group" aria-label="Show">
+          <button
+            type="button"
+            className="mx-seg-btn"
+            aria-pressed={mode === 'failing'}
+            onClick={() => setMode('failing')}
+          >
+            Failing
+          </button>
+          <button
+            type="button"
+            className="mx-seg-btn"
+            aria-pressed={mode === 'p99'}
+            onClick={() => setMode('p99')}
+          >
+            p99
+          </button>
+        </span>
+      </header>
+
+      <div className="mx-plot" ref={ref} style={{ height: CHART_H }}>
+        <PlotLayer w={w}>
+          {series.map((sr) => (
+            <path
+              key={sr.route.clientId}
+              className={`mx-line mx-route-${sr.style}${sr.hurting ? ' is-danger' : ''}`}
+              d={sr.d}
+            />
+          ))}
+        </PlotLayer>
+
+        <svg className="mx-layer" aria-hidden="true">
+          <Frame
+            ticks={ticks}
+            top={top}
+            format={mode === 'failing' ? formatPctTick : formatCompact}
+            w={w}
+            empty={empty}
+          />
+        </svg>
+      </div>
+
+      <ul className="mx-legend mx-legend-routes">
+        {series.map((sr) => (
+          <li key={sr.route.clientId} className="mx-key mx-key-route">
+            <span
+              className={`mx-key-line mx-key-route-${sr.style}${sr.hurting ? ' is-danger' : ''}`}
+              aria-hidden="true"
+            />
+            <span className="mx-key-name">{nameOf(sr.route.clientId)}</span>
+            <span
+              className={`num num-sm mx-key-value${sr.hurting ? ' is-danger' : ''}`}
+            >
+              {reading(sr.route)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+});
+
+/* ------------------------------------------------------------------ *
  * Metrics strip
  * ------------------------------------------------------------------ */
 
@@ -999,6 +1196,11 @@ export interface MetricsProps {
   nodes?: readonly SimNode[];
   /** Node id to display name, for the trace panel. */
   nodeNames?: Record<string, string>;
+  /**
+   * Each client's own figures. With two or more clients the strip adds a
+   * chart of them; with one, that chart would only repeat the system's.
+   */
+  routes?: readonly RouteStats[];
 }
 
 /* Derived from REASON_ORDER rather than written out, so adding a failure
@@ -1007,7 +1209,7 @@ const EMPTY_BY: Record<FailureReason, number> = Object.fromEntries(
   REASON_ORDER.map((r) => [r, 0]),
 ) as Record<FailureReason, number>;
 
-export function Metrics({ snapshot, nodeNames, nodes }: MetricsProps) {
+export function Metrics({ snapshot, nodeNames, nodes, routes }: MetricsProps) {
   const { system, history, failuresByReason } = snapshot;
 
   /* The trace names nodes by id; the reader knows them by the label on the
@@ -1169,6 +1371,9 @@ export function Metrics({ snapshot, nodeNames, nodes }: MetricsProps) {
         lost={lostRate}
       />
       <FailureChart samples={failSamples} failures={failuresNow} />
+      {routes && routes.length > 1 ? (
+        <RouteChart routes={routes} history={windowed} nameOf={nameOf} />
+      ) : null}
       <Trace trace={snapshot.trace} nameOf={nameOf} />
       {/* Renders nothing on generic, where there are no prices to show. */}
       <Cost nodes={nodes ?? []} />

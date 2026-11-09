@@ -79,6 +79,16 @@ const LABEL: Record<GoalMetric, string> = {
   queueDepth: 'Jobs still waiting in the queue',
 };
 
+/**
+ * A goal's name, with the traffic source it is about when it is about one:
+ * "Checkout users: requests lost".
+ */
+function goalName(goal: Goal, nameOf: (id: string) => string): string {
+  if (goal.route === undefined) return LABEL[goal.metric];
+  const label = LABEL[goal.metric];
+  return `${nameOf(goal.route)}: ${label.charAt(0).toLowerCase()}${label.slice(1)}`;
+}
+
 /** Goals that count things, which read "or fewer" rather than "or less". */
 const COUNTED: ReadonlySet<GoalMetric> = new Set([
   'lostWrites',
@@ -109,17 +119,23 @@ function limit(goal: Goal): string {
 }
 
 /** One sentence on a missed goal, for the verdict line. */
-function missLine(goal: Goal, actual: number | null): string {
+function missLine(
+  goal: Goal,
+  actual: number | null,
+  nameOf: (id: string) => string,
+): string {
   const a = formatGoal(goal.metric, actual);
   const one = actual === 1;
   const end = `and the goal is ${limit(goal)}.`;
+  const requests =
+    goal.route === undefined ? 'requests' : `requests from ${nameOf(goal.route)}`;
   switch (goal.metric) {
     case 'p99':
-      return `The slowest 1 in 100 requests took ${a}, ${end}`;
+      return `The slowest 1 in 100 ${requests} took ${a}, ${end}`;
     case 'p95':
-      return `The slowest 1 in 20 requests took ${a}, ${end}`;
+      return `The slowest 1 in 20 ${requests} took ${a}, ${end}`;
     case 'errorRate':
-      return `${a} of requests were lost, ${end}`;
+      return `${a} of ${requests} were lost, ${end}`;
     case 'lostWrites':
       return `${a} ${one ? 'save' : 'saves'} never reached the database, ${end}`;
     case 'lostJobs':
@@ -202,7 +218,7 @@ function verdictLine(verdict: Verdict, nameOf: (id: string) => string): VerdictL
       const miss = verdict.deciding.goals.find((g) => !g.met);
       return {
         word: 'Not yet',
-        why: miss ? missLine(miss.goal, miss.actual) : 'A goal was missed.',
+        why: miss ? missLine(miss.goal, miss.actual, nameOf) : 'A goal was missed.',
         tone: 'danger',
       };
     }
@@ -306,20 +322,27 @@ function GoalList({
   challenge,
   check,
   deciding,
+  nameOf,
 }: {
   challenge: Challenge;
   check: CheckView;
   deciding: RunResult | null;
+  nameOf: (id: string) => string;
 }) {
   const pending = check.status === 'checking' ? 'Checking' : 'Not checked yet';
   return (
     <ul className="chal-goals">
-      {challenge.goals.map((goal) => {
-        const row = deciding?.goals.find((g) => g.goal.metric === goal.metric);
+      {challenge.goals.map((goal, i) => {
+        // By position: two goals can share a metric when one is on a route.
+        const at = deciding?.goals[i];
+        const row =
+          at && at.goal.metric === goal.metric && at.goal.route === goal.route
+            ? at
+            : undefined;
         const state = row ? (row.met ? 'is-met' : 'is-unmet') : 'is-pending';
         return (
-          <li key={goal.metric} className={`chal-goal ${state}`}>
-            <span className="chal-goal-name">{LABEL[goal.metric]}</span>
+          <li key={i} className={`chal-goal ${state}`}>
+            <span className="chal-goal-name">{goalName(goal, nameOf)}</span>
             <span className="num chal-goal-actual">
               {row ? formatGoal(goal.metric, row.actual) : null}
             </span>
@@ -335,12 +358,18 @@ function GoalList({
 }
 
 /** The live reading: numbers only, never met or not. */
-function LiveRows({ rows }: { rows: ChallengeResult['goals'] }) {
+function LiveRows({
+  rows,
+  nameOf,
+}: {
+  rows: ChallengeResult['goals'];
+  nameOf: (id: string) => string;
+}) {
   return (
     <ul className="chal-goals">
-      {rows.map((g) => (
-        <li key={g.goal.metric} className="chal-goal is-live">
-          <span className="chal-goal-name">{LABEL[g.goal.metric]}</span>
+      {rows.map((g, i) => (
+        <li key={i} className="chal-goal is-live">
+          <span className="chal-goal-name">{goalName(g.goal, nameOf)}</span>
           <span className="num chal-goal-actual">
             {formatGoal(g.goal.metric, g.actual)}
           </span>
@@ -525,7 +554,12 @@ export function ChallengePanel({
       <div id={bodyId} className="chal-body" hidden={shut}>
         <p className="chal-brief">{challenge.brief}</p>
 
-        <GoalList challenge={challenge} check={check} deciding={deciding} />
+        <GoalList
+          challenge={challenge}
+          check={check}
+          deciding={deciding}
+          nameOf={nameOf}
+        />
 
         {line ? (
           <p className={`chal-verdict is-${line.tone}`}>
@@ -605,7 +639,7 @@ export function ChallengePanel({
               </p>
               {live && liveFlowing ? (
                 <div className="chal-live">
-                  <LiveRows rows={live.goals} />
+                  <LiveRows rows={live.goals} nameOf={nameOf} />
                 </div>
               ) : (
                 <p className="chal-note">Nothing is getting through right now.</p>

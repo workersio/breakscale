@@ -1625,4 +1625,80 @@ export interface RunTally {
    * window's end. The client heard yes for each, so none shows in `failed`.
    */
   jobsFailed: number;
+  /**
+   * The same counts split by the client that sent each request, keyed by the
+   * client's node id. A client that sent nothing and had nothing settle in
+   * the window is absent. The routes add up to the totals above.
+   */
+  byRoute: Record<string, RouteTally>;
+}
+
+/** One client's share of a `RunTally`. */
+export interface RouteTally {
+  arrived: number;
+  completed: number;
+  failed: number;
+  failuresByReason: Partial<Record<FailureReason, number>>;
+  /** End-to-end ms of this client's successes, in the order they finished. */
+  latencies: Float64Array;
+}
+
+/**
+ * How the requests one client sends are doing, end to end.
+ *
+ * Each client node is a route: the people behind it send their requests
+ * through the system, and some of them can be failing while the others are
+ * fine. The system figures average that away. These are measured from the
+ * outcome of each of this client's own requests, as the client saw it, with
+ * the same windows the system figures use.
+ *
+ * Read from `Engine.routes()`, not the snapshot, so a snapshot carries
+ * exactly the bytes it always did.
+ */
+export interface RouteStats {
+  /** The client node the route starts at. */
+  clientId: string;
+  /** Requests this client sent per second, the engine's own sheds included. */
+  offeredRps: number;
+  /** Its requests that succeeded, per second. */
+  goodputRps: number;
+  /** Its requests that failed, per second, for any reason. */
+  failedRps: number;
+  /**
+   * Failed over settled in the rate window, 0..1, or 0 when nothing settled.
+   * Check `goodputRps + failedRps` before reading a 0 as healthy.
+   */
+  errorRate: number;
+  /**
+   * End-to-end percentiles of its successes over the latency window, in ms,
+   * from a ring of real latencies. 0 when nothing succeeded in it.
+   */
+  p50: number;
+  p95: number;
+  p99: number;
+  /** Failures per second in the rate window, by why. Only reasons above 0. */
+  failureRates: Partial<Record<FailureReason, number>>;
+  /** Lifetime counts since the last reset. */
+  totalRequests: number;
+  totalCompleted: number;
+  totalFailed: number;
+  /** Lifetime failure counts by why. Only reasons that happened. */
+  failuresByReason: Partial<Record<FailureReason, number>>;
+  /**
+   * Samples for the charts, oldest first, on the same 250ms clock as
+   * `SimSnapshot.history`. This is the engine's live array: it is appended
+   * to and trimmed in place, so a consumer that memoises has to key on its
+   * length and newest `t`, as the charts do for the system history.
+   */
+  history: readonly RoutePoint[];
+}
+
+/** One chart sample for a route. */
+export interface RoutePoint {
+  t: number;
+  goodput: number;
+  /** 0..1, or NaN when nothing settled in the window, which is not 0%. */
+  errorRate: number;
+  /** ms, or NaN when nothing succeeded in the window, which is not 0ms. */
+  p99: number;
 }

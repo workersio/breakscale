@@ -1,4 +1,5 @@
-import type { Topology } from './sim/types';
+import { DEFAULT_SEED, sanitizeSeed } from './sim/seed';
+import type { FaultEvent, Topology } from './sim/types';
 
 /* ------------------------------------------------------------------ *
  * Undo / redo for the shell.
@@ -44,6 +45,13 @@ export interface HistorySnapshot {
  */
 export interface HistoryEntry extends HistorySnapshot {
   label: string;
+  /**
+   * The edit put a whole design on the canvas (an example, a file, a run to
+   * watch), so its fault schedule and seed are part of what undo restores.
+   * Any other edit leaves them to the run: faults recorded while it plays
+   * only ever append, and undoing a knob change must not roll them back.
+   */
+  replaces?: boolean;
 }
 
 /**
@@ -118,6 +126,33 @@ function topologyEqual(a: Topology, b: Topology): boolean {
   return edgesEqual(a, b);
 }
 
+/**
+ * Same schedule, event by event. Absent and empty are the same schedule,
+ * the way they are the same run.
+ */
+function faultsEqual(
+  a: FaultEvent[] | undefined,
+  b: FaultEvent[] | undefined,
+): boolean {
+  const xs = a ?? [];
+  const ys = b ?? [];
+  if (xs.length !== ys.length) return false;
+  for (let i = 0; i < xs.length; i++) {
+    const { opts: p, ...x } = xs[i] as FaultEvent & { opts?: object };
+    const { opts: q, ...y } = ys[i] as FaultEvent & { opts?: object };
+    if (!configEqual(x, y) || !configEqual(p ?? {}, q ?? {})) return false;
+  }
+  return true;
+}
+
+/** The run a design plays: its seed, the default when it has none, and its faults. */
+function runEqual(a: Topology, b: Topology): boolean {
+  return (
+    (sanitizeSeed(a.seed) ?? DEFAULT_SEED) === (sanitizeSeed(b.seed) ?? DEFAULT_SEED) &&
+    faultsEqual(a.faults, b.faults)
+  );
+}
+
 function edgesEqual(a: Topology, b: Topology): boolean {
   if (a.edges.length !== b.edges.length) return false;
   for (let i = 0; i < a.edges.length; i++) {
@@ -143,13 +178,19 @@ function selectionEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean
   return true;
 }
 
-function snapshotEqual(a: HistorySnapshot, b: HistorySnapshot): boolean {
+/**
+ * Whether applying `entry` would leave `current` as it is. The run only
+ * counts for an entry that replaced the design, because only that kind
+ * puts its own schedule and seed back (see HistoryEntry.replaces).
+ */
+function snapshotEqual(entry: HistoryEntry, current: HistorySnapshot): boolean {
   return (
-    a.rps === b.rps &&
-    a.presetId === b.presetId &&
-    a.challengeId === b.challengeId &&
-    selectionEqual(a.selectedIds, b.selectedIds) &&
-    topologyEqual(a.topology, b.topology)
+    entry.rps === current.rps &&
+    entry.presetId === current.presetId &&
+    entry.challengeId === current.challengeId &&
+    selectionEqual(entry.selectedIds, current.selectedIds) &&
+    topologyEqual(entry.topology, current.topology) &&
+    (!entry.replaces || runEqual(entry.topology, current.topology))
   );
 }
 
@@ -248,11 +289,15 @@ export class SessionHistory {
    * `before` is the state as it stands RIGHT NOW, pre-edit. Clears redo:
    * a real edit forks the timeline.
    */
-  commit(label: string, before: HistorySnapshot): void {
+  commit(label: string, before: HistorySnapshot, replaces = false): void {
     // An unsettled streamed edit happened first chronologically; land it
     // before this entry so undo unwinds in the order things were done.
     this.flushSettling();
-    this.pushPast({ label, ...cloneSnapshot(before) });
+    this.pushPast({
+      label,
+      ...cloneSnapshot(before),
+      ...(replaces ? { replaces } : {}),
+    });
     this.future = [];
     this.notify();
   }
@@ -342,7 +387,11 @@ export class SessionHistory {
     while (this.past.length > 0) {
       const entry = this.past.pop()!;
       if (snapshotEqual(entry, current)) continue;
-      this.future.push({ label: entry.label, ...cloneSnapshot(current) });
+      this.future.push({
+        label: entry.label,
+        ...cloneSnapshot(current),
+        ...(entry.replaces ? { replaces: true } : {}),
+      });
       this.notify();
       return entry;
     }
@@ -356,7 +405,11 @@ export class SessionHistory {
     while (this.future.length > 0) {
       const entry = this.future.pop()!;
       if (snapshotEqual(entry, current)) continue;
-      this.pushPast({ label: entry.label, ...cloneSnapshot(current) });
+      this.pushPast({
+        label: entry.label,
+        ...cloneSnapshot(current),
+        ...(entry.replaces ? { replaces: true } : {}),
+      });
       this.notify();
       return entry;
     }

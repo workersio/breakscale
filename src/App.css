@@ -325,6 +325,37 @@
   align-items: center;
 }
 
+/* "Can you break it?" says it in full where there is room and shorter on a
+   narrow window. Never as its icon alone: a phone has no hover to show the
+   title, and a bare bolt says nothing to someone who has not used it. Its
+   aria-label says it in full at every width. */
+.app-break-short {
+  display: none;
+}
+
+@media (max-width: 899px) {
+  .app-break-long {
+    display: none;
+  }
+
+  .app-break-short {
+    display: inline;
+  }
+}
+
+/* On a phone the star count gives up its room to that label. */
+@media (max-width: 639px) {
+  .app-source-stars {
+    display: none;
+  }
+
+  /* Back to the plain .btn-icon square. */
+  .app-source-link.has-stars {
+    width: 36px;
+    padding: 0;
+  }
+}
+
 /* The menu button and the menu it opens. Relative, so the menu can anchor
    under the button rather than to the bar's far corner. */
 .app-menu-wrap {
