@@ -78,6 +78,7 @@ import {
   withEdgeLoss,
   withSchedule,
 } from './components/faultWiring';
+import { applyFaultChange, undoableFaultActions } from './components/faultUndo';
 import { Metrics } from './components/Metrics';
 import { Palette } from './components/Palette';
 import { Glossary } from './components/Glossary';
@@ -115,7 +116,7 @@ import { PanelResizer } from './components/PanelResizer';
 import { applyTheme } from './theme/applyTheme';
 import { usePresence } from './components/presence';
 import { SessionHistory, syncEngine } from './history';
-import type { HistoryEntry, HistorySnapshot } from './history';
+import type { FaultApplier, HistoryEntry, HistorySnapshot } from './history';
 import { ShareLinkTooLargeError, decodeTopology, hasShareHash } from './share';
 import { ID_PARAM, ShareStoreError, fetchStored, hasStoredLink } from './share/store';
 import {
@@ -124,7 +125,7 @@ import {
   hasReplay,
   replayTopology,
 } from './share/replayLink';
-import { Share, type ShareState } from './components/Share';
+import { Share, type ShareKind, type ShareResult } from './components/Share';
 import { DESIGN_FILE_ACCEPT, downloadDesign, readDesignFile } from './designFile';
 import { downloadBlob, svgToPng } from './imageExport';
 import './App.css';
@@ -803,9 +804,18 @@ export default function App() {
    */
   const [sharePending, setSharePending] = useState(shareHashPresent);
 
-  /** The share dialog, and whatever the link build has got to so far. */
+  /**
+   * The share dialog, and which opening of it this is. The dialog keeps
+   * the links it built; a new key on each opening forgets them, so a link
+   * built for an earlier version of the design is never offered again.
+   */
   const [shareOpen, setShareOpen] = useState(false);
-  const [shareState, setShareState] = useState<ShareState>({ status: 'idle' });
+  const [shareSession, setShareSession] = useState(0);
+  /**
+   * A break's replay, set when the break-it panel opens the dialog, so the
+   * dialog's run link is that break and not the run on screen. Null otherwise.
+   */
+  const [shareRun, setShareRun] = useState<Topology | null>(null);
 
   const [topology, setTopology] = useState<Topology>(initial.topology);
   const [rps, setRps] = useState<number>(initial.rps);
@@ -1533,7 +1543,10 @@ export default function App() {
 
   const applyEntry = useCallback(
     (entry: HistoryEntry, verb: 'Undid' | 'Redid') => {
-      if (entry.challengeId !== challengeLiveRef.current) {
+      if (entry.fault) {
+        // Already applied to the engine by applyFault. Only the selection
+        // comes back, so the panel shows the part that just changed.
+      } else if (entry.challengeId !== challengeLiveRef.current) {
         // Into a brief or out of one. That is a different workspace, and its
         // run starts again from the top, the way starting or leaving does,
         // so a brief's faults land when it says they do.
@@ -1566,23 +1579,51 @@ export default function App() {
         setTopology(synced);
       }
       setSelectedIds(new Set(entry.selectedIds));
-      setRps(entry.rps);
-      setPresetId(entry.presetId);
+      if (!entry.fault) {
+        setRps(entry.rps);
+        setPresetId(entry.presetId);
+      }
       toastSeq.current += 1;
       setToast({ text: `${verb} ${entry.label}`, id: toastSeq.current });
     },
     [engine, switchWorkspace, installDesign],
   );
 
+  /**
+   * Undo or redo of a fault control, on the engine. A fault entry from
+   * another workspace is skipped: that run was replaced when the workspace
+   * changed, and its node may not exist here. The schedule is mirrored into
+   * the topology the way recordedFault does it after a press.
+   */
+  const applyFault = useCallback<FaultApplier>(
+    (entry, dir) => {
+      if (entry.challengeId !== challengeLiveRef.current) return null;
+      const next = applyFaultChange(
+        engine,
+        entry.fault,
+        dir,
+        engine.snapshot().system.timeMs,
+        (faults) => engine.setTopology({ ...topoLiveRef.current, faults }),
+      );
+      if (!next) return null;
+      const faults = engine.faultSchedule();
+      setTopology((t) => ({ ...t, faults }));
+      setSnapshot(engine.snapshot());
+      setRoutes(engine.routes());
+      return next;
+    },
+    [engine],
+  );
+
   const handleUndo = useCallback(() => {
-    const entry = history.undo(snapRef.current);
+    const entry = history.undo(snapRef.current, applyFault);
     if (entry) applyEntry(entry, 'Undid');
-  }, [history, applyEntry]);
+  }, [history, applyEntry, applyFault]);
 
   const handleRedo = useCallback(() => {
-    const entry = history.redo(snapRef.current);
+    const entry = history.redo(snapRef.current, applyFault);
     if (entry) applyEntry(entry, 'Redid');
-  }, [history, applyEntry]);
+  }, [history, applyEntry, applyFault]);
 
   /* ---------------- structural edits ---------------- */
 
@@ -2598,6 +2639,24 @@ export default function App() {
   const challenge = challengeId ? challengeById(challengeId) : undefined;
 
   /**
+   * The starting points a cleared canvas offers. None inside a brief: each
+   * of them would leave it. One server loads through handleLoadPreset, so it
+   * is one undoable entry and the preset's snapshots are the ones it always
+   * had.
+   */
+  const emptyActions = useMemo(() => {
+    if (challenge) return undefined;
+    const simple = PRESETS.find((p) => p.id === 'single-server');
+    return {
+      onStartSimple: () => {
+        if (simple) handleLoadPreset(simple);
+      },
+      onBrowseExamples: () => setExamplesOpen(true),
+      onTryChallenge: () => setChallengesOpen(true),
+    };
+  }, [challenge, handleLoadPreset]);
+
+  /**
    * Leave the brief and put the reader's design back exactly as it was. Not
    * only on a pass: giving up is leaving too, and the attempt stays for
    * whenever they want another go.
@@ -2931,7 +2990,8 @@ export default function App() {
    * store write always follows a deliberate click.
    */
   const handleOpenShare = useCallback(() => {
-    setShareState({ status: 'idle' });
+    setShareRun(null);
+    setShareSession((n) => n + 1);
     setShareOpen(true);
   }, []);
 
@@ -2944,35 +3004,32 @@ export default function App() {
    * with the engine's seed and fault schedule, so whoever opens it watches
    * the same faults land at the same simulated moments.
    */
-  const handleCopyLink = useCallback(
-    (replay: boolean, run?: Topology) => {
-      setShareState({ status: 'working', replay });
-      const shared =
-        run ?? (replay ? replayTopology(topology, engine) : designTopology(topology));
-      void (async () => {
-        try {
-          setShareState({
-            status: 'ready',
-            replay,
-            url: await buildLink(shared, window.location.href),
-          });
-        } catch (e) {
-          // A design that does not fit is told about, never trimmed to fit.
-          // The file export carries any size.
-          setShareState({
-            status: 'failed',
-            replay,
-            message:
-              e instanceof ShareStoreError
-                ? e.message
-                : e instanceof ShareLinkTooLargeError
-                  ? `This ${replay ? 'replay' : 'design'} is too big for a link (${e.chars} characters; links stop working past ${e.limit}). Save it to a file instead.`
-                  : 'Could not build the link.',
-          });
-        }
-      })();
+  const handleBuildLink = useCallback(
+    async (kind: ShareKind): Promise<ShareResult> => {
+      const replay = kind === 'run';
+      // Captured at the click, before the await: the run keeps going while
+      // the dialog is open, and the link is the run as it was when asked for.
+      // A break opened from the break-it panel is the run this dialog links.
+      const shared = replay
+        ? (shareRun ?? replayTopology(topology, engine))
+        : designTopology(topology);
+      try {
+        return { ok: true, url: await buildLink(shared, window.location.href) };
+      } catch (e) {
+        // A design that does not fit is told about, never trimmed to fit.
+        // The file export carries any size.
+        return {
+          ok: false,
+          message:
+            e instanceof ShareStoreError
+              ? e.message
+              : e instanceof ShareLinkTooLargeError
+                ? `This ${replay ? 'run' : 'design'} is too big for a link (${e.chars} characters; links stop working past ${e.limit}). Save it to a file instead.`
+                : 'Could not build the link.',
+        };
+      }
     },
-    [engine, topology],
+    [engine, topology, shareRun],
   );
 
   /* ---------------- can you break it? ---------------- */
@@ -3212,9 +3269,10 @@ export default function App() {
   const handleBreakLink = useCallback(() => {
     const r = breakReplay();
     if (!r) return;
+    setShareRun(r.replay);
+    setShareSession((n) => n + 1);
     setShareOpen(true);
-    handleCopyLink(true, r.replay);
-  }, [breakReplay, handleCopyLink]);
+  }, [breakReplay]);
 
   /** The bar's button, where focus goes back to when the panel closes from inside. */
   const breakBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -3463,9 +3521,15 @@ export default function App() {
     setRoutes(engine.routes());
   }, [engine]);
 
+  // Each press is also an undo entry; see faultUndo. The entry carries the
+  // state as rendered, the same thing snapRef holds for every other commit.
   const faultActions = useMemo(
-    () => faultActionsFor(engine, recordedFault),
-    [engine, recordedFault],
+    () =>
+      undoableFaultActions(engine, faultActionsFor(engine, recordedFault), {
+        history,
+        before: { topology, selectedIds, rps, presetId, challengeId },
+      }),
+    [engine, recordedFault, history, topology, selectedIds, rps, presetId, challengeId],
   );
 
   const inspectorFaults = useMemo(
@@ -3953,6 +4017,8 @@ export default function App() {
               fitSignal={fitNonce}
               visibleRef={stageSafeRef}
               breakMarks={breakMarks}
+              emptyActions={emptyActions}
+              fitTight={challenge !== undefined}
             />
             <RouteAlert routes={routes} nodeNames={nodeNames} />
             {challenge && check ? (
@@ -4043,6 +4109,13 @@ export default function App() {
                 nodeNames={nodeNames}
                 nodes={topology.nodes}
                 routes={routes}
+                idle={
+                  !topology.nodes.some((n) => n.kind === 'client')
+                    ? 'no-client'
+                    : !running && snapshot.system.timeMs === 0
+                      ? 'not-started'
+                      : undefined
+                }
               />
             ) : null}
             <PanelResizer
@@ -4101,10 +4174,11 @@ export default function App() {
         about whether a panel is open. Above the breakpoint it is
         display:none and costs a reader nothing.
 
-        The inspector tab is disabled rather than hidden when nothing is
+        The inspector tab is dimmed rather than hidden when nothing is
         selected. A tab bar whose tabs come and go moves the others under
-        the thumb mid-tap, and the disabled state teaches what the tab is
-        for: select something and it lights up.
+        the thumb mid-tap, and the dimmed state teaches what the tab is
+        for: select something and it lights up. aria-disabled rather than
+        disabled, so a tap on it can still say how to light it up.
       */}
       <nav className="app-tabbar" aria-label="Panels">
         <button
@@ -4120,8 +4194,12 @@ export default function App() {
           type="button"
           className="app-tab"
           aria-expanded={inspectorVisible}
-          disabled={!hasSelection}
-          onClick={toggleInspector}
+          aria-disabled={!hasSelection || undefined}
+          onClick={
+            hasSelection
+              ? toggleInspector
+              : () => say('Tap a part on the canvas to see its settings and break it.')
+          }
         >
           <PanelGlyph edge="right" />
           Inspect
@@ -4151,7 +4229,7 @@ export default function App() {
         still on a message that appears not to change.
       */}
       {toast ? (
-        <div key={toast.id} className="app-toast" role="status">
+        <div key={`toast-${toast.id}`} className="app-toast" role="status">
           {toast.text}
         </div>
       ) : null}
@@ -4173,12 +4251,12 @@ export default function App() {
       <Glossary open={glossaryOpen} onClose={closeGlossary} focusId={glossaryFocusId} />
       <Shortcuts open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       <Share
+        // Prefixed: the toast above is a keyed sibling with its own counter.
+        key={`share-${shareSession}`}
         open={shareOpen}
-        state={shareState}
         onClose={() => setShareOpen(false)}
-        replayable={hasReplay(topology)}
-        onShare={() => handleCopyLink(false)}
-        onShareReplay={() => handleCopyLink(true)}
+        replayable={shareRun !== null || hasReplay(topology)}
+        onBuild={handleBuildLink}
         onExport={() => {
           setShareOpen(false);
           handleExport();
@@ -4214,6 +4292,8 @@ export default function App() {
         suggestedName={
           presetId ? (PRESETS.find((p) => p.id === presetId)?.name ?? '') : ''
         }
+        canSave={topology.nodes.length > 0}
+        onOpenFile={() => fileInputRef.current?.click()}
       />
       <Settings
         open={settingsOpen}

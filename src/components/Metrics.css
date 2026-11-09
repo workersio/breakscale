@@ -684,3 +684,9 @@
     transition: none;
   }
 }
+
+/* The n/a sentinel in a chart header, before anything has been measured.
+   Dimmed so it reads as an absence rather than a value. */
+.mx-readout.is-unmeasured {
+  color: var(--text-dim);
+}

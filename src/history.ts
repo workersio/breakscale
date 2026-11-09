@@ -1,5 +1,6 @@
 import { DEFAULT_SEED, sanitizeSeed } from './sim/seed';
 import type { FaultEvent, Topology } from './sim/types';
+import type { FaultChange, FaultDirection } from './components/faultUndo';
 
 /* ------------------------------------------------------------------ *
  * Undo / redo for the shell.
@@ -52,7 +53,23 @@ export interface HistoryEntry extends HistorySnapshot {
    * only ever append, and undoing a knob change must not roll them back.
    */
   replaces?: boolean;
+  /**
+   * Set on an entry made by a fault control. The snapshot then only carries
+   * the selection back; the design did not change, and what undo does is
+   * put the node or cable back, through `FaultApplier`.
+   */
+  fault?: FaultChange;
 }
+
+/**
+ * Applies a fault entry to the engine and returns it as it goes on the other
+ * stack, or null when it would change nothing, so the entry is skipped like
+ * a design entry equal to the screen.
+ */
+export type FaultApplier = (
+  entry: HistoryEntry & { fault: FaultChange },
+  dir: FaultDirection,
+) => FaultChange | null;
 
 /**
  * Stack bound. 50 entries of a ~30-node topology is on the order of 500KB
@@ -228,6 +245,7 @@ export class SessionHistory {
    * nothing left to apply. That press is not the reader changing anything,
    * and treating it as one let an empty Undo on a freshly opened share link
    * switch autosave back on and write the shared design over their own.
+   * A fault entry is false too: crashing a box is not editing the design.
    */
   private readonly onChange: ((edited: boolean) => void) | undefined;
   private readonly limit: number;
@@ -300,6 +318,17 @@ export class SessionHistory {
     });
     this.future = [];
     this.notify();
+  }
+
+  /**
+   * A fault control was pressed. Unlike `commit`, this is not an edit to the
+   * design, so a design opened from a share link stays someone else's.
+   */
+  commitFault(label: string, current: HistorySnapshot, fault: FaultChange): void {
+    this.flushSettling();
+    this.pushPast({ label, fault, ...cloneSnapshot(current) });
+    this.future = [];
+    this.notify(false);
   }
 
   /**
@@ -381,31 +410,46 @@ export class SessionHistory {
    * entry. Entries indistinguishable from the current state are skipped, so
    * a press of Ctrl+Z always changes something visible or does nothing at
    * all (returning null).
+   *
+   * A fault entry is applied here, by `applyFault`, because only applying it
+   * can tell whether it changes anything: the node may have healed on its
+   * own since. Without an applier, fault entries are skipped.
    */
-  undo(current: HistorySnapshot): HistoryEntry | null {
-    this.flushSettling();
-    while (this.past.length > 0) {
-      const entry = this.past.pop()!;
-      if (snapshotEqual(entry, current)) continue;
-      this.future.push({
-        label: entry.label,
-        ...cloneSnapshot(current),
-        ...(entry.replaces ? { replaces: true } : {}),
-      });
-      this.notify();
-      return entry;
-    }
-    this.notify(false);
-    return null;
+  undo(current: HistorySnapshot, applyFault?: FaultApplier): HistoryEntry | null {
+    return this.step(
+      this.past,
+      (e) => this.future.push(e),
+      current,
+      'undo',
+      applyFault,
+    );
   }
 
   /** Pop forward one entry. Mirror of undo; does NOT clear the future. */
-  redo(current: HistorySnapshot): HistoryEntry | null {
+  redo(current: HistorySnapshot, applyFault?: FaultApplier): HistoryEntry | null {
+    return this.step(this.future, (e) => this.pushPast(e), current, 'redo', applyFault);
+  }
+
+  private step(
+    from: HistoryEntry[],
+    onto: (entry: HistoryEntry) => void,
+    current: HistorySnapshot,
+    dir: FaultDirection,
+    applyFault: FaultApplier | undefined,
+  ): HistoryEntry | null {
     this.flushSettling();
-    while (this.future.length > 0) {
-      const entry = this.future.pop()!;
+    while (from.length > 0) {
+      // The loop guard says the stack is not empty.
+      const entry = from.pop()!;
+      if (entry.fault) {
+        const fault = applyFault?.({ ...entry, fault: entry.fault }, dir) ?? null;
+        if (!fault) continue;
+        onto({ label: entry.label, fault, ...cloneSnapshot(current) });
+        this.notify(false);
+        return entry;
+      }
       if (snapshotEqual(entry, current)) continue;
-      this.pushPast({
+      onto({
         label: entry.label,
         ...cloneSnapshot(current),
         ...(entry.replaces ? { replaces: true } : {}),

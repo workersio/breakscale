@@ -26,6 +26,8 @@ export interface TraceProps {
   trace: RequestTrace | null;
   /** Resolve a node id to the name shown on the canvas. */
   nameOf: (id: string) => string;
+  /** Said instead of the waiting line when the shell knows why nothing ran. */
+  idleText?: string;
 }
 
 /** Widest total on any row, so every bar shares one scale. */
@@ -40,7 +42,7 @@ function scaleOf(trace: RequestTrace): number {
 
 const fmt = (ms: number) => (ms >= 100 ? ms.toFixed(0) : ms.toFixed(1));
 
-export const Trace = memo(function Trace({ trace, nameOf }: TraceProps) {
+export const Trace = memo(function Trace({ trace, nameOf, idleText }: TraceProps) {
   const totals = useMemo(() => {
     if (!trace) return null;
     let queued = 0;
@@ -59,7 +61,8 @@ export const Trace = memo(function Trace({ trace, nameOf }: TraceProps) {
           <span className="label mx-eyebrow">One request</span>
         </header>
         <p className="tr-empty">
-          Waiting for a request to finish. Press play, or raise the load.
+          {idleText ??
+            'Waiting for a request to finish. Press play, or raise the load.'}
         </p>
       </section>
     );

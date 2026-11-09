@@ -1,0 +1,48 @@
+/* The edge cues sit on the visible rect's side edges, at its middle. The
+   positions are written inline by EdgeCues from the measured rect, so they
+   clear an open rail or the challenge sheet the same way a fit does. */
+.cv-cue,
+.cv-cue-fit {
+  position: absolute;
+  z-index: 8;
+  background: var(--surface);
+  border-color: var(--border-strong);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+.cv-cue {
+  top: var(--cue-mid);
+  /* translate, not transform, so the shared .btn press nudge still works. */
+  translate: 0 -50%;
+}
+
+.cv-cue.is-left {
+  left: calc(var(--cue-left) + var(--sp-2));
+}
+
+.cv-cue.is-right {
+  right: calc(var(--cue-right) + var(--sp-2));
+}
+
+/* The zoom cluster's fit button stands in for this one wherever it is
+   shown, which is everywhere wider than a phone (App.css hides it there). */
+.cv-cue-fit {
+  display: none;
+  right: calc(var(--cue-right) + var(--sp-3));
+  bottom: calc(var(--cue-bottom) + var(--sp-3));
+}
+
+@media (max-width: 720px) {
+  .cv-cue-fit {
+    display: inline-flex;
+  }
+}
+
+/* Where the minimap is shown it already says the diagram goes on past the
+   edge, and where to. The inverse of its own media query (Minimap.css). */
+@media (min-width: 1101px) and (min-height: 621px) {
+  .cv-cue {
+    display: none;
+  }
+}
