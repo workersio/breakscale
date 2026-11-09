@@ -325,6 +325,37 @@
   align-items: center;
 }
 
+/* "Can you break it?" says it in full where there is room and shorter on a
+   narrow window. Never as its icon alone: a phone has no hover to show the
+   title, and a bare bolt says nothing to someone who has not used it. Its
+   aria-label says it in full at every width. */
+.app-break-short {
+  display: none;
+}
+
+@media (max-width: 899px) {
+  .app-break-long {
+    display: none;
+  }
+
+  .app-break-short {
+    display: inline;
+  }
+}
+
+/* On a phone the star count gives up its room to that label. */
+@media (max-width: 639px) {
+  .app-source-stars {
+    display: none;
+  }
+
+  /* Back to the plain .btn-icon square. */
+  .app-source-link.has-stars {
+    width: 36px;
+    padding: 0;
+  }
+}
+
 /* The menu button and the menu it opens. Relative, so the menu can anchor
    under the button rather than to the bar's far corner. */
 .app-menu-wrap {
@@ -744,16 +775,29 @@
   pointer-events: none;
 }
 
+/* Each panel floats --sp-3 in from the stage's edge, so its far side is
+   that much further in than its width. Without the inset a fit that took
+   the tight margin (see FIT_MIN_TIGHT in fit.ts) ran a card's frame up
+   against the panel's edge. */
 .app-body.has-library .stage-safe {
-  left: var(--rail-w);
+  left: calc(var(--rail-w) + var(--sp-3));
 }
 
 .app-body.has-inspector .stage-safe {
-  right: var(--ins-w);
+  right: calc(var(--ins-w) + var(--sp-3));
 }
 
 .app-body.has-metrics .stage-safe {
-  bottom: var(--strip-shown);
+  bottom: calc(var(--strip-shown) + var(--sp-3));
+}
+
+/* The bar floats over the top of the canvas on a desktop, as opaque as any
+   panel, and a tall diagram fitted to the full height had its top row under
+   it. A phone's header is not over the canvas, so it needs nothing here. */
+@media (min-width: 721px) {
+  .stage-safe {
+    top: var(--bar-clear);
+  }
 }
 
 /* The strip: pinned to the stage's foot, --strip-h tall (rationale on the
@@ -1164,7 +1208,7 @@
   .app-island {
     min-height: 0;
     gap: var(--sp-2);
-    padding: var(--sp-2) var(--sp-3);
+    padding: var(--sp-1) var(--sp-3);
     border: 0;
     border-radius: 0;
     background: none;
@@ -1176,10 +1220,38 @@
     flex: 1 1 auto;
   }
 
+  /* One identity row: wordmark, undo, redo, Share and the menu. It was two
+     rows with the GitHub link and a labelled Share wrapping under the
+     wordmark, flush to the screen edge, which put the header at 282px of an
+     800px screen. The link now lives in the menu; Share keeps its glyph. */
   .app-island-menu {
     order: 2;
     margin-left: 0;
     padding-left: 0;
+    gap: var(--sp-2);
+  }
+
+  .app-source-link,
+  .app-share-label {
+    display: none;
+  }
+
+  .app-share-btn {
+    width: 36px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  /* "Can you break it?" keeps a word here (see .app-break-short), since a
+     bare bolt says nothing to someone who has not used it. The glyph gives
+     up its room instead, which is what lets the word fit the one row. */
+  .app-break-btn {
+    width: auto;
+    padding: 0 var(--sp-2);
+  }
+
+  .app-break-btn svg {
+    display: none;
   }
 
   /* The load control is the one thing a reader touches constantly, so it
@@ -1190,6 +1262,7 @@
     flex: 1 1 100%;
     max-width: none;
     border-top: var(--bw) solid var(--border);
+    padding-block: var(--sp-2);
   }
 
   .app-tagline,
@@ -1312,15 +1385,34 @@
   }
 }
 
-@keyframes app-sheet-in {
-  from {
-    transform: translateY(100%);
+/* The narrowest common phones (360px) need about 30px more for that word
+   than the row has. The islands' spacing gives it up, so the row stays one
+   row rather than wrapping the menu island under the wordmark. */
+@media (max-width: 379px) {
+  .app-island {
+    gap: var(--sp-1);
+    padding-inline: var(--sp-2);
+  }
+
+  .app-island-menu,
+  .app-history {
+    gap: var(--sp-1);
+  }
+
+  .app-island-menu {
+    padding-left: 0;
+  }
+
+  .app-break-btn {
+    padding: 0 var(--sp-1);
   }
 }
 
-@keyframes app-sheet-out {
-  to {
-    transform: translateY(100%);
+/* Narrower still, the menu island wraps under the wordmark, and there it
+   starts at the screen edge unless it keeps its own inset. */
+@media (max-width: 339px) {
+  .app-island-menu {
+    padding-left: var(--sp-2);
   }
 }
 
@@ -1389,9 +1481,10 @@
     border: 0;
     background: none;
     color: var(--text-dim);
-    font-size: var(--fs-xs);
+    /* --fs-sm and no tracking. This named --fs-xs, which is not a token, so
+       the labels fell back to 14px with label tracking and shouted. */
+    font-size: var(--fs-sm);
     font-weight: var(--fw-med);
-    letter-spacing: var(--tr-label);
     cursor: pointer;
   }
 
@@ -1400,9 +1493,21 @@
     background: var(--accent-soft);
   }
 
-  .app-tab:disabled {
-    opacity: 0.4;
+  /* Tokens, not opacity, as with .btn:disabled: at 0.4 the label fell to
+     1.9:1 and the tab all but vanished. The label stays readable, so the
+     unavailable state needs a cue other than a slightly greyer label: a
+     lighter weight, and the glyph drawn in the outline ink, about half the
+     contrast of an enabled tab's glyph. */
+  .app-tab:disabled,
+  .app-tab[aria-disabled='true'] {
+    color: var(--text-faint);
+    font-weight: var(--fw-body);
     cursor: default;
+  }
+
+  .app-tab:disabled svg,
+  .app-tab[aria-disabled='true'] svg {
+    color: var(--border-strong);
   }
 
   .app-tab svg {
@@ -1443,14 +1548,15 @@
   }
 
   /* The grab handle. A 44px target for a 4px mark: the bar is the signal,
-     the padding around it is what a thumb actually lands on. */
+     the padding around it is what a thumb actually lands on. (It was 28px
+     while this comment said 44; box-sizing is border-box here.) */
   .app-grabber {
     display: flex;
     flex: none;
     align-items: center;
     justify-content: center;
-    height: 28px;
-    padding: 12px 0;
+    height: 44px;
+    padding: 20px 0;
     /* The browser must not claim the vertical drag for scrolling, or the
        sheet never sees the move events it needs to follow the finger. */
     touch-action: none;

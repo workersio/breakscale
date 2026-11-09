@@ -28,9 +28,8 @@ class FakePointerEvent extends MouseEvent {
 }
 
 beforeEach(() => {
-  // Tooltips ship OFF, so a <Term> renders its children bare by default and
-  // there is no trigger to drive. These tests are about what the tooltip does
-  // once a student has asked for it, so they opt in explicitly.
+  // Tooltips ship on, but a stored preference could say otherwise, so the
+  // tests pin it rather than lean on the default.
   setPreference('tooltips', true);
   vi.stubGlobal('PointerEvent', FakePointerEvent);
   vi.useFakeTimers();
@@ -241,6 +240,39 @@ describe('keyboard', () => {
   });
 });
 
+describe('scrolling', () => {
+  it('follows the scroll that focusing a term below the fold causes', () => {
+    render(App);
+    act(() => trigger().focus());
+    expect(panel()).not.toBeNull();
+    act(() => {
+      window.dispatchEvent(new Event('scroll'));
+    });
+    expect(panel()).not.toBeNull();
+  });
+
+  it('closes on a scroll the reader makes later', () => {
+    render(App);
+    act(() => trigger().focus());
+    tick(1000);
+    act(() => {
+      window.dispatchEvent(new Event('scroll'));
+    });
+    expect(panel()).toBeNull();
+  });
+
+  it('closes a hover tooltip on any scroll', () => {
+    render(App);
+    pointer(trigger(), 'pointerenter');
+    tick(500);
+    expect(panel()).not.toBeNull();
+    act(() => {
+      window.dispatchEvent(new Event('scroll'));
+    });
+    expect(panel()).toBeNull();
+  });
+});
+
 describe('touch', () => {
   it('does not open on a touch pointerenter', () => {
     render(App);
@@ -260,6 +292,90 @@ describe('touch', () => {
     expect(panel()).not.toBeNull();
     act(() => {
       t.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+    });
+    expect(panel()).toBeNull();
+  });
+
+  /*
+   * A real press on a focusable span runs pointerdown, focus, then click.
+   * Focus opens the tooltip, and the click used to see it open and toggle it
+   * shut again, so the first tap on every term did nothing. A bare click
+   * with no focus before it, as above, cannot catch that.
+   */
+  function press(el: HTMLElement, pointerType: 'touch' | 'mouse'): void {
+    act(() => {
+      el.dispatchEvent(
+        new FakePointerEvent('pointerdown', { bubbles: true, pointerType }),
+      );
+    });
+    act(() => el.focus());
+    act(() => {
+      el.dispatchEvent(
+        new FakePointerEvent('pointerup', { bubbles: true, pointerType }),
+      );
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+    });
+  }
+
+  it('opens on the first real tap and closes on the second', () => {
+    render(App);
+    const t = trigger();
+    press(t, 'touch');
+    tick(600);
+    expect(panel()).not.toBeNull();
+    expect(t.dataset.open).toBe('true');
+    press(t, 'touch');
+    expect(panel()).toBeNull();
+  });
+
+  it('opens on the first real mouse click', () => {
+    render(App);
+    press(trigger(), 'mouse');
+    tick(600);
+    expect(panel()).not.toBeNull();
+  });
+
+  it('closes on a tap when keyboard focus had already opened it', () => {
+    render(App);
+    const t = trigger();
+    act(() => t.focus());
+    expect(panel()).not.toBeNull();
+    press(t, 'touch');
+    expect(panel()).toBeNull();
+  });
+
+  it('pins a hover-opened tooltip on click rather than closing it', () => {
+    render(App);
+    const t = trigger();
+    pointer(t, 'pointerenter');
+    tick(500);
+    expect(panel()).not.toBeNull();
+    // Inside the grace window hover opens with no delay, so the pointer has
+    // always opened it by the time the click lands. Closing here read as the
+    // click doing nothing.
+    press(t, 'mouse');
+    pointer(t, 'pointerleave');
+    tick(1000);
+    expect(panel()).not.toBeNull();
+    press(t, 'mouse');
+    expect(panel()).toBeNull();
+  });
+
+  it('does not let a press dragged off a term steer a later synthesised click', () => {
+    render(App);
+    const t = trigger();
+    // Pressed while closed, then dragged away: no click follows.
+    act(() => {
+      t.dispatchEvent(
+        new FakePointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }),
+      );
+    });
+    act(() => t.blur());
+    // Later, keyboard focus opens it and assistive tech clicks it.
+    act(() => t.focus());
+    expect(panel()).not.toBeNull();
+    act(() => {
+      t.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 }));
     });
     expect(panel()).toBeNull();
   });

@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { readTokens } from '../theme/tokens';
 
 /**
  * Contrast is computed here, never eyeballed.
@@ -24,11 +26,13 @@ const TOKEN = {
   surface2: '#f7f3ee',
   surface3: '#f0ece5',
   border: '#e8e2da',
+  // The divider ink as it was when the defect below was found, kept so that
+  // test still measures it. The live --border-strong has since darkened.
   borderStrong: '#d2cbc2',
   line3: '#948c82',
   text: '#1e242e',
   textDim: '#525862',
-  textFaint: '#646972',
+  textFaint: '#626770',
   accent: '#325cbd',
   accentSoft: '#e3edff',
   accentInk: '#2d5277',
@@ -69,6 +73,21 @@ const GRAPHIC_MIN = 3;
 
 /* ------------------------------------------------------------------ */
 
+describe('the copied tokens', () => {
+  const live = readTokens(
+    readFileSync(new URL('../index.css', import.meta.url), 'utf8'),
+    ':root',
+  );
+  const kebab = (k: string) => `--${k.replace(/([A-Z0-9])/g, '-$1').toLowerCase()}`;
+
+  it.each(Object.entries(TOKEN).filter(([k]) => k !== 'borderStrong'))(
+    '%s matches index.css',
+    (key, value) => {
+      expect(live[kebab(key)]?.toLowerCase()).toBe(value);
+    },
+  );
+});
+
 describe('the term affordance', () => {
   /*
    * The single most important measurement in the feature. This dotted
@@ -81,6 +100,16 @@ describe('the term affordance', () => {
     ['surface-2', TOKEN.surface2],
   ])('is visible on %s', (_name, background) => {
     expect(contrast(TOKEN.line3, background)).toBeGreaterThanOrEqual(GRAPHIC_MIN);
+  });
+
+  /* On a touch screen the underline stays on at rest (Tooltip.css), so the
+     dark theme's ink has to clear the same bar. */
+  it.each([
+    ['bg', '#16151a'],
+    ['surface', '#1d1c22'],
+    ['surface-2', '#25242b'],
+  ])('is visible on dark %s', (_name, background) => {
+    expect(contrast('#807d8c', background)).toBeGreaterThanOrEqual(GRAPHIC_MIN);
   });
 
   it('would have failed with the quieter divider ink', () => {

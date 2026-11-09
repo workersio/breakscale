@@ -20,6 +20,7 @@ import type {
   NodeConfig,
   NodeKind,
   NodeStats,
+  RouteStats,
   SimEdge,
   SimNode,
   SimSnapshot,
@@ -45,6 +46,7 @@ import {
   formatPct,
   formatRate,
   healthOfErr,
+  healthOfLatency,
   healthOfLoad,
 } from './format';
 import type { Health } from './format';
@@ -94,6 +96,12 @@ import type { Annotation, AnnotationFont, Note, Section } from '../sim/annotatio
 import { usePreference } from '../content/preferences';
 import { Minimap } from './Minimap';
 import { DETAIL_ZOOM, MINIMAL_ZOOM, fitViewport } from './fit';
+import { EmptyCanvas } from './EmptyCanvas';
+import { EdgeCues } from './EdgeCues';
+import type { EmptyCanvasProps } from './EmptyCanvas';
+import { glanceLayout, glanceScale } from './glance';
+import type { GlanceLayout } from './glance';
+import { useSettledHealthMap } from './settledHealth';
 import { serialiseSvg } from '../imageExport';
 import './Canvas.css';
 
@@ -121,6 +129,10 @@ export const NODE_W = 184;
 export const NODE_H = 88;
 /** Radii come from the design scale (3/4/6). The node body is the 6. */
 const NODE_R = 6;
+/** The spotlight ring's gap from the node, and its tag's size. */
+const SPOT_PAD = 8;
+const SPOT_TAG_W = 48;
+const SPOT_TAG_H = 22;
 /**
  * Gap between the node's outline and the selection ring drawn around it.
  *
@@ -229,6 +241,25 @@ function fitPrimary(
   return { textLength: budget, lengthAdjust: 'spacingAndGlyphs' };
 }
 
+/** fitPrimary for the glance line: the full inner width is its budget. */
+function fitGlance(
+  value: string,
+  label: string,
+  gl: GlanceLayout,
+): { textLength?: number; lengthAdjust?: 'spacingAndGlyphs' } {
+  const budget = NODE_W - PAD_X * 2;
+  const w =
+    measureText(value, { ...VAL_PRIMARY_STYLE, size: gl.valueSize }) +
+    measureText(label, {
+      ...CAP_STYLE,
+      size: gl.capSize,
+      tracking: gl.capSize * 0.06,
+    }) +
+    (value && label ? gl.capGap : 0);
+  if (w <= budget) return {};
+  return { textLength: budget, lengthAdjust: 'spacingAndGlyphs' };
+}
+
 const SPARK_X = 108;
 const SPARK_Y = 38;
 const SPARK_W = 64;
@@ -318,6 +349,8 @@ export type SparkData = ReadonlyMap<string, ArrayLike<number>>;
 export interface CanvasProps {
   topology: Topology;
   snapshot: SimSnapshot | null;
+  /** Each client's own figures, from `Engine.routes()`, for the client cards. */
+  routes?: readonly RouteStats[];
   /**
    * Ids of every selected node AND edge. Node ids and edge ids share one
    * namespace here; an edge id is `from->to`, which can never collide with a
@@ -482,6 +515,25 @@ export interface CanvasProps {
    * Omitted, the whole surface is treated as visible.
    */
   visibleRef?: RefObject<HTMLElement | null>;
+  /**
+   * Parts "Can you break it?" is aiming at, by node or edge id: 0 for the
+   * schedule being tried now, drawn as a dashed ring, and 1, 2, 3 for the
+   * faults of a break it found, drawn as numbered badges.
+   */
+  breakMarks?: ReadonlyMap<string, number>;
+  /** The starting points an empty canvas offers. Omitted, it offers none. */
+  emptyActions?: EmptyCanvasProps['actions'];
+  /**
+   * A brief is on screen. A fit may then zoom out past the usual floor
+   * rather than leave a box under the brief's panel; see FIT_MIN_TIGHT.
+   */
+  fitTight?: boolean;
+  /**
+   * A node to point at: a ring and a "Here" tag around it, drawn above the
+   * nodes and never hit-tested. Set by the shell's "Find the problem", and
+   * panned into view when it changes. Null or absent draws nothing.
+   */
+  spotlightId?: string | null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -564,7 +616,7 @@ function worstHealth(a: Health, b: Health): Health {
  * The share of a blocking node's slots that are taken, working or waiting on
  * a call it made, or `util` for a node that cannot wait (the field is absent).
  */
-function heldShare(s: NodeStats, cfg: NodeConfig, util: number): number {
+export function heldShare(s: NodeStats, cfg: NodeConfig, util: number): number {
   const waiting = s.waitingOnDownstream;
   if (waiting === undefined) return util;
   const slots =
@@ -599,12 +651,15 @@ function heldShare(s: NodeStats, cfg: NodeConfig, util: number): number {
  * `backlog` is the summed depth of the buffer nodes feeding a pull-based
  * consumer (worker, transcoder). Their own queue is structurally always 0;
  * the work they are behind on lives in the queues that feed them.
+ *
+ * `route` is a client's own end-to-end figures, from `Engine.routes()`.
  */
 export function readoutFor(
   kind: NodeKind,
   s: NodeStats,
   cfg: NodeConfig,
   backlog = 0,
+  route: RouteStats | null = null,
 ): Readout {
   const util = clamp(s.utilization, 0, 1);
   const losing = s.shedRate + s.timeoutRate > 0;
@@ -618,6 +673,43 @@ export function readoutFor(
 
   switch (kind) {
     case 'client': {
+      /* With its own requests settling, a client reads as the people behind
+         it see the system: how slow the slowest of their requests are and
+         how many fail, counting every timeout anywhere along the way. The
+         node's own error rate leaves out a timeout that a node further down
+         gave up on. */
+      if (route !== null && route.goodputRps + route.failedRps > 0) {
+        const err = clamp(route.errorRate, 0, 1);
+        const p99 = route.goodputRps > 0 ? route.p99 : null;
+        return {
+          primary: { value: formatRate(route.offeredRps), label: 'sent' },
+          // With nothing succeeding there is no p99 to show, and a 0ms one
+          // would read as instant.
+          a:
+            p99 !== null
+              ? { value: formatMs(p99), label: 'p99' }
+              : { value: formatRate(0), label: 'ok' },
+          b: { value: formatPct(err), label: 'failing' },
+          load: err,
+          health: worstHealth(healthOfErr(err), healthOfLatency(p99)),
+          spark: s.arrivalRate,
+          sparkUnit: false,
+          losing: err > 0,
+        };
+      }
+      // Nothing sent and nothing settling: a percentage would be of nothing.
+      if (route !== null && route.offeredRps === 0) {
+        return {
+          primary: { value: formatRate(0), label: 'sent' },
+          a: { value: formatRate(0), label: 'ok' },
+          b: { value: 'idle', label: '' },
+          load: 0,
+          health: 'ok',
+          spark: s.arrivalRate,
+          sparkUnit: false,
+          losing: false,
+        };
+      }
       const err = clamp(s.errorRate, 0, 1);
       /* The headline is what the client is SENDING, not what came back.
          Throughput counts successes, so during a total collapse it is
@@ -1648,6 +1740,8 @@ interface EdgeViewProps {
    * the parent, which buckets anchors and staggers the collisions.
    */
   labelDy: number;
+  /** See `CanvasProps.breakMarks`. Undefined when the edge is not a target. */
+  breakMark?: number;
 }
 
 const EdgeView = memo(function EdgeView({
@@ -1664,6 +1758,7 @@ const EdgeView = memo(function EdgeView({
   targetHealth,
   showLabel,
   labelDy,
+  breakMark,
 }: EdgeViewProps) {
   // The router arrives axis-aligned from whichever side it picked, so the
   // arrowhead is one of four fixed triangles and needs no trigonometry.
@@ -1764,6 +1859,10 @@ const EdgeView = memo(function EdgeView({
       {/* Arrowhead: one of four fixed triangles, pointed along the path's
           actual final direction as reported by the router. */}
       <path d={arrowPath(route.tip, route.dir)} className="cv-edge-arrow" />
+      {breakMark !== undefined && <path d={d} className="cv-break-wire" />}
+      {breakMark !== undefined && breakMark > 0 && (
+        <BreakBadge x={midX} y={midY + 14} n={breakMark} />
+      )}
 
       {/*
         THE BREAK. A severed wire gets a physical gap with two cut ends, not
@@ -2602,6 +2701,18 @@ interface NodeViewProps {
    * Computed by the parent from the topology; 0 for every other kind.
    */
   backlog: number;
+  /** A client's own end-to-end figures, or null for every other kind. */
+  route: RouteStats | null;
+  /**
+   * The readout's health after display hysteresis, from the parent. Absent
+   * means use the readout's own, unsettled.
+   */
+  settledHealth?: Health;
+  /**
+   * World px per screen px for the glance line (glance.ts), or 0 for none.
+   * Non-zero only below DETAIL_ZOOM on a touch screen.
+   */
+  glance: number;
   onActivate: (id: string, additive: boolean) => void;
   onNudge: (id: string, dx: number, dy: number) => void;
   /**
@@ -2611,9 +2722,25 @@ interface NodeViewProps {
    * session: content that is simply present does not get an entrance.
    */
   entering: boolean;
+  /** See `CanvasProps.breakMarks`. Undefined when the node is not a target. */
+  breakMark?: number;
 }
 
-const NodeView = memo(function NodeView({
+/**
+ * A fault's number in a break the search found. A shape and a figure, so it
+ * reads without its colour.
+ */
+function BreakBadge({ x, y, n }: { x: number; y: number; n: number }) {
+  return (
+    <g className="cv-break-badge" transform={`translate(${x},${y})`} aria-hidden="true">
+      <circle r={9} />
+      <text y={4}>{n}</text>
+    </g>
+  );
+}
+
+/** Exported for its render test only; the canvas is its one caller. */
+export const NodeView = memo(function NodeView({
   node,
   stats,
   spark,
@@ -2624,13 +2751,23 @@ const NodeView = memo(function NodeView({
   linkTarget,
   fault,
   backlog,
+  route,
+  settledHealth,
+  glance,
   onActivate,
   onNudge,
   entering,
+  breakMark,
 }: NodeViewProps) {
-  const readout = stats ? readoutFor(node.kind, stats, node.config, backlog) : null;
+  const readout = stats
+    ? readoutFor(node.kind, stats, node.config, backlog, route)
+    : null;
   // A faulted node is never reported as healthy, whatever its metrics say.
-  const health: Health = fault ? 'danger' : readout ? readout.health : 'ok';
+  const health: Health = fault
+    ? 'danger'
+    : readout
+      ? (settledHealth ?? readout.health)
+      : 'ok';
 
   /* ---- structure: what this node is made of -----------------------
      `instances === undefined` means "this kind is genuinely one thing" and
@@ -2722,16 +2859,36 @@ const NodeView = memo(function NodeView({
   const sparkUnit = readout ? readout.sparkUnit : true;
 
   const full = detail === 2;
-  const showHeader = detail >= 1;
+  // The glance line takes the header's room: the icon and the 14px name
+  // are both unreadable at the zooms it is drawn at.
+  const gl = glance > 0 && !full ? glanceLayout(glance) : null;
+  const showHeader = detail >= 1 && !gl;
+  // The status mark survives the glance line, counter-scaled to the same
+  // screen size and level with its name: it is the shape channel for health,
+  // and a phone at fit zoom must not lose it. The unit badge does not, since
+  // at 11px the name would keep only a few letters beside both; the stack
+  // behind the card still shows that there are several.
+  const showCorner = showHeader || gl !== null;
+  const cs = gl ? glance : 1;
+  const cornerY = gl ? gl.nameY : HEAD_CENTER_Y;
+  const markSize = MARK_SIZE * cs;
 
   /** The badge string as actually rendered; the name budget reserves it. */
   const badgeText = badge ? `${badge}${pending > 0 ? `+${pending}` : ''}` : '';
-  const shownName = truncateLabel(
-    node.label,
-    showHeader,
-    badgeText,
-    Boolean(fault) || health !== 'ok',
-  );
+  const shownName = gl
+    ? truncateToWidth(
+        node.label,
+        NODE_W -
+          PAD_X * 2 -
+          (fault || health !== 'ok' ? (MARK_SIZE + NAME_GAP / 2) * cs : 0),
+        { ...NAME_STYLE, size: gl.nameSize },
+      )
+    : truncateLabel(
+        node.label,
+        showHeader,
+        badgeText,
+        Boolean(fault) || health !== 'ok',
+      );
 
   const linkClass =
     linkRole === 'none'
@@ -2777,6 +2934,11 @@ const NodeView = memo(function NodeView({
         // The fault is announced, not just drawn: a screen-reader user has
         // no access to the square mark in the corner.
         fault ? `faulted: ${fault}` : null,
+        breakMark === undefined
+          ? null
+          : breakMark > 0
+            ? `fault ${breakMark} of the break`
+            : 'being tested for a break',
       ]
         .filter(Boolean)
         .join(', ')}
@@ -2791,7 +2953,7 @@ const NodeView = memo(function NodeView({
     >
       {/* The fleet, BEHIND the body. Painted first so the body is the front
           card of the stack rather than an object sitting on top of one. */}
-      {structure === 'stack' && showHeader && (
+      {structure === 'stack' && showCorner && (
         <InstanceStack live={units?.length ?? 1} pending={pending} />
       )}
 
@@ -2837,6 +2999,21 @@ const NodeView = memo(function NodeView({
         />
       )}
 
+      {breakMark !== undefined && (
+        <rect
+          className="cv-break-ring"
+          x={-RING_GAP * 2}
+          y={-RING_GAP * 2}
+          width={NODE_W + RING_GAP * 4}
+          height={NODE_H + RING_GAP * 4}
+          rx={NODE_R + RING_GAP * 2}
+          ry={NODE_R + RING_GAP * 2}
+        />
+      )}
+      {breakMark !== undefined && breakMark > 0 && (
+        <BreakBadge x={0} y={0} n={breakMark} />
+      )}
+
       {/* No kind rule along the top edge. It used to sit at y=0, but the body
           rect is stroked and a stroke straddles its own path, so half the
           border already occupies that row. The bar landed on top of the inner
@@ -2880,11 +3057,27 @@ const NodeView = memo(function NodeView({
       <text
         className="cv-node-name"
         x={showHeader ? PAD_X + GLYPH_PX + NAME_GAP : PAD_X}
-        y={showHeader ? HEAD_CENTER_Y : 24}
+        y={gl ? gl.nameY : showHeader ? HEAD_CENTER_Y : 24}
+        style={gl ? { fontSize: gl.nameSize } : undefined}
       >
         {shownName}
         {shownName !== node.label && <title>{node.label}</title>}
       </text>
+
+      {gl && readout && (
+        <text
+          className="cv-node-primary"
+          x={PAD_X}
+          y={gl.valueY}
+          style={{ fontSize: gl.valueSize }}
+          {...fitGlance(readout.primary.value, readout.primary.label, gl)}
+        >
+          <tspan className="cv-val">{readout.primary.value}</tspan>
+          <tspan className="cv-cap" dx={gl.capGap} style={{ fontSize: gl.capSize }}>
+            {readout.primary.label}
+          </tspan>
+        </text>
+      )}
 
       {/*
         Status mark, top right. Redundant with colour by SHAPE, which is the
@@ -2899,29 +3092,30 @@ const NodeView = memo(function NodeView({
         So the three states differ in fill and the fourth in silhouette,
         before any colour is applied.
       */}
-      {showHeader && fault && (
+      {showCorner && fault && (
         <rect
           className="cv-node-mark is-fault"
-          x={NODE_W - PAD_X - MARK_SIZE}
-          y={HEAD_CENTER_Y - MARK_SIZE / 2}
-          width={MARK_SIZE}
-          height={MARK_SIZE}
+          x={NODE_W - PAD_X - markSize}
+          y={cornerY - markSize / 2}
+          width={markSize}
+          height={markSize}
         />
       )}
-      {showHeader && !fault && health === 'danger' && (
+      {showCorner && !fault && health === 'danger' && (
         <circle
           className="cv-node-mark is-danger"
-          cx={NODE_W - PAD_X - MARK_SIZE / 2}
-          cy={HEAD_CENTER_Y}
-          r={MARK_SIZE / 2}
+          cx={NODE_W - PAD_X - markSize / 2}
+          cy={cornerY}
+          r={markSize / 2}
         />
       )}
-      {showHeader && !fault && health === 'warn' && (
+      {showCorner && !fault && health === 'warn' && (
         <circle
           className="cv-node-mark is-warn"
-          cx={NODE_W - PAD_X - MARK_SIZE / 2}
-          cy={HEAD_CENTER_Y}
-          r={MARK_SIZE / 2 - 1}
+          cx={NODE_W - PAD_X - markSize / 2}
+          cy={cornerY}
+          r={(MARK_SIZE / 2 - 1) * cs}
+          style={gl ? { strokeWidth: 2 * cs } : undefined}
         />
       )}
 
@@ -3321,6 +3515,7 @@ interface LinkState {
 export default function Canvas({
   topology,
   snapshot,
+  routes,
   selectedIds,
   onSelectionChange,
   onMoveNode,
@@ -3350,6 +3545,10 @@ export default function Canvas({
   onToolChange,
   fitSignal = 0,
   visibleRef,
+  breakMarks,
+  emptyActions,
+  fitTight = false,
+  spotlightId = null,
 }: CanvasProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
@@ -5372,14 +5571,19 @@ export default function Canvas({
         if (n.x + NODE_W > maxX) maxX = n.x + NODE_W;
         if (n.y + NODE_H > maxY) maxY = n.y + NODE_H;
       }
-      const next = fitViewport({ minX, minY, maxX, maxY }, rects.surface, rects.view);
+      const next = fitViewport(
+        { minX, minY, maxX, maxY },
+        rects.surface,
+        rects.view,
+        fitTight,
+      );
       if (!next) return;
       // The surface size this fit was framed for, so the resize observer can
       // tell a real resize from the size it was already fitted to.
       fittedSizeRef.current = { w: rects.surface.width, h: rects.surface.height };
       setView(next);
     },
-    [visibleRect],
+    [visibleRect, fitTight],
   );
 
   /**
@@ -5653,7 +5857,64 @@ export default function Canvas({
       .join(', ');
   }, [topology.nodes]);
 
+  const spotNode = spotlightId ? (nodeById.get(spotlightId) ?? null) : null;
+
+  /* Pan a spotlit node into view when it is off screen or under a panel,
+     keeping the zoom. Keyed on the id alone, so the camera moves once per
+     answer and never fights a pan the student makes afterwards. */
+  useEffect(() => {
+    if (!spotlightId) return;
+    const n = topoRef.current.nodes.find((x) => x.id === spotlightId);
+    const rects = visibleRect();
+    if (!n || !rects) return;
+    const { surface, view } = rects;
+    const v = viewRef.current;
+    const left = surface.left + (n.x - SPOT_PAD) * v.k + v.x;
+    const top = surface.top + (n.y - SPOT_PAD - SPOT_TAG_H - 4) * v.k + v.y;
+    const right = surface.left + (n.x + NODE_W + SPOT_PAD) * v.k + v.x;
+    const bottom = surface.top + (n.y + NODE_H + SPOT_PAD) * v.k + v.y;
+    /* Panels marked [data-spot-avoid] (the answer that named this node,
+       an open "What just happened") cover the canvas. One that overlaps
+       the node trims the band it sits in, top or bottom, from the area the
+       node is centred in. On a phone that band is most of the strip. */
+    let visTop = view.top;
+    let visBottom = view.bottom;
+    let covered = false;
+    for (const el of document.querySelectorAll('[data-spot-avoid]')) {
+      const o = el.getBoundingClientRect();
+      if (o.width === 0 || o.height === 0) continue;
+      const mid = (view.top + view.bottom) / 2;
+      if ((o.top + o.bottom) / 2 < mid) visTop = Math.max(visTop, o.bottom);
+      else visBottom = Math.min(visBottom, o.top);
+      if (o.left < right && o.right > left && o.top < bottom && o.bottom > top) {
+        covered = true;
+      }
+    }
+    if (
+      !covered &&
+      left >= view.left &&
+      right <= view.right &&
+      top >= view.top &&
+      bottom <= view.bottom
+    ) {
+      return;
+    }
+    // Panels taller than the room between them leave nothing to centre in.
+    if (visBottom - visTop < (bottom - top) / 2) {
+      visTop = view.top;
+      visBottom = view.bottom;
+    }
+    const cx = view.left + view.width / 2 - surface.left;
+    const cy = (visTop + visBottom) / 2 - surface.top;
+    setView({
+      k: v.k,
+      x: cx - (n.x + NODE_W / 2) * v.k,
+      y: cy - (n.y + NODE_H / 2) * v.k,
+    });
+  }, [spotlightId, visibleRect]);
+
   const detail: 0 | 1 | 2 = view.k >= DETAIL_ZOOM ? 2 : view.k >= MINIMAL_ZOOM ? 1 : 0;
+  const glance = glanceScale(view.k, coarsePointer);
   const showEdgeLabels = view.k >= 1;
 
   /**
@@ -5714,24 +5975,48 @@ export default function Canvas({
     [snapshot, topology],
   );
 
-  const healthById = useMemo(() => {
+  /** Client routes by client id, once per snapshot. */
+  const routeById = useMemo(() => {
+    const m = new Map<string, RouteStats>();
+    for (const r of routes ?? []) m.set(r.clientId, r);
+    return m;
+  }, [routes]);
+
+  const readoutHealthById = useMemo(() => {
     const m = new Map<string, Health>();
     if (!snapshot) return m;
     for (const n of topology.nodes) {
-      if (faultById.has(n.id)) {
-        m.set(n.id, 'danger');
-        continue;
-      }
       const s = snapshot.nodes[n.id];
       if (s) {
         m.set(
           n.id,
-          readoutFor(n.kind, s, n.config, backlogById?.get(n.id) ?? 0).health,
+          readoutFor(
+            n.kind,
+            s,
+            n.config,
+            backlogById?.get(n.id) ?? 0,
+            routeById.get(n.id) ?? null,
+          ).health,
         );
       }
     }
     return m;
-  }, [snapshot, topology.nodes, faultById, backlogById]);
+  }, [snapshot, topology.nodes, backlogById, routeById]);
+
+  /* Settled so a node on a threshold does not flicker (see settledHealth.ts).
+     The fault overlay goes on after settling: a crash shows at once, and a
+     repair hands straight back to the health that was tracked all along. */
+  const settledHealthById = useSettledHealthMap(
+    readoutHealthById,
+    snapshot?.system.timeMs ?? null,
+  );
+
+  const healthById = useMemo(() => {
+    if (faultById.size === 0) return settledHealthById;
+    const m = new Map(settledHealthById);
+    for (const id of faultById.keys()) m.set(id, 'danger');
+    return m;
+  }, [settledHealthById, faultById]);
 
   /**
    * Lane assignment for bidirectional pairs, keyed by edge id.
@@ -5963,6 +6248,7 @@ export default function Canvas({
                     targetHealth={healthById.get(ed.to) ?? 'ok'}
                     showLabel={showEdgeLabels}
                     labelDy={labelDyById.get(ed.id) ?? 0}
+                    breakMark={breakMarks?.get(ed.id)}
                   />
                 );
               })}
@@ -5989,12 +6275,48 @@ export default function Canvas({
                   linkTarget={snapTarget === n.id}
                   fault={faultById.get(n.id) ?? null}
                   backlog={backlogById?.get(n.id) ?? 0}
+                  route={routeById.get(n.id) ?? null}
+                  settledHealth={settledHealthById.get(n.id)}
+                  glance={glance}
                   onActivate={onActivate}
                   onNudge={onNudge}
                   entering={enteredIdRef.current === n.id}
+                  breakMark={breakMarks?.get(n.id)}
                 />
               ))}
             </g>
+
+            {spotNode && (
+              <g className="cv-spotlight" aria-hidden="true">
+                <rect
+                  className="cv-spotlight-ring"
+                  x={spotNode.x - SPOT_PAD}
+                  y={spotNode.y - SPOT_PAD}
+                  width={NODE_W + SPOT_PAD * 2}
+                  height={NODE_H + SPOT_PAD * 2}
+                  rx={NODE_R + SPOT_PAD}
+                />
+                <g
+                  transform={`translate(${spotNode.x - SPOT_PAD} ${spotNode.y - SPOT_PAD - SPOT_TAG_H - 4})`}
+                >
+                  <rect
+                    className="cv-spotlight-tag"
+                    width={SPOT_TAG_W}
+                    height={SPOT_TAG_H}
+                    rx={NODE_R}
+                  />
+                  <text
+                    className="cv-spotlight-label"
+                    x={SPOT_TAG_W / 2}
+                    y={SPOT_TAG_H / 2}
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                  >
+                    Here
+                  </text>
+                </g>
+              </g>
+            )}
 
             {/* Notes LAST among content: commentary is never hidden by the
                 diagram it comments on. */}
@@ -6175,15 +6497,7 @@ export default function Canvas({
         />
       )}
 
-      {topology.nodes.length === 0 && (
-        <div className="cv-empty">
-          <p className="cv-empty-lead">Start with an empty canvas</p>
-          <p className="cv-empty-body">
-            Drag a component in from the left, or open Examples to load a system that
-            already works and take it apart.
-          </p>
-        </div>
-      )}
+      {topology.nodes.length === 0 && <EmptyCanvas actions={emptyActions} />}
 
       {/* Status ledger. A corner carrying a true number stops reading as
           dead space. */}
@@ -6393,6 +6707,18 @@ export default function Canvas({
           }}
         />
       )}
+
+      <EdgeCues
+        hostRef={hostRef}
+        visibleRef={visibleRef}
+        visibleRect={visibleRect}
+        view={view}
+        nodes={topology.nodes}
+        nodeW={NODE_W}
+        nodeH={NODE_H}
+        setView={setView}
+        onFit={fitToContent}
+      />
 
       <div className="cv-zoom" data-chrome="zoom">
         <button

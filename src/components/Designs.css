@@ -133,6 +133,15 @@
   border-color: var(--accent);
 }
 
+/* Why Save is off. Said beside it, so the dimmed button is never a puzzle. */
+.dz-hint {
+  margin: 0;
+  padding: 0 var(--sp-5) var(--sp-2);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  color: var(--text-dim);
+}
+
 .dz-error {
   margin: 0;
   padding: 0 var(--sp-5) var(--sp-2);
@@ -242,4 +251,24 @@
   font-size: var(--fs-sm);
   line-height: var(--lh-sm);
   color: var(--text-dim);
+}
+
+/* Save on an empty canvas. aria-disabled keeps it focusable, so the look of
+   .btn:disabled is restated here, hover and press included. */
+.dz-card .btn[aria-disabled='true'],
+.dz-card .btn[aria-disabled='true']:hover,
+.dz-card .btn[aria-disabled='true']:active {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text-faint);
+  box-shadow: none;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* The 44px touch floor the shared .btn takes in index.css. */
+@media (pointer: coarse) {
+  .dz-name {
+    height: 44px;
+  }
 }

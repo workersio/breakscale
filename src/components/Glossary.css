@@ -430,3 +430,23 @@ input.gl-search-input {
     transition: none;
   }
 }
+
+/* The 44px touch floor the shared .btn takes in index.css. The links keep
+   their look; only the box a thumb can land on grows. */
+@media (pointer: coarse) {
+  .gl-see {
+    align-items: center;
+  }
+
+  .gl-see-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+
+  .gl-search-clear {
+    width: 44px;
+    height: 44px;
+    right: calc(var(--sp-1) * -1);
+  }
+}

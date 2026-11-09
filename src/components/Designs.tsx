@@ -34,6 +34,10 @@ export interface DesignsProps {
   onSave: (name: string) => void;
   /** Suggested name for a new save, usually the loaded example's. */
   suggestedName?: string;
+  /** False while the canvas has nothing on it: an empty save is a blank row. */
+  canSave?: boolean;
+  /** Open a design file. Omitted, the button is not shown. */
+  onOpenFile?: () => void;
 }
 
 export function Designs({
@@ -42,6 +46,8 @@ export function Designs({
   onOpen,
   onSave,
   suggestedName = '',
+  canSave = true,
+  onOpenFile,
 }: DesignsProps) {
   const { mounted, closing, unmount } = usePresence(open);
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -76,6 +82,7 @@ export function Designs({
   }, [open]);
 
   const doSave = useCallback(() => {
+    if (!canSave) return;
     const clean = name.trim();
     if (!clean) {
       setError('Give the design a name first.');
@@ -86,7 +93,7 @@ export function Designs({
     // Deferred a tick so the shell's write has landed before it is read
     // back; reading synchronously would show the list as it was.
     setTimeout(refresh, 0);
-  }, [name, onSave, refresh]);
+  }, [canSave, name, onSave, refresh]);
 
   if (!mounted) return null;
 
@@ -157,10 +164,38 @@ export function Designs({
               }
             }}
           />
-          <button type="button" className="btn btn-primary btn-sm" onClick={doSave}>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={doSave}
+            // aria-disabled, not disabled: the button keeps its focus stop, so
+            // a keyboard or screen reader user still hears the hint. doSave
+            // ignores the press.
+            aria-disabled={canSave ? undefined : true}
+            aria-describedby={canSave ? undefined : 'dz-save-hint'}
+          >
             Save
           </button>
+          {onOpenFile && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => {
+                // The picker opens first, while the press still counts as a
+                // user gesture; closing the dialog cannot take that away.
+                onOpenFile();
+                onClose();
+              }}
+            >
+              Open a file
+            </button>
+          )}
         </div>
+        {!canSave && (
+          <p id="dz-save-hint" className="dz-hint">
+            Add something to the canvas first.
+          </p>
+        )}
 
         {error && (
           <p className="dz-error" role="alert">

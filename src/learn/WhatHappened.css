@@ -1,0 +1,167 @@
+/* --------------------------------------------------------------------------
+   "What just happened"
+
+   Canvas chrome in the bottom-right corner, stacked on the zoom cluster so it
+   follows that cluster past an open inspector and up over an open charts
+   strip. Not the bottom left: every starter example keeps its note there,
+   under the first part, and a panel that opens by itself would cover the
+   lesson it is part of.
+   -------------------------------------------------------------------------- */
+
+.wh {
+  /* The zoom cluster's height: a 32px button, its padding and border. */
+  --wh-zoom-h: calc(32px + var(--sp-1) * 2 + 2px);
+
+  position: absolute;
+  z-index: 5;
+  right: var(--sp-3);
+  bottom: calc(var(--sp-3) + var(--wh-zoom-h) + var(--sp-2));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  pointer-events: none;
+  transition:
+    right var(--dur-base) var(--ease),
+    bottom var(--dur-base) var(--ease);
+}
+
+.wh > * {
+  pointer-events: auto;
+}
+
+.app-body.has-inspector .wh {
+  right: calc(var(--ins-w) + var(--sp-3) * 2);
+}
+
+/* "Can you break it?" takes the right-hand column under the bar, the way a
+   brief does (this panel is hidden in a brief), so this sits beside it. On
+   a phone the break panel is a bottom sheet; see the phone block below. */
+@media (min-width: 721px) {
+  .app-body.has-challenge:not(.has-inspector) .wh {
+    right: calc(var(--chal-w) + var(--sp-3) * 2);
+  }
+}
+
+.app-body.has-metrics .wh {
+  bottom: calc(var(--strip-shown) + var(--sp-3) * 2 + var(--wh-zoom-h) + var(--sp-2));
+}
+
+.wh-reopen {
+  color: var(--text);
+}
+
+.wh-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(380px, calc(100vw - var(--sp-4) * 2));
+  max-height: min(320px, 45vh);
+  background: var(--surface);
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-btn);
+  box-shadow: var(--shadow-lg);
+}
+
+.wh-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-2) 0 var(--sp-3);
+}
+
+.wh-title {
+  margin: 0;
+  font-size: var(--fs-base);
+  font-weight: var(--fw-med);
+  line-height: var(--lh-base);
+  color: var(--text);
+}
+
+.wh-earlier {
+  margin: 0;
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.wh-list {
+  margin: 0;
+  padding: var(--sp-1) var(--sp-3) var(--sp-3);
+  list-style: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.wh-line {
+  display: grid;
+  /* Wide enough for "59.9s" and "1m 05s" in the mono stack. */
+  grid-template-columns: 6ch 1fr;
+  gap: var(--sp-2);
+  padding: var(--sp-1) 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-base);
+  color: var(--text);
+}
+
+.wh-at {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  color: var(--text-dim);
+  text-align: right;
+}
+
+.wh-text {
+  text-wrap: pretty;
+}
+
+/* What was done to the system gets weight as well as its words, so the
+   cause reads first without leaning on colour. */
+.wh-line.is-cause .wh-text {
+  font-weight: var(--fw-med);
+}
+
+@media (max-width: 720px) {
+  .wh,
+  .app-body.has-inspector .wh,
+  .app-body.has-metrics .wh {
+    /* The phone stage already ends at the tab bar, and has no zoom cluster. */
+    left: var(--sp-4);
+    right: auto;
+    bottom: var(--sp-3);
+    align-items: flex-start;
+  }
+
+  .wh-panel {
+    max-height: 38vh;
+  }
+
+  /* A phone's canvas is a short strip. While a "Find the problem" answer is
+     up, it and this panel together would cover the part it points at, so
+     this steps aside until the answer is put away. */
+  .app-body:has(.fp-answer) .wh {
+    display: none;
+  }
+
+  /* "Can you break it?" is a sheet at the foot of a phone's canvas (this
+     panel is hidden in a brief, the other sheet there). Folded, this sits
+     above it, clear by the sheet's measured height (see handleSheetResize).
+     Open, the sheet is what is being read, and this steps aside the same
+     way until it is folded or closed. */
+  .app-body.has-challenge .wh {
+    bottom: calc(
+      var(--chal-sheet-h, var(--chal-fold-h)) + env(safe-area-inset-bottom, 0px) +
+        var(--sp-3)
+    );
+  }
+
+  .app-body:has(.chal:not(.is-collapsed)) .wh {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wh {
+    transition: none;
+  }
+}

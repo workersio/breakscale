@@ -50,6 +50,30 @@
   animation: st-scrim-out var(--dur-base) var(--ease) forwards;
 }
 
+/* On a phone the card becomes a bottom sheet, rising from the same edge
+   with the same motion as the panels the tab bar opens. app-sheet-in /
+   app-sheet-out are declared in App.css. */
+@media (max-width: 720px) {
+  .st-root {
+    place-items: end stretch;
+    padding: 0;
+  }
+
+  .st-card {
+    width: 100%;
+    /* .st-body is the part that scrolls, as it is on a wider screen. */
+    max-height: calc(100dvh - var(--sp-7));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    border-bottom: 0;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    animation: app-sheet-in var(--dur-base) var(--ease-out);
+  }
+
+  .st-root.is-closing .st-card {
+    animation: app-sheet-out var(--dur-base) var(--ease) forwards;
+  }
+}
+
 @keyframes st-card-in {
   from {
     opacity: 0;
@@ -335,4 +359,11 @@
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+/* The 44px touch floor the shared .btn takes in index.css. */
+@media (pointer: coarse) {
+  .st-seg {
+    height: 44px;
+  }
 }

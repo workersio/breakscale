@@ -1,4 +1,6 @@
-import type { Topology } from './sim/types';
+import { DEFAULT_SEED, sanitizeSeed } from './sim/seed';
+import type { FaultEvent, Topology } from './sim/types';
+import type { FaultChange, FaultDirection } from './components/faultUndo';
 
 /* ------------------------------------------------------------------ *
  * Undo / redo for the shell.
@@ -44,7 +46,30 @@ export interface HistorySnapshot {
  */
 export interface HistoryEntry extends HistorySnapshot {
   label: string;
+  /**
+   * The edit put a whole design on the canvas (an example, a file, a run to
+   * watch), so its fault schedule and seed are part of what undo restores.
+   * Any other edit leaves them to the run: faults recorded while it plays
+   * only ever append, and undoing a knob change must not roll them back.
+   */
+  replaces?: boolean;
+  /**
+   * Set on an entry made by a fault control. The snapshot then only carries
+   * the selection back; the design did not change, and what undo does is
+   * put the node or cable back, through `FaultApplier`.
+   */
+  fault?: FaultChange;
 }
+
+/**
+ * Applies a fault entry to the engine and returns it as it goes on the other
+ * stack, or null when it would change nothing, so the entry is skipped like
+ * a design entry equal to the screen.
+ */
+export type FaultApplier = (
+  entry: HistoryEntry & { fault: FaultChange },
+  dir: FaultDirection,
+) => FaultChange | null;
 
 /**
  * Stack bound. 50 entries of a ~30-node topology is on the order of 500KB
@@ -118,6 +143,33 @@ function topologyEqual(a: Topology, b: Topology): boolean {
   return edgesEqual(a, b);
 }
 
+/**
+ * Same schedule, event by event. Absent and empty are the same schedule,
+ * the way they are the same run.
+ */
+function faultsEqual(
+  a: FaultEvent[] | undefined,
+  b: FaultEvent[] | undefined,
+): boolean {
+  const xs = a ?? [];
+  const ys = b ?? [];
+  if (xs.length !== ys.length) return false;
+  for (let i = 0; i < xs.length; i++) {
+    const { opts: p, ...x } = xs[i] as FaultEvent & { opts?: object };
+    const { opts: q, ...y } = ys[i] as FaultEvent & { opts?: object };
+    if (!configEqual(x, y) || !configEqual(p ?? {}, q ?? {})) return false;
+  }
+  return true;
+}
+
+/** The run a design plays: its seed, the default when it has none, and its faults. */
+function runEqual(a: Topology, b: Topology): boolean {
+  return (
+    (sanitizeSeed(a.seed) ?? DEFAULT_SEED) === (sanitizeSeed(b.seed) ?? DEFAULT_SEED) &&
+    faultsEqual(a.faults, b.faults)
+  );
+}
+
 function edgesEqual(a: Topology, b: Topology): boolean {
   if (a.edges.length !== b.edges.length) return false;
   for (let i = 0; i < a.edges.length; i++) {
@@ -143,13 +195,19 @@ function selectionEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean
   return true;
 }
 
-function snapshotEqual(a: HistorySnapshot, b: HistorySnapshot): boolean {
+/**
+ * Whether applying `entry` would leave `current` as it is. The run only
+ * counts for an entry that replaced the design, because only that kind
+ * puts its own schedule and seed back (see HistoryEntry.replaces).
+ */
+function snapshotEqual(entry: HistoryEntry, current: HistorySnapshot): boolean {
   return (
-    a.rps === b.rps &&
-    a.presetId === b.presetId &&
-    a.challengeId === b.challengeId &&
-    selectionEqual(a.selectedIds, b.selectedIds) &&
-    topologyEqual(a.topology, b.topology)
+    entry.rps === current.rps &&
+    entry.presetId === current.presetId &&
+    entry.challengeId === current.challengeId &&
+    selectionEqual(entry.selectedIds, current.selectedIds) &&
+    topologyEqual(entry.topology, current.topology) &&
+    (!entry.replaces || runEqual(entry.topology, current.topology))
   );
 }
 
@@ -187,6 +245,7 @@ export class SessionHistory {
    * nothing left to apply. That press is not the reader changing anything,
    * and treating it as one let an empty Undo on a freshly opened share link
    * switch autosave back on and write the shared design over their own.
+   * A fault entry is false too: crashing a box is not editing the design.
    */
   private readonly onChange: ((edited: boolean) => void) | undefined;
   private readonly limit: number;
@@ -248,13 +307,28 @@ export class SessionHistory {
    * `before` is the state as it stands RIGHT NOW, pre-edit. Clears redo:
    * a real edit forks the timeline.
    */
-  commit(label: string, before: HistorySnapshot): void {
+  commit(label: string, before: HistorySnapshot, replaces = false): void {
     // An unsettled streamed edit happened first chronologically; land it
     // before this entry so undo unwinds in the order things were done.
     this.flushSettling();
-    this.pushPast({ label, ...cloneSnapshot(before) });
+    this.pushPast({
+      label,
+      ...cloneSnapshot(before),
+      ...(replaces ? { replaces } : {}),
+    });
     this.future = [];
     this.notify();
+  }
+
+  /**
+   * A fault control was pressed. Unlike `commit`, this is not an edit to the
+   * design, so a design opened from a share link stays someone else's.
+   */
+  commitFault(label: string, current: HistorySnapshot, fault: FaultChange): void {
+    this.flushSettling();
+    this.pushPast({ label, fault, ...cloneSnapshot(current) });
+    this.future = [];
+    this.notify(false);
   }
 
   /**
@@ -336,27 +410,50 @@ export class SessionHistory {
    * entry. Entries indistinguishable from the current state are skipped, so
    * a press of Ctrl+Z always changes something visible or does nothing at
    * all (returning null).
+   *
+   * A fault entry is applied here, by `applyFault`, because only applying it
+   * can tell whether it changes anything: the node may have healed on its
+   * own since. Without an applier, fault entries are skipped.
    */
-  undo(current: HistorySnapshot): HistoryEntry | null {
-    this.flushSettling();
-    while (this.past.length > 0) {
-      const entry = this.past.pop()!;
-      if (snapshotEqual(entry, current)) continue;
-      this.future.push({ label: entry.label, ...cloneSnapshot(current) });
-      this.notify();
-      return entry;
-    }
-    this.notify(false);
-    return null;
+  undo(current: HistorySnapshot, applyFault?: FaultApplier): HistoryEntry | null {
+    return this.step(
+      this.past,
+      (e) => this.future.push(e),
+      current,
+      'undo',
+      applyFault,
+    );
   }
 
   /** Pop forward one entry. Mirror of undo; does NOT clear the future. */
-  redo(current: HistorySnapshot): HistoryEntry | null {
+  redo(current: HistorySnapshot, applyFault?: FaultApplier): HistoryEntry | null {
+    return this.step(this.future, (e) => this.pushPast(e), current, 'redo', applyFault);
+  }
+
+  private step(
+    from: HistoryEntry[],
+    onto: (entry: HistoryEntry) => void,
+    current: HistorySnapshot,
+    dir: FaultDirection,
+    applyFault: FaultApplier | undefined,
+  ): HistoryEntry | null {
     this.flushSettling();
-    while (this.future.length > 0) {
-      const entry = this.future.pop()!;
+    while (from.length > 0) {
+      // The loop guard says the stack is not empty.
+      const entry = from.pop()!;
+      if (entry.fault) {
+        const fault = applyFault?.({ ...entry, fault: entry.fault }, dir) ?? null;
+        if (!fault) continue;
+        onto({ label: entry.label, fault, ...cloneSnapshot(current) });
+        this.notify(false);
+        return entry;
+      }
       if (snapshotEqual(entry, current)) continue;
-      this.pushPast({ label: entry.label, ...cloneSnapshot(current) });
+      onto({
+        label: entry.label,
+        ...cloneSnapshot(current),
+        ...(entry.replaces ? { replaces: true } : {}),
+      });
       this.notify();
       return entry;
     }

@@ -129,12 +129,18 @@
   stroke: var(--line);
   stroke-linecap: round;
   stroke-linejoin: round;
-  transition: stroke var(--dur-fast) var(--ease);
+  /* The opacity eases with the colour: the danger state changes both, and
+     easing one while the other snapped still read as a jump. */
+  transition:
+    stroke var(--dur-fast) var(--ease),
+    stroke-opacity var(--dur-fast) var(--ease);
 }
 
 .cv-edge-arrow {
   fill: var(--line);
-  transition: fill var(--dur-fast) var(--ease);
+  transition:
+    fill var(--dur-fast) var(--ease),
+    fill-opacity var(--dur-fast) var(--ease);
 }
 
 .cv-edge.is-active .cv-edge-line {
@@ -294,6 +300,34 @@
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
   pointer-events: none;
+}
+
+/* "Find the problem" points here. A solid ring in the danger mark plus a
+   word, so the answer never rests on colour alone. Inert: it sits above the
+   nodes but every press goes through to the node under it. */
+.cv-spotlight {
+  pointer-events: none;
+}
+
+.cv-spotlight-ring {
+  fill: none;
+  stroke: var(--danger-mark);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.cv-spotlight-tag {
+  fill: var(--danger-soft);
+  stroke: var(--danger-mark);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.cv-spotlight-label {
+  fill: var(--danger);
+  font-family: var(--sans);
+  font-size: var(--fs-sm);
+  font-weight: 600;
 }
 
 /* --------------------------------------------------------------------------
@@ -521,6 +555,20 @@
 
 .cv-node-mark.is-fault {
   fill: var(--danger-mark);
+}
+
+/* The mark fades in whenever it mounts, so it does not pop. That is mostly
+   a health change, and health is settled first (settledHealth.ts), so a
+   value sitting on a threshold does not keep replaying it. Zooming across
+   a detail level or loading a design remounts it too. */
+.cv-node-mark {
+  animation: cv-mark-in var(--dur-fast) var(--ease-out);
+}
+
+@keyframes cv-mark-in {
+  from {
+    opacity: 0;
+  }
 }
 
 /* T1 — unit captions. Uppercase is what makes 11px read as a label.
@@ -1034,9 +1082,8 @@
 
 /* The first thing a student sees on a cleared canvas, and the one moment
    they are most likely to be stuck. A heading that names the situation
-   without alarm, then one sentence naming both ways forward — the second of
-   which (take a working system apart) is the one most people would not think
-   of on their own. */
+   without alarm, one sentence naming the smallest working system, then the
+   starting points (EmptyCanvas.css). */
 .cv-empty {
   position: absolute;
   top: 50%;
@@ -1434,7 +1481,8 @@
      than a shortened duration is safe here, unlike the shell panels: no
      unmount logic waits on these animationend events. */
   .cv-node.is-entering,
-  .cv-node-ring {
+  .cv-node-ring,
+  .cv-node-mark {
     animation: none;
   }
 }
@@ -2167,4 +2215,44 @@
   .cv-hint-idle {
     display: none;
   }
+}
+
+/* --------------------------------------------------------------------------
+   "Can you break it?" marks.
+
+   A dashed ring around a part the search is faulting now, and a numbered
+   badge on each fault of a break it found. Danger, because these are the
+   parts that fail; dashed and numbered, so neither is colour alone.
+   -------------------------------------------------------------------------- */
+.cv-break-ring {
+  fill: none;
+  stroke: var(--danger-mark);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  pointer-events: none;
+}
+
+.cv-break-wire {
+  fill: none;
+  stroke: var(--danger-mark);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  pointer-events: none;
+}
+
+.cv-break-badge {
+  pointer-events: none;
+}
+
+.cv-break-badge circle {
+  fill: var(--danger);
+}
+
+.cv-break-badge text {
+  fill: var(--surface);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-anchor: middle;
 }

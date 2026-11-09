@@ -1,0 +1,43 @@
+/* The base card (.cv-empty, -lead, -body) lives in Canvas.css with the other
+   overlays. This adds the starting points and the phone sentence. */
+
+.cv-empty-phone {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .cv-empty-wide {
+    display: none;
+  }
+
+  .cv-empty-phone {
+    display: inline;
+  }
+}
+
+/* The card stays pointer-transparent so a palette drop or a marquee across
+   it still lands on the canvas. Only the buttons take the pointer back. */
+.cv-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+}
+
+.cv-empty-actions .btn {
+  pointer-events: auto;
+}
+
+/* The card is sized for the sentence, which is narrower than the three
+   buttons. On a desktop they stay on one row and spill evenly past both
+   sides of it; a phone lets them wrap. */
+@media (min-width: 721px) {
+  .cv-empty-actions {
+    flex-wrap: nowrap;
+  }
+
+  .cv-empty-actions .btn {
+    flex: none;
+  }
+}

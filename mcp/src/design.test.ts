@@ -163,6 +163,31 @@ describe('buildTopology', () => {
     }
   });
 
+  it('keeps an edge lossRate, drops a zero one, and refuses one outside 0 to 1', () => {
+    const lossy = (lossRate: unknown) =>
+      buildTopology({
+        ...chain,
+        edges: [
+          { from: 'users', to: 'api' },
+          { from: 'api', to: 'db', lossRate },
+        ],
+      });
+    const r = lossy(0.05);
+    if (!r.ok) throw new Error(r.errors.join('\n'));
+    expect(r.topology.edges[1]?.lossRate).toBe(0.05);
+    expect(r.topology.edges[0] && 'lossRate' in r.topology.edges[0]).toBe(false);
+    const zero = lossy(0);
+    expect(zero.ok && 'lossRate' in zero.topology.edges[1]!).toBe(false);
+    for (const bad of [5, -0.1, '0.1', Number.NaN]) {
+      const b = lossy(bad);
+      expect(b.ok).toBe(false);
+      if (b.ok) continue;
+      expect(b.errors[0]).toMatch(
+        /^edges\[1\] has lossRate .*; use a fraction from 0 to 1, so 0\.05 drops 5%\.$/,
+      );
+    }
+  });
+
   it('rejects an empty design', () => {
     expect(buildTopology({ nodes: [] }).ok).toBe(false);
     expect(buildTopology('nodes').ok).toBe(false);

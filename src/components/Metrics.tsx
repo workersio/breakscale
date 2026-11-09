@@ -1,13 +1,23 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { FailureReason, HistoryPoint, SimNode, SimSnapshot } from '../sim/types';
+import type {
+  FailureReason,
+  HistoryPoint,
+  RoutePoint,
+  RouteStats,
+  SimNode,
+  SimSnapshot,
+} from '../sim/types';
 import {
   formatCompact,
   formatMs,
   formatPct,
   formatRate,
   healthOfLatency,
+  NA,
   type Health,
 } from './format';
+import { routeCondition } from './routeHealth';
+import { useSettledHealth } from './settledHealth';
 import { Term } from './Tooltip';
 import { Trace } from './Trace';
 import { Cost } from './Cost';
@@ -291,6 +301,8 @@ interface ChartHeadProps {
   tone?: Health;
   /** Optional secondary figure, e.g. the live "Lost 42/s". */
   extra?: React.ReactNode;
+  /** True when `value` is the n/a sentinel: nothing has been measured. */
+  unmeasured?: boolean;
 }
 
 function ChartHead({
@@ -301,6 +313,7 @@ function ChartHead({
   unitTerm,
   tone = 'ok',
   extra,
+  unmeasured,
 }: ChartHeadProps) {
   return (
     <header className="mx-head">
@@ -310,7 +323,11 @@ function ChartHead({
       <span className="mx-head-right">
         {extra}
         <span className="mx-readout-wrap">
-          <span className={`num num-lg mx-readout ${toneClass(tone)}`}>{value}</span>
+          <span
+            className={`num num-lg mx-readout ${unmeasured ? 'is-unmeasured' : toneClass(tone)}`}
+          >
+            {value}
+          </span>
           {/*
             The unit is only a trigger when it is genuinely a term a student
             could fail to know. "p99" and "/s" are; a plain English word is
@@ -462,6 +479,15 @@ interface LatencyChartProps {
   p50: number;
   p95: number;
   p99: number;
+  /**
+   * False when no request has completed to measure: before the first
+   * sample, or while nothing at all is succeeding. The same rule the top
+   * bar's p99 uses, so the two never disagree.
+   */
+  measured: boolean;
+  emptyLabel: string;
+  /** Sim time of the snapshot, which steps the settled tone. */
+  timeMs: number;
 }
 
 const LatencyChart = memo(function LatencyChart({
@@ -469,6 +495,9 @@ const LatencyChart = memo(function LatencyChart({
   p50,
   p95,
   p99,
+  measured,
+  emptyLabel,
+  timeMs,
 }: LatencyChartProps) {
   const { ref, w } = useMeasuredWidth<HTMLDivElement>();
   const { at } = useXScale(history);
@@ -491,8 +520,10 @@ const LatencyChart = memo(function LatencyChart({
   );
 
   // The chart line and the headline number are toned by the same
-  // function, so they can never disagree about what a value means.
-  const tone = healthOfLatency(p99);
+  // function, so they can never disagree about what a value means. Settled
+  // so a p99 hovering on 200ms does not flicker the line (settledHealth.ts).
+  const tone = useSettledHealth(healthOfLatency(measured ? p99 : null), timeMs);
+  const ms = (v: number) => (measured ? formatMs(v) : NA);
   // The frame always renders; the message only claims "no data" when
   // there genuinely is none. A single sample draws its own mark.
   const empty = history.length === 0;
@@ -504,8 +535,9 @@ const LatencyChart = memo(function LatencyChart({
         captionTerm="latency"
         unit="p99"
         unitTerm="p99"
-        value={formatMs(p99)}
+        value={ms(p99)}
         tone={tone}
+        unmeasured={!measured}
       />
 
       <div className="mx-plot" ref={ref} style={{ height: CHART_H }}>
@@ -519,14 +551,39 @@ const LatencyChart = memo(function LatencyChart({
         </PlotLayer>
 
         <svg className="mx-layer" aria-hidden="true">
-          <Frame ticks={ticks} top={top} format={formatCompact} w={w} empty={empty} />
+          <Frame
+            ticks={ticks}
+            top={top}
+            format={formatCompact}
+            w={w}
+            empty={empty}
+            emptyLabel={emptyLabel}
+          />
         </svg>
       </div>
 
       <ul className="mx-legend">
-        <LegendKey className="mx-key-p50" name="p50" term="p50" value={formatMs(p50)} />
-        <LegendKey className="mx-key-p95" name="p95" term="p95" value={formatMs(p95)} />
-        <LegendKey className="mx-key-p99" name="p99" term="p99" value={formatMs(p99)} />
+        <LegendKey
+          className="mx-key-p50"
+          name="p50"
+          term="p50"
+          value={ms(p50)}
+          dim={!measured}
+        />
+        <LegendKey
+          className="mx-key-p95"
+          name="p95"
+          term="p95"
+          value={ms(p95)}
+          dim={!measured}
+        />
+        <LegendKey
+          className="mx-key-p99"
+          name="p99"
+          term="p99"
+          value={ms(p99)}
+          dim={!measured}
+        />
       </ul>
     </section>
   );
@@ -578,6 +635,7 @@ interface ThroughputChartProps {
    * "Dropped 10/s" during warm-up while every failure counter read zero.
    */
   lost: number;
+  emptyLabel: string;
 }
 
 const ThroughputChart = memo(function ThroughputChart({
@@ -585,6 +643,7 @@ const ThroughputChart = memo(function ThroughputChart({
   offered,
   goodput,
   lost,
+  emptyLabel,
 }: ThroughputChartProps) {
   const { ref, w } = useMeasuredWidth<HTMLDivElement>();
   const { at } = useXScale(history);
@@ -630,6 +689,9 @@ const ThroughputChart = memo(function ThroughputChart({
   const dropped = Number.isFinite(lost) ? Math.max(0, lost) : 0;
   const live = dropped > 0.5;
   const empty = history.length === 0;
+  // Before the first sample there is no rate to state, and a zero would
+  // read as "measured, and nothing got through".
+  const rate = (v: number) => (empty ? NA : formatCompact(v));
 
   return (
     <section className="mx-chart" aria-label="Throughput over the last 60 seconds">
@@ -638,7 +700,8 @@ const ThroughputChart = memo(function ThroughputChart({
         captionTerm="throughput"
         unit="succeeding /s"
         unitTerm="goodput"
-        value={formatCompact(safeGoodput)}
+        value={rate(safeGoodput)}
+        unmeasured={empty}
         extra={
           live ? (
             <span className="mx-dropped">
@@ -659,7 +722,14 @@ const ThroughputChart = memo(function ThroughputChart({
         </PlotLayer>
 
         <svg className="mx-layer" aria-hidden="true">
-          <Frame ticks={ticks} top={top} format={formatCompact} w={w} empty={empty} />
+          <Frame
+            ticks={ticks}
+            top={top}
+            format={formatCompact}
+            w={w}
+            empty={empty}
+            emptyLabel={emptyLabel}
+          />
         </svg>
       </div>
 
@@ -668,19 +738,21 @@ const ThroughputChart = memo(function ThroughputChart({
           className="mx-key-offered"
           name="offered"
           term="offered"
-          value={formatCompact(safeOffered)}
+          value={rate(safeOffered)}
+          dim={empty}
         />
         <LegendKey
           className="mx-key-goodput"
           name="succeeded"
           term="goodput"
-          value={formatCompact(safeGoodput)}
+          value={rate(safeGoodput)}
+          dim={empty}
         />
         <LegendKey
           className="mx-key-gap"
           name="lost"
           term="dropped"
-          value={formatCompact(dropped)}
+          value={rate(dropped)}
           dim={!live}
         />
       </ul>
@@ -776,11 +848,23 @@ interface FailSample {
 interface FailureChartProps {
   samples: FailSample[];
   failures: Record<FailureReason, number>;
+  /**
+   * True while no traffic has been recorded at all. The failure buffer
+   * samples once a second even at t=0, so its own length cannot tell a
+   * clean run from one that never started.
+   */
+  noTraffic: boolean;
+  emptyLabel: string;
+  /** The sentence for the healthy slot before any traffic. */
+  idleText: string;
 }
 
 const FailureChart = memo(function FailureChart({
   samples,
   failures,
+  noTraffic,
+  emptyLabel,
+  idleText,
 }: FailureChartProps) {
   const { ref, w } = useMeasuredWidth<HTMLDivElement>();
 
@@ -894,7 +978,7 @@ const FailureChart = memo(function FailureChart({
      not an absence of one, and it should say so. */
   const windowHadFailures = useMemo(() => bands.length > 0, [bands]);
 
-  const empty = samples.length === 0;
+  const empty = samples.length === 0 || noTraffic;
   const healthy = total <= 0;
 
   return (
@@ -907,8 +991,9 @@ const FailureChart = memo(function FailureChart({
         captionTerm="error-rate"
         unit="/s"
         unitTerm="rps"
-        value={healthy ? '0' : formatCompact(total)}
+        value={healthy ? (empty ? NA : '0') : formatCompact(total)}
         tone={healthy ? 'ok' : 'danger'}
+        unmeasured={healthy && empty}
       />
 
       <div className="mx-plot" ref={ref} style={{ height: CHART_H }}>
@@ -929,7 +1014,7 @@ const FailureChart = memo(function FailureChart({
             format={formatCompact}
             w={w}
             empty={empty}
-            emptyLabel="Waiting for traffic"
+            emptyLabel={emptyLabel}
           />
         </svg>
       </div>
@@ -944,7 +1029,7 @@ const FailureChart = memo(function FailureChart({
       {healthy ? (
         <p className="mx-clean">
           {empty
-            ? 'No traffic yet.'
+            ? idleText
             : windowHadFailures
               ? 'Recovered. Nothing is failing now.'
               : 'Nothing has failed in the last 60 seconds.'}
@@ -990,6 +1075,195 @@ const FailureChart = memo(function FailureChart({
 });
 
 /* ------------------------------------------------------------------ *
+ * By traffic source -- one line per client
+ *
+ * The system charts average every client together, which is exactly how a
+ * group of users failing badly hides inside a modest overall error rate.
+ * This draws each client's own requests on one axis, so the route that is
+ * hurting is the line that leaves the others.
+ *
+ * Series are told apart by weight and dash, as everywhere in the strip,
+ * never by hue. The only colour is the health colour, on a route the app
+ * already calls hurting.
+ * ------------------------------------------------------------------ */
+
+type RouteMode = 'failing' | 'p99';
+
+/** Distinct strokes before the styles repeat. */
+const ROUTE_STYLES = 4;
+
+/**
+ * A path through a route's samples that breaks where a sample is NaN. A gap
+ * is the truth there: nothing settled, or nothing succeeded, and a line
+ * drawn through it at zero would claim a reading that was never taken.
+ */
+function gappedPath(
+  points: readonly RoutePoint[],
+  xAt: (t: number) => number,
+  value: (p: RoutePoint) => number,
+  top: number,
+): string {
+  let d = '';
+  let pen = false;
+  for (const p of points) {
+    const v = value(p);
+    if (!Number.isFinite(v)) {
+      pen = false;
+      continue;
+    }
+    d += `${pen ? 'L' : 'M'}${xAt(p.t).toFixed(2)},${yOf(v, top).toFixed(2)}`;
+    pen = true;
+  }
+  return d;
+}
+
+const ROUTE_VALUE: Record<RouteMode, (p: RoutePoint) => number> = {
+  failing: (p) => p.errorRate * 100,
+  p99: (p) => p.p99,
+};
+
+const formatPctTick = (v: number) => `${formatCompact(v)}%`;
+
+interface RouteChartProps {
+  routes: readonly RouteStats[];
+  /** The system history in the window, for the shared time axis. */
+  history: HistoryPoint[];
+  nameOf: (id: string) => string;
+}
+
+const RouteChart = memo(function RouteChart({
+  routes,
+  history,
+  nameOf,
+}: RouteChartProps) {
+  const [mode, setMode] = useState<RouteMode>('failing');
+  const { ref, w } = useMeasuredWidth<HTMLDivElement>();
+  const { at } = useXScale(history);
+  const tEnd = history.length > 0 ? history[history.length - 1]!.t : 0;
+
+  const windowed = useMemo(
+    () =>
+      routes.map((r) => ({
+        route: r,
+        points: r.history.filter((p) => p.t >= tEnd - WINDOW_MS),
+      })),
+    [routes, tEnd],
+  );
+
+  const value = ROUTE_VALUE[mode];
+  const max = useMemo(() => {
+    let m = 0;
+    for (const { points } of windowed) {
+      for (const p of points) {
+        const v = value(p);
+        if (Number.isFinite(v) && v > m) m = v;
+      }
+    }
+    return m;
+  }, [windowed, value]);
+
+  // A share failing never passes 100%, so neither does its axis: the sticky
+  // axis pads the maximum by 15% and would otherwise round 100 up to 200.
+  const { top, ticks } = useStickyAxis(
+    mode === 'failing' ? Math.min(max, 100 / 1.15) : max,
+    mode === 'failing' ? 10 : 100,
+  );
+
+  const series = useMemo(
+    () =>
+      windowed.map(({ route, points }, i) => ({
+        route,
+        style: i % ROUTE_STYLES,
+        hurting: routeCondition(route) === 'hurting',
+        d: gappedPath(points, at, value, top),
+      })),
+    [windowed, at, value, top],
+  );
+
+  const empty = windowed.every(({ points }) => points.length === 0);
+
+  /* The legend reads the live figure, not the last chart sample, so it
+     agrees with the client card on the canvas. A route with nothing settled
+     has no share failing, and one with nothing succeeding has no p99. */
+  const reading = (r: RouteStats): string => {
+    if (mode === 'failing') {
+      return r.goodputRps + r.failedRps > 0 ? formatPct(r.errorRate) : 'idle';
+    }
+    return r.goodputRps > 0 ? formatMs(r.p99) : 'none';
+  };
+
+  return (
+    <section
+      className="mx-chart"
+      aria-label="Each traffic source over the last 60 seconds"
+    >
+      <header className="mx-head">
+        <span className="label mx-eyebrow">
+          <Term id="traffic-source">By traffic source</Term>
+        </span>
+        <span className="mx-seg" role="group" aria-label="Show">
+          <button
+            type="button"
+            className="mx-seg-btn"
+            aria-pressed={mode === 'failing'}
+            onClick={() => setMode('failing')}
+          >
+            Failing
+          </button>
+          <button
+            type="button"
+            className="mx-seg-btn"
+            aria-pressed={mode === 'p99'}
+            onClick={() => setMode('p99')}
+          >
+            p99
+          </button>
+        </span>
+      </header>
+
+      <div className="mx-plot" ref={ref} style={{ height: CHART_H }}>
+        <PlotLayer w={w}>
+          {series.map((sr) => (
+            <path
+              key={sr.route.clientId}
+              className={`mx-line mx-route-${sr.style}${sr.hurting ? ' is-danger' : ''}`}
+              d={sr.d}
+            />
+          ))}
+        </PlotLayer>
+
+        <svg className="mx-layer" aria-hidden="true">
+          <Frame
+            ticks={ticks}
+            top={top}
+            format={mode === 'failing' ? formatPctTick : formatCompact}
+            w={w}
+            empty={empty}
+          />
+        </svg>
+      </div>
+
+      <ul className="mx-legend mx-legend-routes">
+        {series.map((sr) => (
+          <li key={sr.route.clientId} className="mx-key mx-key-route">
+            <span
+              className={`mx-key-line mx-key-route-${sr.style}${sr.hurting ? ' is-danger' : ''}`}
+              aria-hidden="true"
+            />
+            <span className="mx-key-name">{nameOf(sr.route.clientId)}</span>
+            <span
+              className={`num num-sm mx-key-value${sr.hurting ? ' is-danger' : ''}`}
+            >
+              {reading(sr.route)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+});
+
+/* ------------------------------------------------------------------ *
  * Metrics strip
  * ------------------------------------------------------------------ */
 
@@ -999,7 +1273,29 @@ export interface MetricsProps {
   nodes?: readonly SimNode[];
   /** Node id to display name, for the trace panel. */
   nodeNames?: Record<string, string>;
+  /**
+   * Each client's own figures. With two or more clients the strip adds a
+   * chart of them; with one, that chart would only repeat the system's.
+   */
+  routes?: readonly RouteStats[];
+  /** Why nothing has been measured yet, when the shell knows. */
+  idle?: ChartsIdle;
 }
+
+/**
+ * Why the charts have nothing to draw. `no-client` is a design with no
+ * traffic source at all; `not-started` is a paused clock at zero, which is
+ * where Reset leaves a run. Anything else is plain waiting.
+ */
+export type ChartsIdle = 'no-client' | 'not-started';
+
+/** Stable, so the memoised charts see no change while there is no client. */
+const NO_HISTORY: HistoryPoint[] = [];
+
+const IDLE_TEXT: Record<ChartsIdle, string> = {
+  'no-client': 'Add a client to send traffic.',
+  'not-started': 'Press play to start the clock.',
+};
 
 /* Derived from REASON_ORDER rather than written out, so adding a failure
    reason to the engine cannot leave this map silently missing a key. */
@@ -1007,7 +1303,7 @@ const EMPTY_BY: Record<FailureReason, number> = Object.fromEntries(
   REASON_ORDER.map((r) => [r, 0]),
 ) as Record<FailureReason, number>;
 
-export function Metrics({ snapshot, nodeNames, nodes }: MetricsProps) {
+export function Metrics({ snapshot, nodeNames, nodes, routes, idle }: MetricsProps) {
   const { system, history, failuresByReason } = snapshot;
 
   /* The trace names nodes by id; the reader knows them by the label on the
@@ -1154,22 +1450,46 @@ export function Metrics({ snapshot, nodeNames, nodes }: MetricsProps) {
     setFailSamples(failRef.current);
   }, [timeMs, failuresNow]);
 
+  // With no client the engine still records a sample a tick, every one of
+  // them zero. Plotted, that is a flat line reading "measured, nothing
+  // happened", where the truth is that there is nothing to measure.
+  const plotted = idle === 'no-client' ? NO_HISTORY : windowed;
+  const noTraffic = plotted.length === 0;
+  const emptyLabel = idle ? IDLE_TEXT[idle] : 'Waiting for traffic';
+
   return (
     <div className="mx">
       <LatencyChart
-        history={windowed}
+        history={plotted}
         p50={system.p50}
         p95={system.p95}
         p99={system.p99}
+        measured={!noTraffic && !(system.p99 === 0 && system.goodputRps === 0)}
+        emptyLabel={emptyLabel}
+        timeMs={system.timeMs}
       />
       <ThroughputChart
-        history={windowed}
+        history={plotted}
         offered={system.offeredRps}
         goodput={system.goodputRps}
         lost={lostRate}
+        emptyLabel={emptyLabel}
       />
-      <FailureChart samples={failSamples} failures={failuresNow} />
-      <Trace trace={snapshot.trace} nameOf={nameOf} />
+      <FailureChart
+        samples={failSamples}
+        failures={failuresNow}
+        noTraffic={noTraffic}
+        emptyLabel={emptyLabel}
+        idleText={idle ? IDLE_TEXT[idle] : 'No traffic yet.'}
+      />
+      {routes && routes.length > 1 ? (
+        <RouteChart routes={routes} history={windowed} nameOf={nameOf} />
+      ) : null}
+      <Trace
+        trace={snapshot.trace}
+        nameOf={nameOf}
+        idleText={idle ? IDLE_TEXT[idle] : undefined}
+      />
       {/* Renders nothing on generic, where there are no prices to show. */}
       <Cost nodes={nodes ?? []} />
     </div>

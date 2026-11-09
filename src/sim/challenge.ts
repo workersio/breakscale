@@ -1,4 +1,11 @@
-import type { FaultEvent, NodeConfig, NodeKind, SimSnapshot, Topology } from './types';
+import type {
+  FaultEvent,
+  NodeConfig,
+  NodeKind,
+  RouteStats,
+  SimSnapshot,
+  Topology,
+} from './types';
 
 /**
  * A brief with a pass condition the engine can check.
@@ -116,6 +123,21 @@ export interface Challenge {
 export interface Goal {
   metric: GoalMetric;
   max: number;
+  /**
+   * The id of a client, to judge only the requests that client sends rather
+   * than all of them, so a brief can say "checkout stays up" while browsing
+   * is allowed to suffer. Only for `p99`, `p95` and `errorRate`; the other
+   * metrics are about the system's storage and have no route to split by.
+   */
+  route?: string;
+}
+
+/** Whether a goal reads one client's requests rather than everyone's. */
+export function isRouteGoal(goal: Goal): goal is Goal & { route: string } {
+  return (
+    goal.route !== undefined &&
+    (goal.metric === 'p99' || goal.metric === 'p95' || goal.metric === 'errorRate')
+  );
 }
 
 /**
@@ -152,8 +174,10 @@ export interface ChallengeResult {
  * because "under 1%" is how the requirement is written down in real life and
  * "under 0.01" is not.
  */
-function actualFor(metric: GoalMetric, snapshot: SimSnapshot): number {
-  const s = snapshot.system;
+function actualFor(
+  metric: GoalMetric,
+  s: Pick<RouteStats, 'p99' | 'p95' | 'errorRate'>,
+): number {
   switch (metric) {
     case 'p99':
       return s.p99;
@@ -180,13 +204,25 @@ function actualFor(metric: GoalMetric, snapshot: SimSnapshot): number {
  * hand out a pass for a total outage. So a run with no goodput fails
  * outright, whatever the other numbers say.
  */
-export function evaluate(challenge: Challenge, snapshot: SimSnapshot): ChallengeResult {
+export function evaluate(
+  challenge: Challenge,
+  snapshot: SimSnapshot,
+  routes: readonly RouteStats[] = [],
+): ChallengeResult {
   const dead = snapshot.system.goodputRps <= 0;
   const goals = challenge.goals
     .filter((g) => isLiveMetric(g.metric))
     .map((goal) => {
-      const actual = actualFor(goal.metric, snapshot);
-      return { goal, actual, met: !dead && actual <= goal.max };
+      if (!isRouteGoal(goal)) {
+        const actual = actualFor(goal.metric, snapshot.system);
+        return { goal, actual, met: !dead && actual <= goal.max };
+      }
+      // A route with nothing getting through is as dead as a system is, and
+      // a client the design no longer has has no reading at all.
+      const route = routes.find((r) => r.clientId === goal.route);
+      if (route === undefined) return { goal, actual: Number.NaN, met: false };
+      const actual = actualFor(goal.metric, route);
+      return { goal, actual, met: !dead && route.goodputRps > 0 && actual <= goal.max };
     });
   return { passed: !dead && goals.every((g) => g.met), goals };
 }
