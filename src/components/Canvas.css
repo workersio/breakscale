@@ -1034,9 +1034,8 @@
 
 /* The first thing a student sees on a cleared canvas, and the one moment
    they are most likely to be stuck. A heading that names the situation
-   without alarm, then one sentence naming both ways forward — the second of
-   which (take a working system apart) is the one most people would not think
-   of on their own. */
+   without alarm, one sentence naming the smallest working system, then the
+   starting points (EmptyCanvas.css). */
 .cv-empty {
   position: absolute;
   top: 50%;

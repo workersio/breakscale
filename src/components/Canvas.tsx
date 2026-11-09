@@ -94,6 +94,9 @@ import type { Annotation, AnnotationFont, Note, Section } from '../sim/annotatio
 import { usePreference } from '../content/preferences';
 import { Minimap } from './Minimap';
 import { DETAIL_ZOOM, MINIMAL_ZOOM, fitViewport } from './fit';
+import { EmptyCanvas } from './EmptyCanvas';
+import { EdgeCues } from './EdgeCues';
+import type { EmptyCanvasProps } from './EmptyCanvas';
 import { serialiseSvg } from '../imageExport';
 import './Canvas.css';
 
@@ -482,6 +485,13 @@ export interface CanvasProps {
    * Omitted, the whole surface is treated as visible.
    */
   visibleRef?: RefObject<HTMLElement | null>;
+  /** The starting points an empty canvas offers. Omitted, it offers none. */
+  emptyActions?: EmptyCanvasProps['actions'];
+  /**
+   * A brief is on screen. A fit may then zoom out past the usual floor
+   * rather than leave a box under the brief's panel; see FIT_MIN_TIGHT.
+   */
+  fitTight?: boolean;
 }
 
 /* ------------------------------------------------------------------ *
@@ -3350,6 +3360,8 @@ export default function Canvas({
   onToolChange,
   fitSignal = 0,
   visibleRef,
+  emptyActions,
+  fitTight = false,
 }: CanvasProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
@@ -5372,14 +5384,19 @@ export default function Canvas({
         if (n.x + NODE_W > maxX) maxX = n.x + NODE_W;
         if (n.y + NODE_H > maxY) maxY = n.y + NODE_H;
       }
-      const next = fitViewport({ minX, minY, maxX, maxY }, rects.surface, rects.view);
+      const next = fitViewport(
+        { minX, minY, maxX, maxY },
+        rects.surface,
+        rects.view,
+        fitTight,
+      );
       if (!next) return;
       // The surface size this fit was framed for, so the resize observer can
       // tell a real resize from the size it was already fitted to.
       fittedSizeRef.current = { w: rects.surface.width, h: rects.surface.height };
       setView(next);
     },
-    [visibleRect],
+    [visibleRect, fitTight],
   );
 
   /**
@@ -6175,15 +6192,7 @@ export default function Canvas({
         />
       )}
 
-      {topology.nodes.length === 0 && (
-        <div className="cv-empty">
-          <p className="cv-empty-lead">Start with an empty canvas</p>
-          <p className="cv-empty-body">
-            Drag a component in from the left, or open Examples to load a system that
-            already works and take it apart.
-          </p>
-        </div>
-      )}
+      {topology.nodes.length === 0 && <EmptyCanvas actions={emptyActions} />}
 
       {/* Status ledger. A corner carrying a true number stops reading as
           dead space. */}
@@ -6393,6 +6402,18 @@ export default function Canvas({
           }}
         />
       )}
+
+      <EdgeCues
+        hostRef={hostRef}
+        visibleRef={visibleRef}
+        visibleRect={visibleRect}
+        view={view}
+        nodes={topology.nodes}
+        nodeW={NODE_W}
+        nodeH={NODE_H}
+        setView={setView}
+        onFit={fitToContent}
+      />
 
       <div className="cv-zoom" data-chrome="zoom">
         <button

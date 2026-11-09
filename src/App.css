@@ -744,16 +744,29 @@
   pointer-events: none;
 }
 
+/* Each panel floats --sp-3 in from the stage's edge, so its far side is
+   that much further in than its width. Without the inset a fit that took
+   the tight margin (see FIT_MIN_TIGHT in fit.ts) ran a card's frame up
+   against the panel's edge. */
 .app-body.has-library .stage-safe {
-  left: var(--rail-w);
+  left: calc(var(--rail-w) + var(--sp-3));
 }
 
 .app-body.has-inspector .stage-safe {
-  right: var(--ins-w);
+  right: calc(var(--ins-w) + var(--sp-3));
 }
 
 .app-body.has-metrics .stage-safe {
-  bottom: var(--strip-shown);
+  bottom: calc(var(--strip-shown) + var(--sp-3));
+}
+
+/* The bar floats over the top of the canvas on a desktop, as opaque as any
+   panel, and a tall diagram fitted to the full height had its top row under
+   it. A phone's header is not over the canvas, so it needs nothing here. */
+@media (min-width: 721px) {
+  .stage-safe {
+    top: var(--bar-clear);
+  }
 }
 
 /* The strip: pinned to the stage's foot, --strip-h tall (rationale on the
@@ -1400,7 +1413,8 @@
     background: var(--accent-soft);
   }
 
-  .app-tab:disabled {
+  .app-tab:disabled,
+  .app-tab[aria-disabled='true'] {
     opacity: 0.4;
     cursor: default;
   }

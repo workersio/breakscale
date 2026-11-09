@@ -33,12 +33,18 @@
   flex-direction: column;
   gap: var(--sp-4);
   width: min(560px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
   padding: var(--sp-5);
   background: var(--surface);
   border: var(--bw) solid var(--border-strong);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-lg);
   animation: sh-card-in var(--dur-slow) var(--ease-out);
+}
+
+.sh-card.is-wide {
+  width: min(640px, 100%);
 }
 
 .sh-root.is-closing .sh-card {
@@ -121,14 +127,59 @@
   background: var(--surface-2);
 }
 
-.sh-row {
+.sh-options {
+  display: grid;
+  /* Side by side where both fit, stacked on a phone, with no breakpoint
+     to keep in step with the card's width. */
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--sp-3);
+}
+
+.sh-option {
   display: flex;
+  flex-direction: column;
   gap: var(--sp-2);
-  align-items: stretch;
+  min-width: 0;
+  padding: var(--sp-4);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.sh-option-title {
+  margin: 0;
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* The button sits at the foot of its option, so two options with blurbs
+   of different lengths still line their buttons up. */
+.sh-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  margin-top: auto;
+}
+
+.sh-copy[aria-disabled='true'] {
+  cursor: progress;
+}
+
+.sh-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.sh-foot .sh-note {
+  flex: 1 1 240px;
 }
 
 .sh-url {
-  flex: 1;
+  width: 100%;
   min-width: 0;
   padding: var(--sp-2) var(--sp-3);
   font-family: var(--mono);

@@ -401,6 +401,15 @@
   right: calc(var(--ins-w) + var(--sp-3) * 2);
 }
 
+/* There the folded panel is a strip across the top of the uncovered canvas,
+   so a fit starts below it. --chal-sheet-h is the panel's measured height,
+   written onto the sentinel by the shell (see handleSheetResize). */
+@media (min-width: 721px) {
+  .app-body.has-challenge.has-inspector .stage-safe {
+    top: calc(var(--bar-clear) + var(--chal-sheet-h, 0px) + var(--sp-3));
+  }
+}
+
 /* On a phone the panel is a sheet at the bottom, above the tab bar, where
    the thumb is and the header is not. It opens folded to one line (see
    foldOnStart), and the canvas is framed above that line. Open, it takes at
