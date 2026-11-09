@@ -3,12 +3,20 @@
 // side reads that table before it exists.
 import { behaviourFor } from './behaviour';
 import { fleetBounds } from './behaviour-control';
-import { locksFor, splitLoad } from './challenge';
+import { isRouteGoal, locksFor, splitLoad } from './challenge';
 import type { Challenge, Goal } from './challenge';
 import { Engine } from './engine';
 import { sanitizeFaults } from './faults';
 import { PRESETS, defaultConfig } from './presets';
-import type { FailureReason, NodeConfig, NodeKind, SimNode, Topology } from './types';
+import type {
+  FailureReason,
+  NodeConfig,
+  NodeKind,
+  RouteTally,
+  RunTally,
+  SimNode,
+  Topology,
+} from './types';
 
 /* ------------------------------------------------------------------ *
  * The check.
@@ -449,7 +457,7 @@ export function structureProblem(
  * JSON with object keys sorted and undefined left out, so two designs that
  * run the same serialise the same whatever order their fields were set in.
  */
-function canonical(value: unknown): string {
+export function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (value !== null && typeof value === 'object') {
     const obj = value as Record<string, unknown>;
@@ -464,7 +472,7 @@ function canonical(value: unknown): string {
 }
 
 /** cyrb53: a 53-bit string hash, in base 36. Not cryptographic, not meant to be. */
-function hash53(s: string): string {
+export function hash53(s: string): string {
   let h1 = 0xdeadbeef;
   let h2 = 0x41c6ce57;
   for (let i = 0; i < s.length; i++) {
@@ -605,6 +613,46 @@ function measure(
   }
 }
 
+/**
+ * One client's window, in the shape `measure` reads, for a goal on that
+ * route. A client with nothing settled in the window has no reading, which
+ * misses the goal rather than passing it.
+ */
+function routeFigures(
+  route: RouteTally | undefined,
+): Pick<RunResult, 'p95' | 'p99' | 'loss' | 'lostWrites' | 'lostJobs' | 'queueDepth'> {
+  const sorted = route ? route.latencies.slice().sort() : new Float64Array(0);
+  const settled = route ? route.completed + route.failed : 0;
+  return {
+    p95: nearestRank(sorted, 0.95),
+    p99: nearestRank(sorted, 0.99),
+    loss: route && settled > 0 ? route.failed / settled : null,
+    lostWrites: null,
+    lostJobs: null,
+    queueDepth: null,
+  };
+}
+
+/**
+ * The requests a run's gates count: the whole system's, or, when every goal
+ * names a client, those clients' own.
+ */
+function gateOf(
+  goals: readonly Goal[],
+  tally: RunTally,
+): { arrived: number; completed: number; failed: number } {
+  if (goals.length === 0 || !goals.every(isRouteGoal)) return tally;
+  const out = { arrived: 0, completed: 0, failed: 0 };
+  for (const route of new Set(goals.map((g) => g.route))) {
+    const r = tally.byRoute[route];
+    if (!r) continue;
+    out.arrived += r.arrived;
+    out.completed += r.completed;
+    out.failed += r.failed;
+  }
+  return out;
+}
+
 /** The longest line in any queue the engine is running, or null for none. */
 function deepestQueue(engine: Engine, topology: Topology): number | null {
   const nodes = engine.snapshot().nodes;
@@ -629,13 +677,78 @@ function margin(run: RunResult): number {
   return m;
 }
 
+/** What `measureWindow` reads off a window's tally. */
+export interface WindowFigures {
+  loss: number | null;
+  keptUp: number | null;
+  p95: number | null;
+  p99: number | null;
+  lostWrites: number | null;
+  lostJobs: number | null;
+  queueDepth: number | null;
+  goals: GoalOutcome[];
+  outcome: RunResult['outcome'];
+}
+
+/**
+ * Measure goals over a stopped tally, as the check does. `writes` and `jobs`
+ * say whether the run played `SETTLE_MS` past the window so lost writes or
+ * lost jobs can be counted; `queueDepth` is read by the caller at the
+ * window's end, since a tally does not hold it.
+ */
+export function measureWindow(
+  goals: readonly Goal[],
+  tally: RunTally,
+  extras: { writes: boolean; jobs: boolean; queueDepth: number | null },
+): WindowFigures {
+  const lostWrites = extras.writes ? tally.writesAcked - tally.writesLanded : null;
+  const lostJobs = extras.jobs ? tally.jobsFailed : null;
+  const queueDepth = extras.queueDepth;
+
+  const sorted = tally.latencies.slice().sort();
+  const settled = tally.completed + tally.failed;
+  const p95 = nearestRank(sorted, 0.95);
+  const p99 = nearestRank(sorted, 0.99);
+  const loss = settled > 0 ? tally.failed / settled : null;
+  const outcomes = goals.map((goal) => {
+    const actual = isRouteGoal(goal)
+      ? measure(goal, routeFigures(tally.byRoute[goal.route]))
+      : measure(goal, { p95, p99, loss, lostWrites, lostJobs, queueDepth });
+    return { goal, actual, met: actual !== null && actual <= goal.max };
+  });
+  // The gates read what the goals read: when every goal names a client, a
+  // backlog from some other client is not this run's failure.
+  const gate = gateOf(goals, tally);
+  const keptUp =
+    gate.arrived > 0 ? (gate.completed + gate.failed) / gate.arrived : null;
+  const outcome: RunResult['outcome'] =
+    gate.completed === 0
+      ? 'nothing-completed'
+      : keptUp !== null && keptUp < KEPT_UP_FLOOR
+        ? 'falling-behind'
+        : outcomes.every((g) => g.met)
+          ? 'passed'
+          : 'goal-missed';
+  return {
+    loss,
+    keptUp,
+    p95,
+    p99,
+    lostWrites,
+    lostJobs,
+    queueDepth,
+    goals: outcomes,
+    outcome,
+  };
+}
+
 /**
  * Advance to exactly `untilMs`, in frames, with the last one cut short to
  * land on it. A tally started or stopped there then covers the same span
  * of simulated time whatever the frame size, which is what lets a replay at
  * any step size count the same requests.
  */
-function* playTo(
+export function* playTo(
   engine: Engine,
   untilMs: number,
   frameMs: number,
@@ -675,42 +788,14 @@ export function* playRun(
   const tally = engine.readTally();
   // Started just above, and only reset() clears one.
   if (tally === null) throw new Error('tally missing after a run');
-  const lostWrites = writes ? tally.writesAcked - tally.writesLanded : null;
-  const lostJobs = jobs ? tally.jobsFailed : null;
-
-  const sorted = tally.latencies.slice().sort();
-  const settled = tally.completed + tally.failed;
-  const p95 = nearestRank(sorted, 0.95);
-  const p99 = nearestRank(sorted, 0.99);
-  const loss = settled > 0 ? tally.failed / settled : null;
-  const keptUp = tally.arrived > 0 ? settled / tally.arrived : null;
-  const goals = challenge.goals.map((goal) => {
-    const actual = measure(goal, { p95, p99, loss, lostWrites, lostJobs, queueDepth });
-    return { goal, actual, met: actual !== null && actual <= goal.max };
-  });
-  const outcome: RunResult['outcome'] =
-    tally.completed === 0
-      ? 'nothing-completed'
-      : keptUp !== null && keptUp < KEPT_UP_FLOOR
-        ? 'falling-behind'
-        : goals.every((g) => g.met)
-          ? 'passed'
-          : 'goal-missed';
+  const m = measureWindow(challenge.goals, tally, { writes, jobs, queueDepth });
   return {
     seed,
     arrived: tally.arrived,
     completed: tally.completed,
     failed: tally.failed,
     failuresByReason: tally.failuresByReason,
-    loss,
-    keptUp,
-    p95,
-    p99,
-    lostWrites,
-    lostJobs,
-    queueDepth,
-    goals,
-    outcome,
+    ...m,
     replay: { ...judged, seed },
   };
 }

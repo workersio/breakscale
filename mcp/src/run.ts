@@ -1,6 +1,11 @@
 import { Engine } from '../../src/sim/engine';
 import { sanitizeSeed } from '../../src/sim/seed';
-import type { FailureReason, SimSnapshot, Topology } from '../../src/sim/types';
+import type {
+  FailureReason,
+  RouteStats,
+  SimSnapshot,
+  Topology,
+} from '../../src/sim/types';
 
 /* ------------------------------------------------------------------ *
  * Running a design with nobody watching, and saying what happened.
@@ -33,6 +38,8 @@ export const DEFAULT_RUN: RunOptions = { seconds: 30, seed: 1, budgetMs: 3000 };
 
 export interface RunResult {
   snapshot: SimSnapshot;
+  /** Each client's own figures at the end of the run, in topology order. */
+  routes: RouteStats[];
   /** How far the simulation actually got, which is less than asked when it ran out of budget. */
   simulatedMs: number;
   /** The seed the run used: the design's own when it carries one, else the option's. */
@@ -67,7 +74,7 @@ export function runDesign(
     engine.advance(STEP_MS);
     simulatedMs += STEP_MS;
   }
-  return { snapshot: engine.snapshot(), simulatedMs, seed };
+  return { snapshot: engine.snapshot(), routes: engine.routes(), simulatedMs, seed };
 }
 
 const REASON_WORDS: Record<FailureReason, string> = {
@@ -127,6 +134,30 @@ export function describeRun(
   }
 
   const byId = new Map(topology.nodes.map((n) => [n.id, n]));
+
+  // With one client its figures are the system's, already said above.
+  if (run.routes.length > 1) {
+    lines.push('', 'By traffic source (each client and its own requests, end to end):');
+    for (const r of run.routes) {
+      const name = byId.get(r.clientId)?.label ?? r.clientId;
+      const settled = r.goodputRps + r.failedRps;
+      const parts = [
+        `offered ${perSec(r.offeredRps)}`,
+        `served ${perSec(r.goodputRps)}`,
+      ];
+      if (settled > 0) parts.push(`${pct(r.errorRate)} failed`);
+      if (r.goodputRps > 0) parts.push(`p99 ${ms(r.p99)}`);
+      const reasons = (Object.entries(r.failuresByReason) as [FailureReason, number][])
+        .filter(([, n]) => n > 0)
+        .sort((a, b) => b[1] - a[1]);
+      const over =
+        `over the run ${r.totalCompleted} served, ${r.totalFailed} failed` +
+        (reasons.length > 0
+          ? ` (${reasons.map(([why, n]) => `${n} ${REASON_WORDS[why] ?? why}`).join('; ')})`
+          : '');
+      lines.push(`- ${name} (id '${r.clientId}'): ${parts.join(', ')}; ${over}`);
+    }
+  }
   const rows = Object.entries(nodes)
     .map(([id, s]) => ({ id, s, node: byId.get(id) }))
     .filter((r) => r.node && r.node.kind !== 'client');

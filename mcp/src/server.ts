@@ -39,6 +39,7 @@ const edge = z.looseObject({
   to: z.string(),
   weight: z.number().optional(),
   control: z.boolean().optional(),
+  lossRate: z.number().optional().describe('Share of crossings the link drops, 0 to 1'),
 });
 
 /*

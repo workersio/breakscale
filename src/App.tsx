@@ -15,7 +15,14 @@ import type {
   DragEvent,
   ReactNode,
 } from 'react';
-import type { NodeConfig, NodeKind, SimNode, SimSnapshot, Topology } from './sim/types';
+import type {
+  NodeConfig,
+  NodeKind,
+  RouteStats,
+  SimNode,
+  SimSnapshot,
+  Topology,
+} from './sim/types';
 import { useCoarsePointer } from './useCoarsePointer';
 import { useGithubStars, useCountUp, formatStars } from './useGithubStars';
 import { Engine } from './sim/engine';
@@ -23,9 +30,13 @@ import { PRESETS, makeNode } from './sim/presets';
 import { CHALLENGES, challengeById } from './sim/challenges';
 import { evaluate, lockedFieldsFor } from './sim/challenge';
 import type { Challenge } from './sim/challenge';
-import { designKey, judgedTopology, startDesign } from './sim/judge';
+import { canonical, designKey, judgedTopology, startDesign } from './sim/judge';
 import type { Verdict } from './sim/judge';
 import { ChallengePanel } from './components/Challenge';
+import { BreakPanel } from './components/BreakIt';
+import type { Names } from './components/breakCopy';
+import { secs } from './components/breakCopy';
+import { formatGoalMs, formatGoalPct, formatShareDown } from './components/format';
 import { Challenges } from './components/Challenges';
 import {
   CHALLENGES_KEY,
@@ -45,6 +56,10 @@ import {
 } from './challengeWorkspace';
 import type { ChallengeStore } from './challengeWorkspace';
 import { useChallengeCheck } from './useChallengeCheck';
+import { useBreakSearch } from './useBreakSearch';
+import { BREAK_END_MS, BREAK_WARMUP_MS, measureSeed, toSchedule } from './sim/breakit';
+import type { Attack } from './sim/breakit';
+import type { Goal } from './sim/challenge';
 import type { Preset } from './sim/presets';
 import Canvas, {
   GRID,
@@ -55,6 +70,7 @@ import Canvas, {
   sourceBacklogs,
 } from './components/Canvas';
 import { Inspector, TrafficControl } from './components/Inspector';
+import { RouteAlert } from './components/RouteAlert';
 import {
   asReplacement,
   faultActionsFor,
@@ -843,6 +859,8 @@ export default function App() {
 
   const [examplesOpen, setExamplesOpen] = useState(false);
   const [challengesOpen, setChallengesOpen] = useState(false);
+  /** "Can you break it?" is open. Only in the reader's own workspace. */
+  const [breakOpen, setBreakOpen] = useState(false);
 
   /**
    * The challenge being attempted, by id, or null for the reader's own
@@ -1102,6 +1120,16 @@ export default function App() {
         onSelect: () => setChallengesOpen(true),
       },
       {
+        label: 'Can you break it?',
+        icon: 'M13 2 3 14h9l-1 8 10-12h-9l1-8z',
+        ...(coarse ? {} : { hint: 'F' }),
+        // A brief owns its faults and its check, so this waits for the
+        // reader's own workspace.
+        onSelect: () => {
+          if (challengeLiveRef.current === null) setBreakOpen(true);
+        },
+      },
+      {
         label: 'Examples',
         icon: 'M3 4a1 1 0 0 1 1-1h6v7H3zM14 3h6a1 1 0 0 1 1 1v5h-7zM3 13h7v8H4a1 1 0 0 1-1-1zM14 13h7v7a1 1 0 0 1-1 1h-6z',
         onSelect: () => setExamplesOpen(true),
@@ -1151,6 +1179,12 @@ export default function App() {
    * canvas followed by a second render.
    */
   const [snapshot, setSnapshot] = useState<SimSnapshot | null>(() => engine.snapshot());
+  /**
+   * Each client's own figures, read beside every snapshot. The engine keeps
+   * them out of the snapshot so its bytes stay what replays pin, which is why
+   * every place that publishes a snapshot publishes these with it.
+   */
+  const [routes, setRoutes] = useState<RouteStats[]>(() => engine.routes());
 
   /**
    * Live mirrors of the play/pause state. The rAF loop is started once and
@@ -1240,6 +1274,7 @@ export default function App() {
       if (sinceSnapshot >= SNAPSHOT_INTERVAL_MS) {
         sinceSnapshot = 0;
         setSnapshot(engine.snapshot());
+        setRoutes(engine.routes());
       }
     };
 
@@ -1490,6 +1525,7 @@ export default function App() {
       engine.reset();
       resetLostRate();
       setSnapshot(engine.snapshot());
+      setRoutes(engine.routes());
       if (fit) setFitNonce((n) => n + 1);
     },
     [engine, resetLostRate],
@@ -1503,6 +1539,15 @@ export default function App() {
         // so a brief's faults land when it says they do.
         switchWorkspace(entry.challengeId);
         installDesign(entry.topology, true);
+      } else if (entry.replaces) {
+        // Undoing a load or a watched run puts the design back with its own
+        // faults and seed, from the top, the way the load itself started.
+        // The view refits only when the boxes are not the ones on screen.
+        const now = snapRef.current.topology.nodes;
+        const same =
+          now.length === entry.topology.nodes.length &&
+          now.every((n, i) => n.id === entry.topology.nodes[i]!.id);
+        installDesign(entry.topology, !same);
       } else {
         // The engine first, via the same non-resetting paths a forward edit
         // uses: updateNodeConfig for a config-only difference, setTopology
@@ -1563,6 +1608,7 @@ export default function App() {
       // shows the new node's readouts at once, instead of blank rows sitting
       // next to headline numbers from the previous run until the next tick.
       setSnapshot(engine.snapshot());
+      setRoutes(engine.routes());
       setPresetId(null);
     },
     [engine],
@@ -1582,6 +1628,7 @@ export default function App() {
       setTopology(next);
       engine.setTopology(next);
       setSnapshot(engine.snapshot());
+      setRoutes(engine.routes());
     },
     [engine, history],
   );
@@ -2393,7 +2440,7 @@ export default function App() {
       }
       // ONE entry, captured before the load, so a student who replaces a
       // half-built system can undo back to what they had.
-      history.commit(label, before);
+      history.commit(label, before, true);
       switchWorkspace(nextChallengeId);
       setRps(nextRps);
       setPresetId(nextPresetId);
@@ -2629,7 +2676,7 @@ export default function App() {
         ...(faults.length > 0 ? { faults } : {}),
         seed: run.seed,
       };
-      history.commit('watch run', snapRef.current);
+      history.commit('watch run', snapRef.current, true);
       installDesign(watch, false);
       setRunning(true);
       runningRef.current = true;
@@ -2641,8 +2688,8 @@ export default function App() {
      panel and the numbers it quotes always come from the same tick. It is
      only ever shown as live: the check is what passes. */
   const live = useMemo(
-    () => (challenge && snapshot ? evaluate(challenge, snapshot) : null),
-    [challenge, snapshot],
+    () => (challenge && snapshot ? evaluate(challenge, snapshot, routes) : null),
+    [challenge, snapshot, routes],
   );
 
   /** A design key for the brief as it starts, to know when Start over does anything. */
@@ -2898,11 +2945,10 @@ export default function App() {
    * the same faults land at the same simulated moments.
    */
   const handleCopyLink = useCallback(
-    (replay: boolean) => {
+    (replay: boolean, run?: Topology) => {
       setShareState({ status: 'working', replay });
-      const shared = replay
-        ? replayTopology(topology, engine)
-        : designTopology(topology);
+      const shared =
+        run ?? (replay ? replayTopology(topology, engine) : designTopology(topology));
       void (async () => {
         try {
           setShareState({
@@ -2929,12 +2975,273 @@ export default function App() {
     [engine, topology],
   );
 
+  /* ---------------- can you break it? ---------------- */
+
+  const breakShown = breakOpen && !challenge;
+  const breakSearch = useBreakSearch(breakShown, topology);
+  const breakView = breakSearch.view;
+
+  /** Why the entry is off, or null when there is something to break. */
+  const breakBlocked = useMemo(() => {
+    const clients = topology.nodes.filter((n) => n.kind === 'client');
+    if (clients.length === 0)
+      return 'Add a client first, so there is traffic to break.';
+    const ids = new Set(clients.map((c) => c.id));
+    if (!topology.edges.some((e) => ids.has(e.from))) {
+      return 'Add something behind the client to break.';
+    }
+    return null;
+  }, [topology.nodes, topology.edges]);
+
+  const breakBlockedRef = useRef(breakBlocked);
+  useLayoutEffect(() => {
+    breakBlockedRef.current = breakBlocked;
+  }, [breakBlocked]);
+
+  const breakNames = useMemo<Names>(() => {
+    const label = (id: string) => nodeNames[id] ?? id;
+    return {
+      node: label,
+      edge: (id: string) => {
+        const e = topology.edges.find((x) => x.id === id);
+        return e ? `the cable from ${label(e.from)} to ${label(e.to)}` : id;
+      },
+    };
+  }, [nodeNames, topology.edges]);
+
+  /* The parts under attack, for the canvas: a ring while a schedule is
+     tried, numbered badges on a break. */
+  const breakMarks = useMemo(() => {
+    if (!breakShown) return undefined;
+    const marks = new Map<string, number>();
+    if (breakView.status === 'searching' && breakView.progress) {
+      for (const a of breakView.progress.current) marks.set(a.target, 0);
+    } else if (breakView.status === 'done' && breakView.result.status === 'broke') {
+      breakView.result.attacks.forEach((a, i) => marks.set(a.target, i + 1));
+    }
+    return marks.size > 0 ? marks : undefined;
+  }, [breakShown, breakView]);
+
+  /**
+   * The break as a run on the reader's canvas: the design the search played,
+   * with its faults and the seed it broke on, and the reader's boxes where
+   * they put them. Built from the searched design even after an edit, so a
+   * replay is always the run the verdict measured.
+   */
+  const breakReplay = useCallback((): { replay: Topology; goal: Goal } | null => {
+    if (breakView.status !== 'done' || breakView.result.status !== 'broke') return null;
+    const t = topoLiveRef.current;
+    const placed = new Map(t.nodes.map((n) => [n.id, n]));
+    return {
+      replay: {
+        nodes: breakView.design.nodes.map((n) => {
+          const p = placed.get(n.id);
+          return p ? { ...n, x: p.x, y: p.y, label: p.label } : n;
+        }),
+        edges: breakView.design.edges,
+        ...(t.annotations ? { annotations: t.annotations } : {}),
+        faults: toSchedule(breakView.result.attacks),
+        seed: breakView.result.run.seed,
+      },
+      goal: breakView.goal,
+    };
+  }, [breakView]);
+
+  /** The replay being watched, for the countdown and the running figure. */
+  const [breakWatchSet, setBreakWatch] = useState<{
+    goal: Goal;
+    firstMs: number;
+    /** The verdict being watched; any other one ends the watch. */
+    result: object;
+  } | null>(null);
+  /* The watch ends with the panel, or with a new verdict. */
+  const breakWatch =
+    breakShown &&
+    breakView.status === 'done' &&
+    breakWatchSet?.result === breakView.result
+      ? breakWatchSet
+      : null;
+
+  /** The reader's design under a replay, and the replay as it went on. */
+  const breakBeforeRef = useRef<{ before: Topology; installed: Topology } | null>(null);
+
+  const handleWatchBreak = useCallback(() => {
+    const r = breakReplay();
+    if (!r) return;
+    // Watching again keeps the design from before the first watch.
+    const before =
+      breakWatch && breakBeforeRef.current
+        ? breakBeforeRef.current.before
+        : topoLiveRef.current;
+    breakBeforeRef.current = { before, installed: r.replay };
+    history.commit('watch break', snapRef.current, true);
+    installDesign(r.replay, false);
+    setRunning(true);
+    runningRef.current = true;
+    if (breakView.status !== 'done') return;
+    setBreakWatch({
+      goal: r.goal,
+      firstMs: r.replay.faults?.[0]?.atMs ?? 0,
+      result: breakView.result,
+    });
+  }, [breakReplay, breakView, breakWatch, history, installDesign]);
+
+  /**
+   * A replay is a visit, not an edit: closing the panel, changing the goal
+   * or going off to fix it puts the reader's design back. Untouched apart
+   * from moved boxes, it comes back whole; edited, it keeps the edits and
+   * loses only the replay's faults and seed. One undo step either way.
+   */
+  const endBreakWatch = useCallback(() => {
+    const w = breakBeforeRef.current;
+    breakBeforeRef.current = null;
+    setBreakWatch(null);
+    if (!w || challengeLiveRef.current !== null) return;
+    const now = topoLiveRef.current;
+    const runKey = (t: Topology) =>
+      canonical({
+        nodes: t.nodes.map((n) => [n.id, n.kind, n.config]),
+        edges: t.edges,
+      });
+    let back: Topology;
+    if (runKey(now) === runKey(w.installed)) {
+      const placed = new Map(now.nodes.map((n) => [n.id, n]));
+      back = {
+        ...w.before,
+        nodes: w.before.nodes.map((n) => {
+          const p = placed.get(n.id);
+          return p ? { ...n, x: p.x, y: p.y, label: p.label } : n;
+        }),
+        ...(now.annotations ? { annotations: now.annotations } : {}),
+      };
+    } else {
+      const { faults: _faults, seed: _seed, ...rest } = now;
+      back = {
+        ...rest,
+        ...(w.before.faults ? { faults: w.before.faults } : {}),
+        ...(w.before.seed !== undefined ? { seed: w.before.seed } : {}),
+      };
+    }
+    history.commit('replay', snapRef.current, true);
+    installDesign(back, false);
+    toastSeq.current += 1;
+    setToast({
+      text: 'Back to your design, without the faults.',
+      id: toastSeq.current,
+    });
+  }, [history, installDesign]);
+
+  /* The panel's search, with the moves that leave a verdict ending its replay. */
+  const breakPanelSearch = useMemo(
+    () => ({
+      ...breakSearch,
+      start: (harder?: boolean) => {
+        endBreakWatch();
+        breakSearch.start(harder);
+      },
+      backToGoals: () => {
+        endBreakWatch();
+        breakSearch.backToGoals();
+      },
+      remember: (attacks: Attack[]) => {
+        endBreakWatch();
+        breakSearch.remember(attacks);
+      },
+    }),
+    [breakSearch, endBreakWatch],
+  );
+
+  /* While a replay plays, count the same window the search did, on the live
+     engine. A tally reads the run and changes nothing in it. It starts on
+     the first tick past the warm-up rather than exactly on it, and the live
+     run steps at the display's rate, so its figure is close to the
+     verdict's rather than equal to it. */
+  const breakTallyRef = useRef<'none' | 'running' | 'stopped'>('none');
+  useEffect(() => {
+    breakTallyRef.current = 'none';
+  }, [breakWatch]);
+  useEffect(() => {
+    if (!breakWatch) return;
+    const now = engine.now;
+    // A reset rewinds the clock, and the engine drops its tally with it.
+    if (now < BREAK_WARMUP_MS) breakTallyRef.current = 'none';
+    else if (breakTallyRef.current === 'none') {
+      engine.startTally();
+      breakTallyRef.current = 'running';
+    }
+    if (now >= BREAK_END_MS && breakTallyRef.current === 'running') {
+      engine.stopTally();
+      breakTallyRef.current = 'stopped';
+    }
+  }, [snapshot, breakWatch, engine]);
+
+  /* Read once a simulated second: a tally copies every latency in the
+     window, which is too much to sort at the snapshot rate. The countdown
+     only moves by the second anyway. */
+  const breakWatchSec = breakWatch && snapshot ? Math.floor(engine.now / 1000) : -1;
+  const breakWatchLine = useMemo(() => {
+    if (!breakWatch || breakWatchSec < 0) return null;
+    const now = engine.now;
+    const { firstMs, goal } = breakWatch;
+    const until = ` The first fault lands at ${secs(firstMs)} (in ${Math.ceil((firstMs - now) / 1000)}s).`;
+    const tally = now < BREAK_WARMUP_MS ? null : engine.readTally();
+    if (!tally)
+      return `Replay: the first fault lands at ${secs(firstMs)} (in ${Math.ceil((firstMs - now) / 1000)}s).`;
+    const run = measureSeed(goal, tally, 0);
+    // The verdict's own order: nothing through, then a backlog, then the
+    // goal. Partway through, requests still on their way look like a
+    // backlog, so that only counts once the window is over.
+    const ended = now >= BREAK_END_MS;
+    const figure =
+      run.outcome === 'nothing-completed'
+        ? 'nothing got through'
+        : ended && run.outcome === 'falling-behind'
+          ? `requests piled up faster than they finished (${formatShareDown(run.keptUp)} got an answer), which counts as broken`
+          : goal.metric === 'errorRate'
+            ? run.actual === null
+              ? 'nothing has settled'
+              : `${formatGoalPct(run.actual)} failed`
+            : goal.metric === 'p99' || goal.metric === 'p95'
+              ? `the slowest took ${run.actual === null ? 'nothing yet' : formatGoalMs(run.actual)}`
+              : `${run.actual ?? 0} lost`;
+    return now >= BREAK_END_MS
+      ? `Replay: between ${secs(BREAK_WARMUP_MS)} and ${secs(BREAK_END_MS)}, ${figure}.`
+      : `Replay: in the window so far, ${figure}.${now < firstMs ? until : ''}`;
+  }, [breakWatchSec, breakWatch, engine]);
+
+  const handleBreakLink = useCallback(() => {
+    const r = breakReplay();
+    if (!r) return;
+    setShareOpen(true);
+    handleCopyLink(true, r.replay);
+  }, [breakReplay, handleCopyLink]);
+
+  /** The bar's button, where focus goes back to when the panel closes from inside. */
+  const breakBtnRef = useRef<HTMLButtonElement | null>(null);
+  const handleCloseBreak = useCallback(() => {
+    endBreakWatch();
+    setBreakOpen(false);
+    const at = document.activeElement;
+    if (at === null || at === document.body || at.closest('.brk')) {
+      breakBtnRef.current?.focus();
+    }
+  }, [endBreakWatch]);
+  const handleToggleBreak = useCallback(() => {
+    if (breakShown) handleCloseBreak();
+    else setBreakOpen(true);
+  }, [breakShown, handleCloseBreak]);
+  const toggleBreakRef = useRef(handleToggleBreak);
+  useLayoutEffect(() => {
+    toggleBreakRef.current = handleToggleBreak;
+  }, [handleToggleBreak]);
+
   const handleReset = useCallback(() => {
     engine.reset();
     // Synchronously, not via the derivation effect: Reset must never leave
     // the previous run's Dropped figure standing beside a zeroed clock.
     resetLostRate();
     setSnapshot(engine.snapshot());
+    setRoutes(engine.routes());
   }, [engine, resetLostRate]);
 
   const handleToggleRun = useCallback(() => setRunning((r) => !r), []);
@@ -2949,6 +3256,7 @@ export default function App() {
     runningRef.current = false;
     engine.advance(STEP_MS);
     setSnapshot(engine.snapshot());
+    setRoutes(engine.routes());
   }, [engine]);
 
   /* ---------------- keyboard ---------------- */
@@ -3087,6 +3395,14 @@ export default function App() {
          * alone. The two do not fight: this is the standing setting, that
          * is the momentary override.
          */
+        /* F for "Can you break it?". B was taken by the section tool. */
+        if ((e.key === 'f' || e.key === 'F') && !challengeLiveRef.current) {
+          if (breakBlockedRef.current === null) {
+            e.preventDefault();
+            toggleBreakRef.current();
+          }
+          return;
+        }
         if (e.key === 'g' || e.key === 'G') {
           e.preventDefault();
           togglePreference('snapToGrid');
@@ -3144,6 +3460,7 @@ export default function App() {
     setTopology((t) => ({ ...t, faults }));
     // Paused or not, the canvas and the panel show the fault at once.
     setSnapshot(engine.snapshot());
+    setRoutes(engine.routes());
   }, [engine]);
 
   const faultActions = useMemo(
@@ -3424,6 +3741,40 @@ export default function App() {
           {/* Labelled, and in the bar rather than three levels down inside
               Settings. Sending a design to someone is a thing people want
               to do often, and a feature nobody can find has not shipped. */}
+          {/* Hidden inside a brief, which owns its faults and its check. */}
+          {challenge ? null : (
+            <button
+              type="button"
+              ref={breakBtnRef}
+              className="btn app-share-btn app-break-btn"
+              onClick={handleToggleBreak}
+              disabled={breakBlocked !== null}
+              aria-expanded={breakShown}
+              aria-label="Can you break it?"
+              title={breakBlocked ?? 'Throw faults at this design until it fails (F)'}
+            >
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" />
+              </svg>
+              <span className="app-break-long" aria-hidden="true">
+                Can you break it?
+              </span>
+              <span className="app-break-short" aria-hidden="true">
+                Break it
+              </span>
+            </button>
+          )}
+
           <button
             type="button"
             className="btn app-share-btn"
@@ -3492,7 +3843,7 @@ export default function App() {
           (layout.library ? ' has-library' : '') +
           (inspectorVisible ? ' has-inspector' : '') +
           (metricsVisible ? ' has-metrics' : '') +
-          (challenge ? ' has-challenge' : '')
+          (challenge || breakShown ? ' has-challenge' : '')
         }
         /* The three panel sizes, written here because .app-body is where the
            slots and the strip's insets all read them from. A drag rewrites
@@ -3571,6 +3922,7 @@ export default function App() {
             <Canvas
               topology={topology}
               snapshot={snapshot}
+              routes={routes}
               selectedIds={selectedIds}
               onSelectionChange={setSelectedIds}
               onMoveNode={handleMoveNode}
@@ -3600,7 +3952,9 @@ export default function App() {
               onToolChange={setArmedTool}
               fitSignal={fitNonce}
               visibleRef={stageSafeRef}
+              breakMarks={breakMarks}
             />
+            <RouteAlert routes={routes} nodeNames={nodeNames} />
             {challenge && check ? (
               <ChallengePanel
                 challenge={challenge}
@@ -3619,6 +3973,19 @@ export default function App() {
                 nameOf={nameOf}
                 besideInspector={inspectorVisible && !phone}
                 foldOnStart={phone}
+                onSheetResize={handleSheetResize}
+              />
+            ) : null}
+            {breakShown ? (
+              <BreakPanel
+                search={breakPanelSearch}
+                names={breakNames}
+                nodes={topology.nodes}
+                onClose={handleCloseBreak}
+                onWatch={handleWatchBreak}
+                onReplayLink={handleBreakLink}
+                watchLine={breakWatchLine}
+                foldOnStart={false}
                 onSheetResize={handleSheetResize}
               />
             ) : null}
@@ -3675,6 +4042,7 @@ export default function App() {
                 snapshot={snapshot}
                 nodeNames={nodeNames}
                 nodes={topology.nodes}
+                routes={routes}
               />
             ) : null}
             <PanelResizer

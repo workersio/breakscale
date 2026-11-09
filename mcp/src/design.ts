@@ -211,6 +211,17 @@ export function buildTopology(input: unknown): DesignResult {
     if (typeof raw.latencyMs === 'number' && Number.isFinite(raw.latencyMs)) {
       edge.latencyMs = Math.max(0, raw.latencyMs);
     }
+    // Refused rather than clamped, like the seed: 5 most likely meant 5%,
+    // and a link that drops everything is not what was asked for.
+    if (raw.lossRate !== undefined) {
+      const loss = raw.lossRate;
+      if (typeof loss !== 'number' || !Number.isFinite(loss) || loss < 0 || loss > 1) {
+        return fail(
+          `${where} has lossRate ${JSON.stringify(loss)}; use a fraction from 0 to 1, so 0.05 drops 5%.`,
+        );
+      }
+      if (loss > 0) edge.lossRate = loss;
+    }
     edges.push(edge);
   });
 

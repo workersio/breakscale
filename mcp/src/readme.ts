@@ -119,13 +119,15 @@ as real queueing, latency and failures, measured from simulated requests.
   direction requests flow. Give positions only when you are editing a
   design that already has them.
 - An edge is a request path \`{ "from", "to" }\`. \`weight\` (default 1)
-  splits traffic when a node picks one edge out of several.
+  splits traffic when a node picks one edge out of several. \`lossRate\`
+  (0 to 1, default 0) drops that share of the requests crossing it.
 - A whole \`.breakscale\` file is also accepted as is.
 
 ## How requests move
 
 - A \`client\` offers \`rps\` requests per second. Use one client per real
-  traffic source. The total the whole design sees is the sum.
+  traffic source. The total the whole design sees is the sum. With more
+  than one, the run reports each client's own requests end to end too.
 - \`lb\`, \`region\` and \`bulkhead\` send each request down ONE outgoing
   edge (least loaded when weights are equal, otherwise by weight).
 - Every other kind calls ALL of its outgoing edges for each request and

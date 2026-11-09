@@ -1,0 +1,97 @@
+/* --------------------------------------------------------------------------
+   Route alert
+
+   Centred under the bar, between the corner toggles, and pushed clear of
+   whichever panels are open on either side, so it never sits under one.
+   The wrapper spans the gap and lets pointers through; only the line itself
+   takes them.
+
+   The canvas's own hint row (.cv-hint-idle, 32px) owns the slot right
+   under the bar, so the line sits one row below it rather than on top.
+   -------------------------------------------------------------------------- */
+
+.route-alert-wrap {
+  position: absolute;
+  top: calc(var(--bar-clear) + 32px + var(--sp-2));
+  left: calc(var(--sp-3) * 2 + 32px);
+  right: calc(var(--sp-3) * 2 + 32px);
+  z-index: 6;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  transition:
+    left var(--dur-base) var(--ease),
+    right var(--dur-base) var(--ease);
+}
+
+.app-body.has-library .route-alert-wrap {
+  left: calc(var(--rail-w) + var(--sp-3) * 3 + 32px);
+}
+
+.app-body.has-inspector .route-alert-wrap {
+  right: calc(var(--ins-w) + var(--sp-3) * 3 + 32px);
+}
+
+.app-body.has-challenge .route-alert-wrap {
+  right: calc(var(--chal-w) + var(--sp-3) * 2);
+}
+
+.route-alert {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  max-width: 560px;
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  pointer-events: auto;
+}
+
+/* A mark, not text, so it takes the brighter mark colour. Nudged down to
+   sit on the first line's x-height rather than its baseline. */
+.route-alert-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: var(--danger-mark);
+  transform: translateY(-1px);
+}
+
+.route-alert-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Where the hint row is hidden, the line takes its slot. */
+@media (pointer: coarse) {
+  .route-alert-wrap {
+    top: var(--bar-clear);
+  }
+}
+
+@media (max-width: 720px) {
+  /* A phone has no corner toggles and its panels are sheets, so the line
+     takes the width of the screen whatever is open. The canvas already
+     starts below the fixed header here, so the offset is only a gap. */
+  .route-alert-wrap,
+  .app-body.has-library .route-alert-wrap,
+  .app-body.has-inspector .route-alert-wrap,
+  .app-body.has-challenge .route-alert-wrap {
+    top: var(--sp-2);
+    left: var(--sp-2);
+    right: var(--sp-2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route-alert-wrap {
+    transition: none;
+  }
+}

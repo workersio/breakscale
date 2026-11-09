@@ -334,6 +334,11 @@
   color: var(--kind-lb-stroke);
 }
 
+.mx-fill-packet-loss {
+  fill: var(--cat-rust);
+  color: var(--cat-rust);
+}
+
 /* --------------------------------------------------------------------------
    Legend
    -------------------------------------------------------------------------- */
@@ -556,5 +561,126 @@
   .mx {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--sp-4);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   By traffic source
+
+   Up to four routes on one axis, separated by weight and dash on the same
+   neutral ramp as the latency lines. A route the app calls hurting takes
+   the danger mark and keeps its dash, so its legend key still matches it.
+   -------------------------------------------------------------------------- */
+
+.mx-route-0 {
+  stroke: var(--text-dim);
+  stroke-width: 2;
+}
+
+.mx-route-1 {
+  stroke: var(--line-4);
+  stroke-dasharray: 5 3;
+}
+
+.mx-route-2 {
+  stroke: var(--line-3);
+  stroke-dasharray: 1.5 3;
+}
+
+.mx-route-3 {
+  stroke: var(--line-5);
+  stroke-dasharray: 8 3;
+}
+
+.mx-line.is-danger {
+  stroke: var(--danger-mark);
+}
+
+.mx-key-route-0 {
+  border-top-color: var(--text-dim);
+}
+
+.mx-key-route-1 {
+  border-top-style: dashed;
+  border-top-color: var(--line-4);
+}
+
+.mx-key-route-2 {
+  border-top-style: dotted;
+  border-top-color: var(--line-3);
+}
+
+.mx-key-route-3 {
+  border-top-style: dashed;
+  border-top-color: var(--line-5);
+}
+
+.mx-key-line.is-danger {
+  border-top-color: var(--danger-mark);
+}
+
+/* One row per route, so long client names truncate in a column of their
+   own instead of wrapping the legend into a ragged block. */
+.mx-legend-routes {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  gap: var(--sp-1);
+}
+
+.mx-key-route {
+  width: 100%;
+}
+
+.mx-key-route .mx-key-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mx-key-value.is-danger {
+  color: var(--danger);
+}
+
+/* The Failing / p99 switch. Smaller than a toolbar button because it sits
+   in a chart header, but still a 24px target. */
+.mx-seg {
+  display: inline-flex;
+  flex: none;
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+
+.mx-seg-btn {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 var(--sp-2);
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-label);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.mx-seg-btn + .mx-seg-btn {
+  border-left: var(--bw) solid var(--border-strong);
+}
+
+.mx-seg-btn:hover {
+  color: var(--text);
+}
+
+.mx-seg-btn[aria-pressed='true'] {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mx-seg-btn {
+    transition: none;
   }
 }

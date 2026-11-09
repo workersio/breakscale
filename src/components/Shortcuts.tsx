@@ -44,6 +44,7 @@ const GROUPS: Group[] = [
     rows: [
       { keys: ['Space'], does: 'Play or pause' },
       { keys: ['S'], does: 'Step one tick (pauses first)' },
+      { keys: ['F'], does: 'Can you break it?' },
     ],
   },
   {

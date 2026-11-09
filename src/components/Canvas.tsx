@@ -20,6 +20,7 @@ import type {
   NodeConfig,
   NodeKind,
   NodeStats,
+  RouteStats,
   SimEdge,
   SimNode,
   SimSnapshot,
@@ -45,6 +46,7 @@ import {
   formatPct,
   formatRate,
   healthOfErr,
+  healthOfLatency,
   healthOfLoad,
 } from './format';
 import type { Health } from './format';
@@ -318,6 +320,8 @@ export type SparkData = ReadonlyMap<string, ArrayLike<number>>;
 export interface CanvasProps {
   topology: Topology;
   snapshot: SimSnapshot | null;
+  /** Each client's own figures, from `Engine.routes()`, for the client cards. */
+  routes?: readonly RouteStats[];
   /**
    * Ids of every selected node AND edge. Node ids and edge ids share one
    * namespace here; an edge id is `from->to`, which can never collide with a
@@ -482,6 +486,12 @@ export interface CanvasProps {
    * Omitted, the whole surface is treated as visible.
    */
   visibleRef?: RefObject<HTMLElement | null>;
+  /**
+   * Parts "Can you break it?" is aiming at, by node or edge id: 0 for the
+   * schedule being tried now, drawn as a dashed ring, and 1, 2, 3 for the
+   * faults of a break it found, drawn as numbered badges.
+   */
+  breakMarks?: ReadonlyMap<string, number>;
 }
 
 /* ------------------------------------------------------------------ *
@@ -599,12 +609,15 @@ function heldShare(s: NodeStats, cfg: NodeConfig, util: number): number {
  * `backlog` is the summed depth of the buffer nodes feeding a pull-based
  * consumer (worker, transcoder). Their own queue is structurally always 0;
  * the work they are behind on lives in the queues that feed them.
+ *
+ * `route` is a client's own end-to-end figures, from `Engine.routes()`.
  */
 export function readoutFor(
   kind: NodeKind,
   s: NodeStats,
   cfg: NodeConfig,
   backlog = 0,
+  route: RouteStats | null = null,
 ): Readout {
   const util = clamp(s.utilization, 0, 1);
   const losing = s.shedRate + s.timeoutRate > 0;
@@ -618,6 +631,43 @@ export function readoutFor(
 
   switch (kind) {
     case 'client': {
+      /* With its own requests settling, a client reads as the people behind
+         it see the system: how slow the slowest of their requests are and
+         how many fail, counting every timeout anywhere along the way. The
+         node's own error rate leaves out a timeout that a node further down
+         gave up on. */
+      if (route !== null && route.goodputRps + route.failedRps > 0) {
+        const err = clamp(route.errorRate, 0, 1);
+        const p99 = route.goodputRps > 0 ? route.p99 : null;
+        return {
+          primary: { value: formatRate(route.offeredRps), label: 'sent' },
+          // With nothing succeeding there is no p99 to show, and a 0ms one
+          // would read as instant.
+          a:
+            p99 !== null
+              ? { value: formatMs(p99), label: 'p99' }
+              : { value: formatRate(0), label: 'ok' },
+          b: { value: formatPct(err), label: 'failing' },
+          load: err,
+          health: worstHealth(healthOfErr(err), healthOfLatency(p99)),
+          spark: s.arrivalRate,
+          sparkUnit: false,
+          losing: err > 0,
+        };
+      }
+      // Nothing sent and nothing settling: a percentage would be of nothing.
+      if (route !== null && route.offeredRps === 0) {
+        return {
+          primary: { value: formatRate(0), label: 'sent' },
+          a: { value: formatRate(0), label: 'ok' },
+          b: { value: 'idle', label: '' },
+          load: 0,
+          health: 'ok',
+          spark: s.arrivalRate,
+          sparkUnit: false,
+          losing: false,
+        };
+      }
       const err = clamp(s.errorRate, 0, 1);
       /* The headline is what the client is SENDING, not what came back.
          Throughput counts successes, so during a total collapse it is
@@ -1648,6 +1698,8 @@ interface EdgeViewProps {
    * the parent, which buckets anchors and staggers the collisions.
    */
   labelDy: number;
+  /** See `CanvasProps.breakMarks`. Undefined when the edge is not a target. */
+  breakMark?: number;
 }
 
 const EdgeView = memo(function EdgeView({
@@ -1664,6 +1716,7 @@ const EdgeView = memo(function EdgeView({
   targetHealth,
   showLabel,
   labelDy,
+  breakMark,
 }: EdgeViewProps) {
   // The router arrives axis-aligned from whichever side it picked, so the
   // arrowhead is one of four fixed triangles and needs no trigonometry.
@@ -1764,6 +1817,10 @@ const EdgeView = memo(function EdgeView({
       {/* Arrowhead: one of four fixed triangles, pointed along the path's
           actual final direction as reported by the router. */}
       <path d={arrowPath(route.tip, route.dir)} className="cv-edge-arrow" />
+      {breakMark !== undefined && <path d={d} className="cv-break-wire" />}
+      {breakMark !== undefined && breakMark > 0 && (
+        <BreakBadge x={midX} y={midY + 14} n={breakMark} />
+      )}
 
       {/*
         THE BREAK. A severed wire gets a physical gap with two cut ends, not
@@ -2602,6 +2659,8 @@ interface NodeViewProps {
    * Computed by the parent from the topology; 0 for every other kind.
    */
   backlog: number;
+  /** A client's own end-to-end figures, or null for every other kind. */
+  route: RouteStats | null;
   onActivate: (id: string, additive: boolean) => void;
   onNudge: (id: string, dx: number, dy: number) => void;
   /**
@@ -2611,6 +2670,21 @@ interface NodeViewProps {
    * session: content that is simply present does not get an entrance.
    */
   entering: boolean;
+  /** See `CanvasProps.breakMarks`. Undefined when the node is not a target. */
+  breakMark?: number;
+}
+
+/**
+ * A fault's number in a break the search found. A shape and a figure, so it
+ * reads without its colour.
+ */
+function BreakBadge({ x, y, n }: { x: number; y: number; n: number }) {
+  return (
+    <g className="cv-break-badge" transform={`translate(${x},${y})`} aria-hidden="true">
+      <circle r={9} />
+      <text y={4}>{n}</text>
+    </g>
+  );
 }
 
 const NodeView = memo(function NodeView({
@@ -2624,11 +2698,15 @@ const NodeView = memo(function NodeView({
   linkTarget,
   fault,
   backlog,
+  route,
   onActivate,
   onNudge,
   entering,
+  breakMark,
 }: NodeViewProps) {
-  const readout = stats ? readoutFor(node.kind, stats, node.config, backlog) : null;
+  const readout = stats
+    ? readoutFor(node.kind, stats, node.config, backlog, route)
+    : null;
   // A faulted node is never reported as healthy, whatever its metrics say.
   const health: Health = fault ? 'danger' : readout ? readout.health : 'ok';
 
@@ -2777,6 +2855,11 @@ const NodeView = memo(function NodeView({
         // The fault is announced, not just drawn: a screen-reader user has
         // no access to the square mark in the corner.
         fault ? `faulted: ${fault}` : null,
+        breakMark === undefined
+          ? null
+          : breakMark > 0
+            ? `fault ${breakMark} of the break`
+            : 'being tested for a break',
       ]
         .filter(Boolean)
         .join(', ')}
@@ -2835,6 +2918,21 @@ const NodeView = memo(function NodeView({
           rx={NODE_R + RING_GAP}
           ry={NODE_R + RING_GAP}
         />
+      )}
+
+      {breakMark !== undefined && (
+        <rect
+          className="cv-break-ring"
+          x={-RING_GAP * 2}
+          y={-RING_GAP * 2}
+          width={NODE_W + RING_GAP * 4}
+          height={NODE_H + RING_GAP * 4}
+          rx={NODE_R + RING_GAP * 2}
+          ry={NODE_R + RING_GAP * 2}
+        />
+      )}
+      {breakMark !== undefined && breakMark > 0 && (
+        <BreakBadge x={0} y={0} n={breakMark} />
       )}
 
       {/* No kind rule along the top edge. It used to sit at y=0, but the body
@@ -3321,6 +3419,7 @@ interface LinkState {
 export default function Canvas({
   topology,
   snapshot,
+  routes,
   selectedIds,
   onSelectionChange,
   onMoveNode,
@@ -3350,6 +3449,7 @@ export default function Canvas({
   onToolChange,
   fitSignal = 0,
   visibleRef,
+  breakMarks,
 }: CanvasProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
@@ -5714,6 +5814,13 @@ export default function Canvas({
     [snapshot, topology],
   );
 
+  /** Client routes by client id, once per snapshot. */
+  const routeById = useMemo(() => {
+    const m = new Map<string, RouteStats>();
+    for (const r of routes ?? []) m.set(r.clientId, r);
+    return m;
+  }, [routes]);
+
   const healthById = useMemo(() => {
     const m = new Map<string, Health>();
     if (!snapshot) return m;
@@ -5726,12 +5833,18 @@ export default function Canvas({
       if (s) {
         m.set(
           n.id,
-          readoutFor(n.kind, s, n.config, backlogById?.get(n.id) ?? 0).health,
+          readoutFor(
+            n.kind,
+            s,
+            n.config,
+            backlogById?.get(n.id) ?? 0,
+            routeById.get(n.id) ?? null,
+          ).health,
         );
       }
     }
     return m;
-  }, [snapshot, topology.nodes, faultById, backlogById]);
+  }, [snapshot, topology.nodes, faultById, backlogById, routeById]);
 
   /**
    * Lane assignment for bidirectional pairs, keyed by edge id.
@@ -5963,6 +6076,7 @@ export default function Canvas({
                     targetHealth={healthById.get(ed.to) ?? 'ok'}
                     showLabel={showEdgeLabels}
                     labelDy={labelDyById.get(ed.id) ?? 0}
+                    breakMark={breakMarks?.get(ed.id)}
                   />
                 );
               })}
@@ -5989,9 +6103,11 @@ export default function Canvas({
                   linkTarget={snapTarget === n.id}
                   fault={faultById.get(n.id) ?? null}
                   backlog={backlogById?.get(n.id) ?? 0}
+                  route={routeById.get(n.id) ?? null}
                   onActivate={onActivate}
                   onNudge={onNudge}
                   entering={enteredIdRef.current === n.id}
+                  breakMark={breakMarks?.get(n.id)}
                 />
               ))}
             </g>

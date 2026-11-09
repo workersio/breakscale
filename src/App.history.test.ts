@@ -66,6 +66,55 @@ describe('SessionHistory', () => {
     expect(back?.challengeId).toBe('hold-the-line');
   });
 
+  it('keeps a replaced design whose only difference is its faults and seed', () => {
+    // Watching a judged run puts the reader's own boxes and configs back
+    // with the run's faults and seed. Skipping that entry as a no-op would
+    // make undo walk past the watch and take back an older edit instead.
+    const h = new SessionHistory();
+    const t = makeTopology();
+    const svc = t.nodes[1]!.id;
+    const watch: Topology = {
+      ...t,
+      faults: [
+        {
+          atMs: 5000,
+          action: 'inject',
+          nodeId: svc,
+          kind: 'slow',
+          opts: { factor: 4 },
+        },
+      ],
+      seed: 7,
+    };
+    h.commit('add', snap(t));
+    h.commit('watch run', snap(t), true);
+    const entry = h.undo(snap(watch));
+    expect(entry?.label).toBe('watch run');
+    expect(entry?.topology.faults).toBeUndefined();
+    const back = h.redo(snap(t));
+    expect(back?.label).toBe('watch run');
+    expect(back?.topology.seed).toBe(7);
+    expect(back?.replaces).toBe(true);
+    // The same schedule and seed is the same run: nothing to undo there.
+    const again = new SessionHistory();
+    again.commit('watch run', snap(watch), true);
+    expect(again.undo(snap(structuredClone(watch)))).toBeNull();
+  });
+
+  it('leaves faults recorded during the run out of an ordinary edit', () => {
+    // Recording a fault appends to the schedule without an entry, and undo
+    // carries the live schedule forward, so an entry that differs from now
+    // only by that recording would change nothing and is skipped.
+    const h = new SessionHistory();
+    const t = makeTopology();
+    h.commit('add', snap(t));
+    const recorded: Topology = {
+      ...t,
+      faults: [{ atMs: 3000, action: 'inject', nodeId: t.nodes[1]!.id, kind: 'crash' }],
+    };
+    expect(h.undo(snap(recorded))).toBeNull();
+  });
+
   it('records one entry for a whole drag, not one per frame', () => {
     const h = new SessionHistory();
     const t0 = makeTopology();

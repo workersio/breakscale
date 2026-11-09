@@ -252,11 +252,14 @@
   --line-5: #545049;
   --track: #ece7e0; /* meter troughs */
 
-  /* Two categorical hues, used ONLY to separate failure reasons in the
+  /* Categorical hues, used ONLY to separate failure reasons in the
      breakdown, where five causes must be told apart at a glance.
-     Both measured >= 4.5:1 on --surface. */
+     All measured >= 4.5:1 on --surface. Rust is packet loss: 7.91:1 on
+     --surface, and 0.143 OKLab from its nearest band (--danger-mark,
+     --line-5), clear of --ok-mark so a failure never reads as healthy. */
   --cat-violet: #7a4bab;
   --cat-blue: #1f6099;
+  --cat-rust: #962905;
 
   /* ------------------------------------------------------------------------
      Text ramp. Cool-leaning ink (hue 264) against warm paper — the slight
@@ -730,6 +733,8 @@
 
   --cat-violet: #b491dd;
   --cat-blue: #78aee0;
+  /* 8.05:1 on --surface, 0.133 OKLab from its nearest band (--warn-mark). */
+  --cat-rust: #fe987c;
 
   /* Accent. Lightened until it carries text on the dark ground: 6.59:1 on
      --bg, where the light theme's blue would have been 2.4:1 and unreadable. */
@@ -942,6 +947,7 @@
 
     --cat-violet: #b491dd;
     --cat-blue: #78aee0;
+    --cat-rust: #fe987c;
 
     --accent: #6f9bf0;
     --accent-hover: #87acf5;

@@ -1,0 +1,190 @@
+/* ==========================================================================
+   "Can you break it?"
+
+   Uses the brief's panel (Challenge.css) for its frame, its place on the
+   canvas and its sheet on a phone. Only what is its own is here.
+   ========================================================================== */
+
+.brk-goals {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.brk-goal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.brk-goal.is-on {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* At least 44px tall, so a row is a comfortable target on a phone. */
+.brk-goal-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 44px;
+  margin: calc(var(--sp-2) * -1) 0;
+  cursor: pointer;
+}
+
+.brk-goal-name {
+  font-weight: var(--fw-med);
+}
+
+.brk-goal-sentence {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 2;
+}
+
+.brk-num {
+  width: 6ch;
+  min-height: 32px;
+  padding: 0 var(--sp-1);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.brk-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding-left: var(--sp-4);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-body);
+}
+
+.brk-check {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 32px;
+  font-size: var(--fs-sm);
+}
+
+.brk-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--sp-3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.brk-kinds legend {
+  padding: 0;
+}
+
+.brk-more summary {
+  min-height: 32px;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-med);
+  cursor: pointer;
+}
+
+.brk-more[open] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.brk-count {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.brk-count .num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.brk-verdict {
+  margin: 0;
+  line-height: var(--lh-body);
+}
+
+.brk-schedule {
+  font-weight: var(--fw-med);
+}
+
+.brk-small {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.brk-stale {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--warn-soft);
+}
+
+.brk-stale .chal-note {
+  color: var(--text);
+}
+
+/* The replay's clock, readable with the panel folded. */
+.brk-pill {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A verdict lands with a short settle, and no movement at all when motion
+   is reduced. */
+.brk.is-failed,
+.brk.is-passed {
+  animation: brk-land var(--dur-base) var(--ease-out);
+}
+
+.brk.is-failed {
+  border-color: var(--danger);
+}
+
+@keyframes brk-land {
+  from {
+    opacity: 0.6;
+    transform: scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brk.is-failed,
+  .brk.is-passed {
+    animation: none;
+  }
+}
+
+/* Stacked full width on a phone, the main action first. */
+@media (max-width: 640px) {
+  .brk-actions {
+    flex-direction: column;
+  }
+
+  .brk-actions .btn {
+    justify-content: center;
+    min-height: 44px;
+  }
+}
