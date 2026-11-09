@@ -61,6 +61,13 @@ const GRACE_MS = 500;
  */
 const CLOSE_DELAY_MS = 140;
 
+/**
+ * How long after a focus opens a tooltip a scroll still counts as the one
+ * that focus caused. Smooth scrolling runs a few frames; a reader scrolling
+ * on purpose does not start within a quarter second of tabbing.
+ */
+const FOCUS_SCROLL_MS = 250;
+
 /* ------------------------------------------------------------------ *
  * Geometry
  * ------------------------------------------------------------------ */
@@ -113,6 +120,8 @@ let state: OpenState | null = null;
 let openTimer: number | undefined;
 let closeTimer: number | undefined;
 let lastCloseAt = 0;
+/** When the current tooltip opened, so a scroll its own focus caused is told apart. */
+let openedAt = 0;
 /** Set while the pointer is inside the open panel itself. */
 let pointerInPanel = false;
 
@@ -169,6 +178,7 @@ function commitOpen(next: OpenState): void {
   if (state?.trigger === next.trigger && state.source === next.source) return;
   markTrigger(state?.trigger, false);
   state = next;
+  openedAt = Date.now();
   markTrigger(next.trigger, true);
   emit();
 }
@@ -278,6 +288,26 @@ function onTriggerBlur(e: React.FocusEvent<HTMLElement>): void {
   if (state && state.trigger === e.currentTarget) closeNow();
 }
 
+/*
+ * Whether the tooltip was already open when the current press began.
+ *
+ * A press on a focusable span runs pointerdown, then focus, then click. Focus
+ * opens the tooltip, so by the time the click arrived it saw an open tooltip
+ * on its own trigger and toggled it shut: the first tap on every term did
+ * nothing at all. The toggle has to ask what was open before the press, not
+ * what the press itself just opened.
+ */
+let pressTrigger: HTMLElement | null = null;
+let pressFoundOpen = false;
+
+function onTriggerPointerDown(e: React.PointerEvent<HTMLElement>): void {
+  pressTrigger = e.currentTarget;
+  // A hover-opened tooltip does not count. The pointer opened it on the way
+  // to the click, inside the grace window with no delay at all, so a click
+  // that closed it would read as the click doing nothing. Clicking pins it.
+  pressFoundOpen = state?.trigger === e.currentTarget && state.source !== 'hover';
+}
+
 /**
  * Touch has no hover, so a tap is the only gesture available. It toggles:
  * tap to read, tap again to dismiss. `onClick` rather than a pointer handler
@@ -288,7 +318,14 @@ function onTriggerClick(e: React.MouseEvent<HTMLElement>): void {
   const el = e.currentTarget;
   const entry = entryOf(el);
   if (!entry) return;
-  if (state && state.trigger === el) {
+  // A click with no press behind it (assistive tech, a synthesised click)
+  // falls back to asking what is open now. `detail === 0` is such a click
+  // even when a press on this term was dragged off earlier and never clicked,
+  // which would otherwise leave that press's answer standing.
+  const fromPress = pressTrigger === el && e.detail !== 0;
+  const wasOpen = fromPress ? pressFoundOpen : state?.trigger === el;
+  pressTrigger = null;
+  if (wasOpen) {
     closeNow();
     return;
   }
@@ -350,12 +387,11 @@ export function Term({ id, children, className, bare = false }: TermProps) {
   const entry = GLOSSARY_BY_ID.get(id);
 
   /*
-   * Tooltips are off by default, so this is the common path and it has to be
-   * genuinely free. Returning the children bare means no underline, no cursor
-   * change, no hover tint, no focus stop and no listeners: a <Term> costs
-   * exactly what the text inside it costs. The glossary panel is unaffected,
-   * so every explanation is still one click away, it just stops decorating
-   * every number on screen.
+   * With tooltips switched off this path has to be genuinely free. Returning
+   * the children bare means no cursor change, no hover tint, no focus stop
+   * and no listeners: a <Term> costs exactly what the text inside it costs.
+   * The glossary panel is unaffected, so every explanation is still one click
+   * away.
    *
    * An unknown id degrades the same way, which is why the glossary wiring test
    * exists: silence here is indistinguishable from a missing entry.
@@ -392,6 +428,7 @@ export function Term({ id, children, className, bare = false }: TermProps) {
       aria-describedby={descId(id)}
       onPointerEnter={onTriggerPointerEnter}
       onPointerLeave={onTriggerPointerLeave}
+      onPointerDown={onTriggerPointerDown}
       onFocus={onTriggerFocus}
       onBlur={onTriggerBlur}
       onClick={onTriggerClick}
@@ -564,16 +601,37 @@ export function TooltipLayer() {
 
     const onDismiss = () => closeNow();
 
+    /*
+     * Tabbing to a term below the fold scrolls its panel to bring it into
+     * view, and that scroll lands just after focus opened the tooltip. Closing
+     * on it meant the keyboard never saw an explanation for any term it had
+     * to scroll to, so the scroll a focus caused is followed instead.
+     */
+    const onScroll = () => {
+      const panel = ref.current;
+      if (open.source === 'focus' && Date.now() - openedAt < FOCUS_SCROLL_MS && panel) {
+        setPlacement(
+          place(
+            open.trigger.getBoundingClientRect(),
+            panel.offsetWidth,
+            panel.offsetHeight,
+          ),
+        );
+        return;
+      }
+      closeNow();
+    };
+
     // Capture phase throughout: these must win over anything that stops
     // propagation on its way up, and the canvas does exactly that.
     document.addEventListener('keydown', onKey, true);
     document.addEventListener('pointerdown', onPointerDown, true);
-    window.addEventListener('scroll', onDismiss, true);
+    window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', onDismiss);
     return () => {
       document.removeEventListener('keydown', onKey, true);
       document.removeEventListener('pointerdown', onPointerDown, true);
-      window.removeEventListener('scroll', onDismiss, true);
+      window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', onDismiss);
     };
   }, [open]);

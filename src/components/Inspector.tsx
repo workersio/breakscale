@@ -31,6 +31,9 @@ import {
   toneClass,
 } from './format';
 import { Term } from './Tooltip';
+import { readoutFor } from './Canvas';
+import { readoutTermFor } from './readoutTerms';
+import { GLOSSARY_BY_ID } from '../content/glossary';
 import { VendorPanel } from './VendorPanel';
 import {
   EdgeFaultControls,
@@ -1697,6 +1700,51 @@ function VitalsMeter({
 }
 
 /**
+ * The words on the node's box, each with its glossary definition.
+ *
+ * The box is SVG text and cannot carry a <Term>, so "34 WAITING" on the
+ * canvas had no explanation anywhere a student would look. The same labels
+ * `readoutFor` prints are listed here, so they always match the box, and the
+ * definition is plain text rather than a hover, so it reads on a phone too.
+ */
+function BoxKey({
+  kind,
+  stats,
+  cfg,
+}: {
+  kind: NodeKind;
+  stats: NodeStats;
+  cfg: NodeConfig;
+}) {
+  const r = readoutFor(kind, stats, cfg);
+  const rows: { label: string; id: string; short: string }[] = [];
+  for (const label of [r.primary.label, r.a.label, r.b.label]) {
+    if (!label || rows.some((row) => row.label === label)) continue;
+    const id = readoutTermFor(kind, label);
+    const entry = id ? GLOSSARY_BY_ID.get(id) : undefined;
+    if (id && entry) rows.push({ label, id, short: entry.short });
+  }
+  if (rows.length === 0) return null;
+  return (
+    <div className="ins-box-key">
+      <p className="label">On the diagram</p>
+      <dl>
+        {rows.map((row) => (
+          <div key={row.label} className="ins-box-key-row">
+            <dt>
+              <Term id={row.id} bare>
+                {row.label}
+              </Term>
+            </dt>
+            <dd>{row.short}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+/**
  * The cron, narrated. Its generic stats are hardwired zeros (it serves
  * nothing, ever), so the panel states the schedule instead: when it fires
  * next, how big the burst will be, and what it has emitted so far.
@@ -2929,6 +2977,7 @@ function SingleInspector({
             and nothing at all for the kinds whose own panel below carries
             the reading. See VitalsMeter. */}
         {stats ? <VitalsMeter kind={node.kind} stats={stats} cfg={cfg} /> : null}
+        {stats ? <BoxKey kind={node.kind} stats={stats} cfg={cfg} /> : null}
 
         {/* WHAT THIS COMPONENT IS MADE OF.
 
@@ -3073,6 +3122,7 @@ function SingleInspector({
                     {stats.waitingOnDownstream !== undefined && (
                       <StatRow
                         label="Waiting on its calls"
+                        term="waiting-on-calls"
                         value={formatCount(stats.waitingOnDownstream)}
                       />
                     )}
@@ -3396,6 +3446,32 @@ function rpsToPosition(rps: number): number {
 }
 
 /**
+ * The next readable rate from `rps` in direction `dir`, for the arrow keys.
+ *
+ * One native step is under 1% of the rate, which the rounding above snaps
+ * straight back: at 50 a second, ArrowRight did nothing at all. Walking the
+ * positions until the rounded rate changes makes every press move.
+ */
+function nudgeRps(rps: number, dir: 1 | -1): number {
+  for (
+    let pos = rpsToPosition(rps) + dir;
+    pos >= 0 && pos <= SLIDER_STEPS;
+    pos += dir
+  ) {
+    const next = positionToRps(pos);
+    if (dir > 0 ? next > rps : next < rps) return next;
+  }
+  return rps;
+}
+
+const ARROW_DIR: Readonly<Record<string, 1 | -1>> = {
+  ArrowRight: 1,
+  ArrowUp: 1,
+  ArrowLeft: -1,
+  ArrowDown: -1,
+};
+
+/**
  * Scale marks, placed at their true log position rather than spread evenly.
  * An evenly-spaced 1/10/100/1k/5k row lies about where the thumb will land:
  * 1k sits at 69% of the travel, not 75%.
@@ -3535,6 +3611,13 @@ export function TrafficControl({
                 : `${Math.round(rps)} request${Math.round(rps) === 1 ? '' : 's'} per second`
             }
             onChange={(e) => onRpsChange(positionToRps(Number(e.currentTarget.value)))}
+            onKeyDown={(e) => {
+              const dir = ARROW_DIR[e.key];
+              if (dir === undefined || e.altKey || e.metaKey || e.ctrlKey) return;
+              e.preventDefault();
+              const next = nudgeRps(rps, dir);
+              if (next !== rps) onRpsChange(next);
+            }}
           />
           {noTrafficSource ? (
             /* The scale describes a range the slider cannot reach, so it is

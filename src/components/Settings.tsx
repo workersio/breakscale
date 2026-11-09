@@ -55,8 +55,8 @@ function toggles(coarse: boolean): ToggleRow[] {
       key: 'tooltips',
       label: 'Explain metric names',
       hint: coarse
-        ? 'Underline terms like p99, and explain them when you tap one.'
-        : 'Underline terms like p99 and show what they mean on hover.',
+        ? 'Tap a term like p99 to see what it means.'
+        : 'Show what terms like p99 mean on hover.',
     },
     {
       key: 'sparklines',

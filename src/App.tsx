@@ -89,6 +89,13 @@ import { sanitizeSeed } from './sim/seed';
 import { NEW_NOTE_TEXT } from './components/annotationLayout';
 import type { AnnotationTool } from './components/Palette';
 import { TooltipLayer, setGlossaryNavigate } from './components/Tooltip';
+import { FindProblem } from './learn/FindProblem';
+import { currentFinding, spotlightOf, type Finding } from './learn/finding';
+import { WhatHappened } from './learn/WhatHappened';
+import { LearningPath } from './learn/LearningPath';
+import { usePathProgress } from './learn/pathProgress';
+import { Tour } from './learn/Tour';
+import { useTour } from './learn/useTour';
 import { togglePreference, usePreference } from './content/preferences';
 import { Settings } from './components/Settings';
 import { MainMenu } from './components/MainMenu';
@@ -843,6 +850,7 @@ export default function App() {
 
   const [examplesOpen, setExamplesOpen] = useState(false);
   const [challengesOpen, setChallengesOpen] = useState(false);
+  const [pathOpen, setPathOpen] = useState(false);
 
   /**
    * The challenge being attempted, by id, or null for the reader's own
@@ -1083,14 +1091,20 @@ export default function App() {
   /**
    * What the menu offers.
    *
-   * Ordered by how often a student reaches for it: an example is how most
-   * sessions start, the glossary is what they need mid-run, and the
-   * shortcuts and settings are consulted rarely. Bindings are printed here
-   * as well as in the shortcuts dialog, so a key can be learned from the
-   * menu without opening a second thing to read about the first.
+   * Ordered by how often a student reaches for it: the learning path says
+   * what to open next, an example is how most sessions start, the glossary
+   * is what they need mid-run, and the shortcuts and settings are consulted
+   * rarely. Bindings are printed here as well as in the shortcuts dialog,
+   * so a key can be learned from the menu without opening a second thing to
+   * read about the first.
    */
   const menuItems = useMemo(
     () => [
+      {
+        label: 'Learning path',
+        icon: 'M3 19a3 3 0 1 0 6 0 3 3 0 1 0-6 0M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15M15 5a3 3 0 1 0 6 0 3 3 0 1 0-6 0',
+        onSelect: () => setPathOpen(true),
+      },
       {
         label: 'Your designs',
         icon: 'M4 4a2 2 0 0 1 2-2h7l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM13 2v5h5M9 13h6M9 17h6',
@@ -1151,6 +1165,10 @@ export default function App() {
    * canvas followed by a second render.
    */
   const [snapshot, setSnapshot] = useState<SimSnapshot | null>(() => engine.snapshot());
+
+  // "Find the problem": the last answer, shown while it still applies.
+  const [finding, setFinding] = useState<Finding | null>(null);
+  const shownFinding = currentFinding(finding, topology, snapshot);
 
   /**
    * Live mirrors of the play/pause state. The rAF loop is started once and
@@ -1490,6 +1508,8 @@ export default function App() {
       engine.reset();
       resetLostRate();
       setSnapshot(engine.snapshot());
+      // An answer read from the run that just ended would carry its numbers.
+      setFinding(null);
       if (fit) setFitNonce((n) => n + 1);
     },
     [engine, resetLostRate],
@@ -2677,6 +2697,22 @@ export default function App() {
   );
 
   const badgeOf = useCallback((c: Challenge) => badgeFor(chalStore, c), [chalStore]);
+  // First visit only. An edit clears presetId, so only another example ends it.
+  const tourSubject = selectedNodes.length === 1 ? selectedNodes[0]!.id : null;
+  const tour = useTour(
+    !challenge && (presetId === null || presetId === PRESETS[0]!.id),
+    topology,
+    snapshot,
+    tourSubject,
+  );
+  // A brief's canvas carries its example's id; that is not the example run.
+  // A finished tour broke and fixed the first example, so it counts too.
+  const explored = usePathProgress(
+    challengeId ? null : presetId,
+    topology,
+    snapshot,
+    tour.open && tour.stage.kind === 'fixed' ? PRESETS[0]!.id : null,
+  );
 
   /* ---------------- design files ----------------
    *
@@ -2935,6 +2971,7 @@ export default function App() {
     // the previous run's Dropped figure standing beside a zeroed clock.
     resetLostRate();
     setSnapshot(engine.snapshot());
+    setFinding(null);
   }, [engine, resetLostRate]);
 
   const handleToggleRun = useCallback(() => setRunning((r) => !r), []);
@@ -3600,7 +3637,34 @@ export default function App() {
               onToolChange={setArmedTool}
               fitSignal={fitNonce}
               visibleRef={stageSafeRef}
+              spotlightId={tour.spotlight ?? spotlightOf(shownFinding)}
             />
+            {/* Hidden in a challenge, where finding it is the exercise. */}
+            {!challenge && topology.nodes.length > 0 ? (
+              <FindProblem
+                topology={topology}
+                snapshot={snapshot}
+                finding={shownFinding}
+                onChange={setFinding}
+                onSelect={(id) => setSelectedIds(new Set([id]))}
+              />
+            ) : null}
+            {/* Hidden in a challenge too: it would narrate the answer. */}
+            {!challenge ? (
+              <WhatHappened topology={topology} snapshot={snapshot} />
+            ) : null}
+            {tour.open ? (
+              <Tour
+                tour={tour}
+                topology={topology}
+                snapshot={snapshot}
+                selectedId={tourSubject}
+                rps={rps}
+                onSetLoad={handleRpsChange}
+                onSelect={(id) => setSelectedIds(new Set([id]))}
+                onOpenPath={() => setPathOpen(true)}
+              />
+            ) : null}
             {challenge && check ? (
               <ChallengePanel
                 challenge={challenge}
@@ -3864,6 +3928,7 @@ export default function App() {
         presets={PRESETS}
         activePresetId={presetId}
         onLoad={handleLoadPreset}
+        onOpenPath={() => setPathOpen(true)}
       />
       <Challenges
         open={challengesOpen}
@@ -3871,6 +3936,18 @@ export default function App() {
         challenges={CHALLENGES}
         onStart={handleStartChallenge}
         badgeOf={badgeOf}
+      />
+      <LearningPath
+        open={pathOpen}
+        onClose={() => setPathOpen(false)}
+        presets={PRESETS}
+        challenges={CHALLENGES}
+        explored={explored}
+        badgeOf={badgeOf}
+        activePresetId={presetId}
+        activeChallengeId={challengeId}
+        onLoadExample={handleLoadPreset}
+        onStartChallenge={handleStartChallenge}
       />
     </div>
   );

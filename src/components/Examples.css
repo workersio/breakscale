@@ -64,6 +64,12 @@
   gap: var(--sp-4);
 }
 
+.ex-head-actions {
+  display: flex;
+  flex: none;
+  gap: var(--sp-2);
+}
+
 .ex-title {
   margin: 0;
   font-size: var(--fs-lg);

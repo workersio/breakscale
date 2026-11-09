@@ -1,0 +1,86 @@
+/* --------------------------------------------------------------------------
+   "Find the problem"
+
+   Canvas chrome in the top-left corner, stacked under the components toggle
+   so it follows that toggle past an open rail and never meets the centred
+   gesture hint. The answer hangs below the button.
+   -------------------------------------------------------------------------- */
+
+.fp {
+  position: absolute;
+  z-index: 5;
+  top: calc(var(--bar-clear) + 32px + var(--sp-2));
+  left: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  /* The wrapper spans the answer's width; only its children take presses. */
+  pointer-events: none;
+  transition: left var(--dur-base) var(--ease);
+}
+
+.fp > * {
+  pointer-events: auto;
+}
+
+.app-body.has-library .fp {
+  left: calc(var(--rail-w) + var(--sp-3) * 2);
+}
+
+.fp-trigger {
+  color: var(--text);
+}
+
+.fp-answer {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  gap: var(--sp-2) var(--sp-2);
+  width: min(340px, calc(100vw - var(--sp-4) * 2));
+  padding: var(--sp-3);
+  background: var(--surface);
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-btn);
+  box-shadow: var(--shadow-lg);
+}
+
+/* A problem gets a danger edge as well as its words, never the colour alone. */
+.fp-answer:has(.is-problem) {
+  border-left: 3px solid var(--danger-mark);
+}
+
+.fp-text {
+  flex: 1;
+  margin: 0;
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+  color: var(--text);
+  text-wrap: pretty;
+}
+
+/* The close button rides the first line's corner; the action sits under
+   the sentence it acts on. */
+.fp-close {
+  margin: calc(var(--sp-1) * -1) calc(var(--sp-1) * -1) 0 0;
+}
+
+.fp-select {
+  grid-column: 1;
+  justify-self: start;
+}
+
+@media (max-width: 720px) {
+  .fp,
+  .app-body.has-library .fp {
+    /* The stage already sits below the phone header. */
+    top: var(--sp-3);
+    left: var(--sp-4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fp {
+    transition: none;
+  }
+}

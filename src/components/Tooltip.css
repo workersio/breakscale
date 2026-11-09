@@ -9,17 +9,18 @@
    means has to be able to SEE that an answer is on offer, or the feature may
    as well not exist.
 
-   A dotted underline in the existing --border-strong ink resolves both. It is
-   invisible until you look for it and unmistakable once you do; it is a
-   century-old convention for "defined term" that needs no teaching; and
-   because it is a text-decoration rather than a border it hugs the glyphs,
-   wraps correctly across a line break, and costs no layout. Nothing here
-   reserves space, so turning a label into a <Term> never moves anything.
+   A permanent underline on every term lost that argument: it made the first
+   screen look busy, so explanations shipped switched off and most students
+   never met them. They are on now, and the marker only appears when it is
+   asked for. The help cursor says "there is an explanation here" to a mouse,
+   and the dotted underline, a century-old convention for "defined term",
+   appears on hover and focus. A tap simply opens it. Because it is a
+   text-decoration rather than a border it hugs the glyphs, wraps across a
+   line break and costs no layout, so turning a label into a <Term> never
+   moves anything.
 
-   The underline is deliberately NOT accent-coloured at rest. Blue is reserved
-   in this system for "you did this" — focus, selection, the primary button —
-   and spending it on forty passive markers would strip that meaning. Accent
-   appears only once the term is actually engaged.
+   Blue is reserved in this system for "you did this": focus, selection, the
+   primary button. That is why accent appears only once a term is engaged.
 
    This file owns .term and .tip only. It declares no font size outside the
    scale, no colour outside the tokens, and no radius outside the ladder.
@@ -33,24 +34,15 @@
   /* text-decoration rather than border-bottom: it follows the glyphs, breaks
      correctly across lines, and does not participate in layout.
 
-     THE INK IS --line-3, AND THIS IS MEASURED, NOT TASTE.
+     QUIET AT REST.
 
-     The instinct is to use --border-strong, the quietest divider in the
-     system. Measured, that lands at 1.58:1 on --surface and 1.46:1 on
-     --surface-2. WCAG 1.4.11 requires 3:1 for a graphical object you need in
-     order to understand the interface, and this marker is precisely that: it
-     is the only thing telling a student an explanation exists. Below 3:1 the
-     feature silently fails for the readers who most need it, which is worse
-     than not shipping it.
-
-     --line-3 measures 3.27:1 on --surface, 3.11:1 on --bg and 3.00:1 on
-     --surface-2 — clearing the bar on every surface a term can sit on. It is
-     an existing token, so this adds no colour to the system.
-
-     Dotted rather than solid is what keeps it quiet at that strength: the
-     gaps cut the mark's visual mass roughly in half, so it reads as a hint
-     across forty terms while each dot is genuinely visible. */
-  text-decoration: underline dotted var(--line-3);
+     Explanations are on by default, so a first screen carries forty terms,
+     and forty dotted underlines made it look busier than it is. At rest a
+     term is only the help cursor. The underline appears on hover, on focus
+     and while its tooltip is open, in --accent: measured 5.24:1 or better on
+     --bg, --surface, --surface-2 and --accent-soft in both themes, so the
+     engaged mark clears WCAG 1.4.11 wherever a term sits. */
+  text-decoration: underline dotted transparent;
   text-underline-offset: 3px;
   text-decoration-thickness: 1px;
   /* The one correct cursor for "there is an explanation here". */
@@ -59,6 +51,16 @@
   transition:
     text-decoration-color var(--dur-fast) var(--ease),
     background-color var(--dur-fast) var(--ease);
+}
+
+/* Without hover there is no cursor and nothing to reveal the mark, so a
+   touch screen keeps the dotted underline at rest, or no word would look
+   tappable. --line-3 measures 3.00:1 or better on --bg, --surface and
+   --surface-2 in both themes (explain.contrast.test.ts), clearing 1.4.11. */
+@media (hover: none) {
+  .term {
+    text-decoration-color: var(--line-3);
+  }
 }
 
 /* Engaged: hovered, or holding the open tooltip. The tint is the same
@@ -76,6 +78,7 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   background: var(--accent-soft);
+  text-decoration-color: var(--accent);
 }
 
 /* For the few places where the surrounding element already reads as a label
