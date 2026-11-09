@@ -129,12 +129,18 @@
   stroke: var(--line);
   stroke-linecap: round;
   stroke-linejoin: round;
-  transition: stroke var(--dur-fast) var(--ease);
+  /* The opacity eases with the colour: the danger state changes both, and
+     easing one while the other snapped still read as a jump. */
+  transition:
+    stroke var(--dur-fast) var(--ease),
+    stroke-opacity var(--dur-fast) var(--ease);
 }
 
 .cv-edge-arrow {
   fill: var(--line);
-  transition: fill var(--dur-fast) var(--ease);
+  transition:
+    fill var(--dur-fast) var(--ease),
+    fill-opacity var(--dur-fast) var(--ease);
 }
 
 .cv-edge.is-active .cv-edge-line {
@@ -549,6 +555,20 @@
 
 .cv-node-mark.is-fault {
   fill: var(--danger-mark);
+}
+
+/* The mark fades in whenever it mounts, so it does not pop. That is mostly
+   a health change, and health is settled first (settledHealth.ts), so a
+   value sitting on a threshold does not keep replaying it. Zooming across
+   a detail level or loading a design remounts it too. */
+.cv-node-mark {
+  animation: cv-mark-in var(--dur-fast) var(--ease-out);
+}
+
+@keyframes cv-mark-in {
+  from {
+    opacity: 0;
+  }
 }
 
 /* T1 — unit captions. Uppercase is what makes 11px read as a label.
@@ -1461,7 +1481,8 @@
      than a shortened duration is safe here, unlike the shell panels: no
      unmount logic waits on these animationend events. */
   .cv-node.is-entering,
-  .cv-node-ring {
+  .cv-node-ring,
+  .cv-node-mark {
     animation: none;
   }
 }

@@ -265,3 +265,10 @@
   cursor: not-allowed;
   transform: none;
 }
+
+/* The 44px touch floor the shared .btn takes in index.css. */
+@media (pointer: coarse) {
+  .dz-name {
+    height: 44px;
+  }
+}

@@ -1208,7 +1208,7 @@
   .app-island {
     min-height: 0;
     gap: var(--sp-2);
-    padding: var(--sp-2) var(--sp-3);
+    padding: var(--sp-1) var(--sp-3);
     border: 0;
     border-radius: 0;
     background: none;
@@ -1220,10 +1220,26 @@
     flex: 1 1 auto;
   }
 
+  /* One identity row: wordmark, undo, redo, Share and the menu. It was two
+     rows with the GitHub link and a labelled Share wrapping under the
+     wordmark, flush to the screen edge, which put the header at 282px of an
+     800px screen. The link now lives in the menu; Share keeps its glyph. */
   .app-island-menu {
     order: 2;
     margin-left: 0;
     padding-left: 0;
+    gap: var(--sp-2);
+  }
+
+  .app-source-link,
+  .app-share-label {
+    display: none;
+  }
+
+  .app-share-btn {
+    width: 36px;
+    padding: 0;
+    justify-content: center;
   }
 
   /* The load control is the one thing a reader touches constantly, so it
@@ -1234,6 +1250,7 @@
     flex: 1 1 100%;
     max-width: none;
     border-top: var(--bw) solid var(--border);
+    padding-block: var(--sp-2);
   }
 
   .app-tagline,
@@ -1356,18 +1373,6 @@
   }
 }
 
-@keyframes app-sheet-in {
-  from {
-    transform: translateY(100%);
-  }
-}
-
-@keyframes app-sheet-out {
-  to {
-    transform: translateY(100%);
-  }
-}
-
 /* Only `from` is declared, matching the slide keyframes above: the end state
    is the slot's natural position, so a sheet left mid-animation by a
    suspended tab still lands correctly once the animation is dropped. The
@@ -1433,9 +1438,10 @@
     border: 0;
     background: none;
     color: var(--text-dim);
-    font-size: var(--fs-xs);
+    /* --fs-sm and no tracking. This named --fs-xs, which is not a token, so
+       the labels fell back to 14px with label tracking and shouted. */
+    font-size: var(--fs-sm);
     font-weight: var(--fw-med);
-    letter-spacing: var(--tr-label);
     cursor: pointer;
   }
 
@@ -1444,10 +1450,21 @@
     background: var(--accent-soft);
   }
 
+  /* Tokens, not opacity, as with .btn:disabled: at 0.4 the label fell to
+     1.9:1 and the tab all but vanished. The label stays readable, so the
+     unavailable state needs a cue other than a slightly greyer label: a
+     lighter weight, and the glyph drawn in the outline ink, about half the
+     contrast of an enabled tab's glyph. */
   .app-tab:disabled,
   .app-tab[aria-disabled='true'] {
-    opacity: 0.4;
+    color: var(--text-faint);
+    font-weight: var(--fw-body);
     cursor: default;
+  }
+
+  .app-tab:disabled svg,
+  .app-tab[aria-disabled='true'] svg {
+    color: var(--border-strong);
   }
 
   .app-tab svg {
@@ -1488,14 +1505,15 @@
   }
 
   /* The grab handle. A 44px target for a 4px mark: the bar is the signal,
-     the padding around it is what a thumb actually lands on. */
+     the padding around it is what a thumb actually lands on. (It was 28px
+     while this comment said 44; box-sizing is border-box here.) */
   .app-grabber {
     display: flex;
     flex: none;
     align-items: center;
     justify-content: center;
-    height: 28px;
-    padding: 12px 0;
+    height: 44px;
+    padding: 20px 0;
     /* The browser must not claim the vertical drag for scrolling, or the
        sheet never sees the move events it needs to follow the finger. */
     touch-action: none;

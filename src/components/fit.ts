@@ -69,11 +69,15 @@ export const FIT_MIN = DETAIL_ZOOM;
  * cards in a row, is 804 world px wide, so the 0.7 floor left it half off
  * the screen: the student saw one card and a half and could not tell what
  * they were meant to fix. Seeing every part with its name beats seeing one
- * part's numbers, and the numbers are a tap or a pinch away. 0.45 is the
- * floor at which that three-card row fits a 390px screen with a margin; the
- * card names still render there, and anything wider than that is panned.
+ * part's numbers. 0.38 is the floor at which that three-card row fits a
+ * 360px screen inside the 24px margin (804 x 0.38 = 306 of 312); at 0.45 the
+ * outer two cards were cut off there. Anything wider than that is panned.
+ *
+ * On a touch screen the cards still show their numbers this far out: the
+ * canvas draws a counter-scaled glance line below DETAIL_ZOOM (glance.ts),
+ * sized to stay readable down to exactly this floor.
  */
-export const FIT_MIN_NARROW = 0.45;
+export const FIT_MIN_NARROW = 0.38;
 
 /**
  * The auto-fit floor on a wide screen during a brief, when 0.7 would leave
@@ -113,7 +117,7 @@ function rawFit(bw: number, bh: number, view: FitRect, margin: number): number {
  *
  * The floor is chosen by the SURFACE width, not the visible one: on a
  * desktop with both rails open the visible rect can be narrower than 720,
- * and that is still a desktop, where the phone's 0.45 never applies.
+ * and that is still a desktop, where the phone's narrow floor never applies.
  *
  * A diagram still wider than the view at the floor starts at the left
  * margin, instead of being centred. Centred, a wide example on a phone

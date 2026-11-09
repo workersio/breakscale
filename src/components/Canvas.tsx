@@ -99,6 +99,9 @@ import { DETAIL_ZOOM, MINIMAL_ZOOM, fitViewport } from './fit';
 import { EmptyCanvas } from './EmptyCanvas';
 import { EdgeCues } from './EdgeCues';
 import type { EmptyCanvasProps } from './EmptyCanvas';
+import { glanceLayout, glanceScale } from './glance';
+import type { GlanceLayout } from './glance';
+import { useSettledHealthMap } from './settledHealth';
 import { serialiseSvg } from '../imageExport';
 import './Canvas.css';
 
@@ -234,6 +237,25 @@ function fitPrimary(
   const vs = selected ? VAL_SELECTED_STYLE : VAL_PRIMARY_STYLE;
   const gap = value && label ? CELL_GAP_W + 1 : 0;
   const w = measureText(value, vs) + measureText(label, CAP_STYLE) + gap;
+  if (w <= budget) return {};
+  return { textLength: budget, lengthAdjust: 'spacingAndGlyphs' };
+}
+
+/** fitPrimary for the glance line: the full inner width is its budget. */
+function fitGlance(
+  value: string,
+  label: string,
+  gl: GlanceLayout,
+): { textLength?: number; lengthAdjust?: 'spacingAndGlyphs' } {
+  const budget = NODE_W - PAD_X * 2;
+  const w =
+    measureText(value, { ...VAL_PRIMARY_STYLE, size: gl.valueSize }) +
+    measureText(label, {
+      ...CAP_STYLE,
+      size: gl.capSize,
+      tracking: gl.capSize * 0.06,
+    }) +
+    (value && label ? gl.capGap : 0);
   if (w <= budget) return {};
   return { textLength: budget, lengthAdjust: 'spacingAndGlyphs' };
 }
@@ -2681,6 +2703,16 @@ interface NodeViewProps {
   backlog: number;
   /** A client's own end-to-end figures, or null for every other kind. */
   route: RouteStats | null;
+  /**
+   * The readout's health after display hysteresis, from the parent. Absent
+   * means use the readout's own, unsettled.
+   */
+  settledHealth?: Health;
+  /**
+   * World px per screen px for the glance line (glance.ts), or 0 for none.
+   * Non-zero only below DETAIL_ZOOM on a touch screen.
+   */
+  glance: number;
   onActivate: (id: string, additive: boolean) => void;
   onNudge: (id: string, dx: number, dy: number) => void;
   /**
@@ -2707,7 +2739,8 @@ function BreakBadge({ x, y, n }: { x: number; y: number; n: number }) {
   );
 }
 
-const NodeView = memo(function NodeView({
+/** Exported for its render test only; the canvas is its one caller. */
+export const NodeView = memo(function NodeView({
   node,
   stats,
   spark,
@@ -2719,6 +2752,8 @@ const NodeView = memo(function NodeView({
   fault,
   backlog,
   route,
+  settledHealth,
+  glance,
   onActivate,
   onNudge,
   entering,
@@ -2728,7 +2763,11 @@ const NodeView = memo(function NodeView({
     ? readoutFor(node.kind, stats, node.config, backlog, route)
     : null;
   // A faulted node is never reported as healthy, whatever its metrics say.
-  const health: Health = fault ? 'danger' : readout ? readout.health : 'ok';
+  const health: Health = fault
+    ? 'danger'
+    : readout
+      ? (settledHealth ?? readout.health)
+      : 'ok';
 
   /* ---- structure: what this node is made of -----------------------
      `instances === undefined` means "this kind is genuinely one thing" and
@@ -2820,16 +2859,36 @@ const NodeView = memo(function NodeView({
   const sparkUnit = readout ? readout.sparkUnit : true;
 
   const full = detail === 2;
-  const showHeader = detail >= 1;
+  // The glance line takes the header's room: the icon and the 14px name
+  // are both unreadable at the zooms it is drawn at.
+  const gl = glance > 0 && !full ? glanceLayout(glance) : null;
+  const showHeader = detail >= 1 && !gl;
+  // The status mark survives the glance line, counter-scaled to the same
+  // screen size and level with its name: it is the shape channel for health,
+  // and a phone at fit zoom must not lose it. The unit badge does not, since
+  // at 11px the name would keep only a few letters beside both; the stack
+  // behind the card still shows that there are several.
+  const showCorner = showHeader || gl !== null;
+  const cs = gl ? glance : 1;
+  const cornerY = gl ? gl.nameY : HEAD_CENTER_Y;
+  const markSize = MARK_SIZE * cs;
 
   /** The badge string as actually rendered; the name budget reserves it. */
   const badgeText = badge ? `${badge}${pending > 0 ? `+${pending}` : ''}` : '';
-  const shownName = truncateLabel(
-    node.label,
-    showHeader,
-    badgeText,
-    Boolean(fault) || health !== 'ok',
-  );
+  const shownName = gl
+    ? truncateToWidth(
+        node.label,
+        NODE_W -
+          PAD_X * 2 -
+          (fault || health !== 'ok' ? (MARK_SIZE + NAME_GAP / 2) * cs : 0),
+        { ...NAME_STYLE, size: gl.nameSize },
+      )
+    : truncateLabel(
+        node.label,
+        showHeader,
+        badgeText,
+        Boolean(fault) || health !== 'ok',
+      );
 
   const linkClass =
     linkRole === 'none'
@@ -2894,7 +2953,7 @@ const NodeView = memo(function NodeView({
     >
       {/* The fleet, BEHIND the body. Painted first so the body is the front
           card of the stack rather than an object sitting on top of one. */}
-      {structure === 'stack' && showHeader && (
+      {structure === 'stack' && showCorner && (
         <InstanceStack live={units?.length ?? 1} pending={pending} />
       )}
 
@@ -2998,11 +3057,27 @@ const NodeView = memo(function NodeView({
       <text
         className="cv-node-name"
         x={showHeader ? PAD_X + GLYPH_PX + NAME_GAP : PAD_X}
-        y={showHeader ? HEAD_CENTER_Y : 24}
+        y={gl ? gl.nameY : showHeader ? HEAD_CENTER_Y : 24}
+        style={gl ? { fontSize: gl.nameSize } : undefined}
       >
         {shownName}
         {shownName !== node.label && <title>{node.label}</title>}
       </text>
+
+      {gl && readout && (
+        <text
+          className="cv-node-primary"
+          x={PAD_X}
+          y={gl.valueY}
+          style={{ fontSize: gl.valueSize }}
+          {...fitGlance(readout.primary.value, readout.primary.label, gl)}
+        >
+          <tspan className="cv-val">{readout.primary.value}</tspan>
+          <tspan className="cv-cap" dx={gl.capGap} style={{ fontSize: gl.capSize }}>
+            {readout.primary.label}
+          </tspan>
+        </text>
+      )}
 
       {/*
         Status mark, top right. Redundant with colour by SHAPE, which is the
@@ -3017,29 +3092,30 @@ const NodeView = memo(function NodeView({
         So the three states differ in fill and the fourth in silhouette,
         before any colour is applied.
       */}
-      {showHeader && fault && (
+      {showCorner && fault && (
         <rect
           className="cv-node-mark is-fault"
-          x={NODE_W - PAD_X - MARK_SIZE}
-          y={HEAD_CENTER_Y - MARK_SIZE / 2}
-          width={MARK_SIZE}
-          height={MARK_SIZE}
+          x={NODE_W - PAD_X - markSize}
+          y={cornerY - markSize / 2}
+          width={markSize}
+          height={markSize}
         />
       )}
-      {showHeader && !fault && health === 'danger' && (
+      {showCorner && !fault && health === 'danger' && (
         <circle
           className="cv-node-mark is-danger"
-          cx={NODE_W - PAD_X - MARK_SIZE / 2}
-          cy={HEAD_CENTER_Y}
-          r={MARK_SIZE / 2}
+          cx={NODE_W - PAD_X - markSize / 2}
+          cy={cornerY}
+          r={markSize / 2}
         />
       )}
-      {showHeader && !fault && health === 'warn' && (
+      {showCorner && !fault && health === 'warn' && (
         <circle
           className="cv-node-mark is-warn"
-          cx={NODE_W - PAD_X - MARK_SIZE / 2}
-          cy={HEAD_CENTER_Y}
-          r={MARK_SIZE / 2 - 1}
+          cx={NODE_W - PAD_X - markSize / 2}
+          cy={cornerY}
+          r={(MARK_SIZE / 2 - 1) * cs}
+          style={gl ? { strokeWidth: 2 * cs } : undefined}
         />
       )}
 
@@ -5838,6 +5914,7 @@ export default function Canvas({
   }, [spotlightId, visibleRect]);
 
   const detail: 0 | 1 | 2 = view.k >= DETAIL_ZOOM ? 2 : view.k >= MINIMAL_ZOOM ? 1 : 0;
+  const glance = glanceScale(view.k, coarsePointer);
   const showEdgeLabels = view.k >= 1;
 
   /**
@@ -5905,14 +5982,10 @@ export default function Canvas({
     return m;
   }, [routes]);
 
-  const healthById = useMemo(() => {
+  const readoutHealthById = useMemo(() => {
     const m = new Map<string, Health>();
     if (!snapshot) return m;
     for (const n of topology.nodes) {
-      if (faultById.has(n.id)) {
-        m.set(n.id, 'danger');
-        continue;
-      }
       const s = snapshot.nodes[n.id];
       if (s) {
         m.set(
@@ -5928,7 +6001,22 @@ export default function Canvas({
       }
     }
     return m;
-  }, [snapshot, topology.nodes, faultById, backlogById, routeById]);
+  }, [snapshot, topology.nodes, backlogById, routeById]);
+
+  /* Settled so a node on a threshold does not flicker (see settledHealth.ts).
+     The fault overlay goes on after settling: a crash shows at once, and a
+     repair hands straight back to the health that was tracked all along. */
+  const settledHealthById = useSettledHealthMap(
+    readoutHealthById,
+    snapshot?.system.timeMs ?? null,
+  );
+
+  const healthById = useMemo(() => {
+    if (faultById.size === 0) return settledHealthById;
+    const m = new Map(settledHealthById);
+    for (const id of faultById.keys()) m.set(id, 'danger');
+    return m;
+  }, [settledHealthById, faultById]);
 
   /**
    * Lane assignment for bidirectional pairs, keyed by edge id.
@@ -6188,6 +6276,8 @@ export default function Canvas({
                   fault={faultById.get(n.id) ?? null}
                   backlog={backlogById?.get(n.id) ?? 0}
                   route={routeById.get(n.id) ?? null}
+                  settledHealth={settledHealthById.get(n.id)}
+                  glance={glance}
                   onActivate={onActivate}
                   onNudge={onNudge}
                   entering={enteredIdRef.current === n.id}

@@ -17,6 +17,7 @@ import {
   type Health,
 } from './format';
 import { routeCondition } from './routeHealth';
+import { useSettledHealth } from './settledHealth';
 import { Term } from './Tooltip';
 import { Trace } from './Trace';
 import { Cost } from './Cost';
@@ -485,6 +486,8 @@ interface LatencyChartProps {
    */
   measured: boolean;
   emptyLabel: string;
+  /** Sim time of the snapshot, which steps the settled tone. */
+  timeMs: number;
 }
 
 const LatencyChart = memo(function LatencyChart({
@@ -494,6 +497,7 @@ const LatencyChart = memo(function LatencyChart({
   p99,
   measured,
   emptyLabel,
+  timeMs,
 }: LatencyChartProps) {
   const { ref, w } = useMeasuredWidth<HTMLDivElement>();
   const { at } = useXScale(history);
@@ -516,8 +520,9 @@ const LatencyChart = memo(function LatencyChart({
   );
 
   // The chart line and the headline number are toned by the same
-  // function, so they can never disagree about what a value means.
-  const tone = healthOfLatency(measured ? p99 : null);
+  // function, so they can never disagree about what a value means. Settled
+  // so a p99 hovering on 200ms does not flicker the line (settledHealth.ts).
+  const tone = useSettledHealth(healthOfLatency(measured ? p99 : null), timeMs);
   const ms = (v: number) => (measured ? formatMs(v) : NA);
   // The frame always renders; the message only claims "no data" when
   // there genuinely is none. A single sample draws its own mark.
@@ -1461,6 +1466,7 @@ export function Metrics({ snapshot, nodeNames, nodes, routes, idle }: MetricsPro
         p99={system.p99}
         measured={!noTraffic && !(system.p99 === 0 && system.goodputRps === 0)}
         emptyLabel={emptyLabel}
+        timeMs={system.timeMs}
       />
       <ThroughputChart
         history={plotted}

@@ -60,6 +60,14 @@ describe('fit with the challenge sheet up on a phone', () => {
     expect((r.left + r.right) / 2).toBeCloseTo(195, 5);
   });
 
+  it('fits all three cards on a 360px phone', () => {
+    const surface: FitRect = { left: 0, top: 160, width: 360, height: 524 };
+    const r = onScreen(threeInARow, surface, surface);
+    expect(r.k).toBeGreaterThanOrEqual(FIT_MIN_NARROW);
+    expect(r.left).toBeGreaterThanOrEqual(0);
+    expect(r.right).toBeLessThanOrEqual(360);
+  });
+
   it('stops at the phone floor and starts what overflows at its left end', () => {
     // Centred, a diagram this wide showed its middle with neither end on
     // screen. The left end is the traffic source, where a flow is read from.

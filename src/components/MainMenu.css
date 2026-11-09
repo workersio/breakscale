@@ -105,3 +105,10 @@
   font-size: var(--fs-label);
   color: var(--text-faint);
 }
+
+/* The 44px touch floor the shared .btn takes in index.css. */
+@media (pointer: coarse) {
+  .mn-item {
+    height: 44px;
+  }
+}

@@ -230,6 +230,8 @@ const clampPanel = (key: PanelKey, v: unknown): number => {
  */
 const PHONE_QUERY = '(max-width: 720px)';
 
+const SOURCE_URL = 'https://github.com/workersio/breakscale';
+
 function subscribePhone(onChange: () => void): () => void {
   if (typeof window === 'undefined' || !window.matchMedia) return () => {};
   const mq = window.matchMedia(PHONE_QUERY);
@@ -1183,8 +1185,21 @@ export default function App() {
         icon: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z',
         onSelect: () => setSettingsOpen(true),
       },
+      /* The phone header has no room for the GitHub link, so it moves here
+         rather than going missing. */
+      ...(phone
+        ? [
+            {
+              label: 'Source on GitHub',
+              icon: 'M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6',
+              onSelect: () => {
+                window.open(SOURCE_URL, '_blank', 'noopener,noreferrer');
+              },
+            },
+          ]
+        : []),
     ],
-    [openGlossary, coarse],
+    [openGlossary, coarse, phone],
   );
 
   /**
@@ -3794,7 +3809,7 @@ export default function App() {
           */}
           <a
             className={`btn btn-icon app-source-link${stars !== null ? ' has-stars' : ''}`}
-            href="https://github.com/workersio/breakscale"
+            href={SOURCE_URL}
             target="_blank"
             rel="noreferrer noopener"
             aria-label={
@@ -3881,6 +3896,7 @@ export default function App() {
             className="btn app-share-btn"
             onClick={handleOpenShare}
             title="Get a link to this design"
+            aria-label="Share"
           >
             <svg
               width="15"
@@ -3895,7 +3911,9 @@ export default function App() {
             >
               <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.5-1.5" />
             </svg>
-            Share
+            {/* Hidden on a phone, where the header is one row and the link
+                glyph has to carry it; aria-label keeps the name. */}
+            <span className="app-share-label">Share</span>
           </button>
 
           <div className="app-menu-wrap">

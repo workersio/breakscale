@@ -30,6 +30,7 @@ import {
   healthOfLoad,
   toneClass,
 } from './format';
+import { useSettledHealth } from './settledHealth';
 import { Term } from './Tooltip';
 import { readoutFor } from './Canvas';
 import { readoutTermFor } from './readoutTerms';
@@ -3548,7 +3549,8 @@ export function TrafficControl({
    * storm preset). No data renders as the sentinel, never as a fake zero.
    */
   const p99 = system.p99 === 0 && system.goodputRps === 0 ? null : system.p99;
-  const p99Tone = toneClass(healthOfLatency(p99));
+  // Settled like the chart line, which shares the threshold and the rule.
+  const p99Tone = toneClass(useSettledHealth(healthOfLatency(p99), system.timeMs));
 
   return (
     <div className="traffic">

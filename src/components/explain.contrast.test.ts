@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { readTokens } from '../theme/tokens';
 
 /**
  * Contrast is computed here, never eyeballed.
@@ -24,11 +26,13 @@ const TOKEN = {
   surface2: '#f7f3ee',
   surface3: '#f0ece5',
   border: '#e8e2da',
+  // The divider ink as it was when the defect below was found, kept so that
+  // test still measures it. The live --border-strong has since darkened.
   borderStrong: '#d2cbc2',
   line3: '#948c82',
   text: '#1e242e',
   textDim: '#525862',
-  textFaint: '#646972',
+  textFaint: '#626770',
   accent: '#325cbd',
   accentSoft: '#e3edff',
   accentInk: '#2d5277',
@@ -68,6 +72,21 @@ const TEXT_MIN = 4.5;
 const GRAPHIC_MIN = 3;
 
 /* ------------------------------------------------------------------ */
+
+describe('the copied tokens', () => {
+  const live = readTokens(
+    readFileSync(new URL('../index.css', import.meta.url), 'utf8'),
+    ':root',
+  );
+  const kebab = (k: string) => `--${k.replace(/([A-Z0-9])/g, '-$1').toLowerCase()}`;
+
+  it.each(Object.entries(TOKEN).filter(([k]) => k !== 'borderStrong'))(
+    '%s matches index.css',
+    (key, value) => {
+      expect(live[kebab(key)]?.toLowerCase()).toBe(value);
+    },
+  );
+});
 
 describe('the term affordance', () => {
   /*
