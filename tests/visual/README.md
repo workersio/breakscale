@@ -32,6 +32,10 @@ ledger must show the expected component and connection counts, and the clock
 must read exactly `3.0s`. If the preset did not load or the sim is running,
 the test fails with a readable message instead of an opaque pixel diff.
 
+The first-visit tour, which pins a card over the top bar on the default
+example, is skipped before capture: no baseline carries it, so an edit to
+the tour's copy can never fail a geometry test.
+
 ## Running
 
 ```bash
