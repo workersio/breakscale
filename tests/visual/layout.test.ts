@@ -70,6 +70,14 @@ async function bootExample(
   const clock = page.locator('.cv-ledger-time');
   await expect(clock).toHaveText('3.0s');
 
+  // Upstream's first-visit tour pins a teaching card over the top bar on
+  // the default example. It is not layout this suite checks, and a copy
+  // edit to it must not be able to fail a geometry diff, so it is skipped
+  // before capture. It only applies to the first preset at all; the other
+  // examples never show it, so this stays a no-op there.
+  const tour = page.locator('.tour-skip');
+  if (await tour.count()) await tour.click();
+
   // Fonts are bundled, but their load is asynchronous; capturing before they
   // land would diff every glyph on the page.
   await page.evaluate(() => document.fonts.ready);
