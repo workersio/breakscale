@@ -58,6 +58,50 @@ jobs:
       - name: Format
         run: bun run format:check
 
+  # Visual regression. Runs on Linux against committed Linux baselines. A
+  # regression therefore lands here without anyone running the suite on
+  # Windows first, and the artifacts show exactly which pixels moved.
+  visual:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: bunx playwright install --with-deps chromium
+
+      # Diff against the committed Linux baselines. There is no baseline
+      # generation step in CI: regenerating the references immediately
+      # before diffing against them compares them to themselves and can
+      # never fail, which is what this job did before. Baselines are
+      # refreshed locally on a given platform and committed.
+      - name: Run visual regression tests
+        run: bun test:visual
+
+      # On failure the folder holds actual/expected/diff PNGs and the trace
+      # for every failing test, which is what a reviewer needs to judge a
+      # visual change without reproducing it locally.
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-regression-failures
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 14
+
   # The suite and the build run on every OS the project supports. Linux alone
   # missed a path bug that broke the whole suite on Windows (#16): the code the
   # matrix actually exercises differently is drive letters and path separators.
