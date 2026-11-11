@@ -57,7 +57,7 @@ import {
 import type { ChallengeStore } from './challengeWorkspace';
 import { useChallengeCheck } from './useChallengeCheck';
 import { useBreakSearch } from './useBreakSearch';
-import { BREAK_END_MS, BREAK_WARMUP_MS, measureSeed, toSchedule } from './sim/breakit';
+import { BREAK_END_MS, BREAK_WARMUP_MS, measureSeed, replayOf } from './sim/breakit';
 import type { Attack } from './sim/breakit';
 import type { Goal } from './sim/challenge';
 import type { Preset } from './sim/presets';
@@ -3150,16 +3150,21 @@ export default function App() {
     if (breakView.status !== 'done' || breakView.result.status !== 'broke') return null;
     const t = topoLiveRef.current;
     const placed = new Map(t.nodes.map((n) => [n.id, n]));
+    const { nodes, edges, faults, seed } = replayOf(
+      breakView.design,
+      breakView.result.attacks,
+      breakView.result.run.seed,
+    );
     return {
       replay: {
-        nodes: breakView.design.nodes.map((n) => {
+        nodes: nodes.map((n) => {
           const p = placed.get(n.id);
           return p ? { ...n, x: p.x, y: p.y, label: p.label } : n;
         }),
-        edges: breakView.design.edges,
+        edges,
         ...(t.annotations ? { annotations: t.annotations } : {}),
-        faults: toSchedule(breakView.result.attacks),
-        seed: breakView.result.run.seed,
+        ...(faults ? { faults } : {}),
+        seed,
       },
       goal: breakView.goal,
     };

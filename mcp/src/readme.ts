@@ -230,6 +230,14 @@ is simulated time in milliseconds from the start of the run.
 \`seed\` (a whole number, default 1) picks the random draws. The same
 design, seed and faults always give the same numbers.
 
+To find a schedule that breaks it instead of writing one, call break_it
+with the design and a goal, such as
+\`{ "metric": "errorRate", "max": 1 }\` for "under 1% of requests fail".
+It tries crashes, slowdowns, errors and cut edges, makes the schedule
+that breaks it as small as it can, and returns a link that replays the
+run. It only slows a part every request passes through, since losing one
+breaks any goal; \`includeSinglePoints: true\` crashes and cuts those too.
+
 ## Saving to a file
 
 A \`.breakscale\` file can be opened in the Breakscale app and in its VS

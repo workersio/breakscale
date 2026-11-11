@@ -229,11 +229,31 @@ export type SearchResult =
       budget: number;
       /** Schedules tried with one, two and three faults. */
       bySize: [number, number, number];
+      /**
+       * What ended it: the budget, or the share of it the last phase gets
+       * (one fault gets 40% with maxFaults 1); the simulated-time limit; or
+       * nothing left to draw.
+       */
+      stoppedBy: 'budget' | 'simSeconds' | 'exhausted';
       closest: Closest | null;
       simMs: number;
       notes: SearchNote[];
       baseline: Baseline;
     };
+
+/**
+ * Limits outside `BreakOptions`, so they never enter `breakKey`: a search
+ * stopped by one has tried exactly the first schedules of the same search
+ * without it.
+ */
+export interface SearchLimits {
+  /**
+   * Simulated ms, the baseline included, after which no schedule from the
+   * budget starts. The one already playing finishes; remembered schedules
+   * and the shrink are not limited.
+   */
+  maxSimMs?: number;
+}
 
 /* ---------------- schedules ---------------- */
 
@@ -872,8 +892,13 @@ export function* searchBreak(
   goal: Goal,
   opts: BreakOptions,
   remembered: readonly (readonly Attack[])[] = [],
+  limits: SearchLimits = {},
 ): Generator<SearchProgress, SearchResult, void> {
   const design = searchDesign(input);
+  const maxSimMs = limits.maxSimMs ?? Infinity;
+  let outOfTime = false;
+  // The last phase stopped at its share of the budget, with draws left.
+  let capped = false;
   const notes: SearchNote[] = [];
   const ctx: Ctx = {
     design,
@@ -974,6 +999,10 @@ export function* searchBreak(
     attacks: Attack[],
   ): Generator<SearchProgress, Trial | null, void> {
     if (tried >= opts.budget || clashes(attacks)) return null;
+    if (ctx.simMs >= maxSimMs) {
+      outOfTime = true;
+      return null;
+    }
     const key = scheduleKey(attacks);
     if (seen.has(key)) return null;
     seen.add(key);
@@ -1003,6 +1032,7 @@ export function* searchBreak(
       singles.push(trial);
     }
   }
+  capped = tried >= singleCap;
 
   const pool = singles
     .slice()
@@ -1038,11 +1068,13 @@ export function* searchBreak(
       repeats = tried === before ? repeats + 1 : 0;
       if (trial?.broke) return yield* finish(trial, tried, false);
     }
+    capped = tried >= pairCap;
   }
 
   /* Three at once, with some ones and twos among them, for the rest. */
   if (opts.maxFaults >= 3 && pool.length >= 3) {
     ctx.progress = { ...ctx.progress, phase: 'triple' };
+    capped = false;
     let repeats = 0;
     while (tried < opts.budget && repeats < MAX_REPEATS) {
       const r = rng.next();
@@ -1066,6 +1098,14 @@ export function* searchBreak(
     tried,
     budget: opts.budget,
     bySize,
+    stoppedBy:
+      tried >= opts.budget
+        ? 'budget'
+        : outOfTime
+          ? 'simSeconds'
+          : capped
+            ? 'budget'
+            : 'exhausted',
     closest,
     simMs: ctx.simMs,
     notes,
@@ -1201,8 +1241,9 @@ export function runSearch(
   goal: Goal,
   opts: BreakOptions,
   remembered: readonly (readonly Attack[])[] = [],
+  limits: SearchLimits = {},
 ): SearchResult {
-  const it = searchBreak(design, goal, opts, remembered);
+  const it = searchBreak(design, goal, opts, remembered, limits);
   for (;;) {
     const step = it.next();
     if (step.done) return step.value;
