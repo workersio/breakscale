@@ -195,7 +195,7 @@ describe('textWysiwyg: mounting', () => {
     expect(el.style.border).toBe('0px');
     expect(el.style.padding).toBe('0px');
     expect(el.style.outline).toBe('0px');
-    expect(el.style.background).toBe('transparent');
+    expect(el.style.backgroundColor).toBe('transparent');
     expect(el.style.resize).toBe('none');
     expect(el.maxLength).toBe(NOTE_MAX_CHARS);
   });
@@ -263,9 +263,18 @@ describe('textWysiwyg: geometry', () => {
       expect(el.style.top).toBe(`${top}px`);
       expect(el.style.width).toBe(`${width}px`);
       expect(el.style.height).toBe(`${h * 1.05}px`);
-      expect(el.style.transform).toBe(
-        getTransform(width, h * 1.05, 0, zoom, width, (900 - top) / zoom),
+      // Read back through a style so the comparison follows the DOM's own
+      // serialisation, which drops a zero translate's second argument.
+      const probe = document.createElement('div');
+      probe.style.transform = getTransform(
+        width,
+        h * 1.05,
+        0,
+        zoom,
+        width,
+        (900 - top) / zoom,
       );
+      expect(el.style.transform).toBe(probe.style.transform);
       expect(el.style.lineHeight).toBe(`${NOTE_SIZES.md.line}px`);
       expect(el.style.font).toContain(`${NOTE_SIZES.md.font}px`);
     }
