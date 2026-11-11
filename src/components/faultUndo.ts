@@ -15,6 +15,10 @@ import type { FaultActions, FaultEngine } from './faultWiring';
  * The one exception is an entry that has not played yet: after Reset, a
  * crash recorded at 1.5s is still waiting at 0.8s. Undoing that takes the
  * entry out of the schedule, because it never happened and now never will.
+ *
+ * Forget is the other kind of entry. It changes the list, not a node, so
+ * undoing it puts the forgotten entries back and leaves every fault in
+ * force alone.
  * ------------------------------------------------------------------ */
 
 /** A node's fault as the controls set it, without the time it began. */
@@ -40,6 +44,11 @@ export type FaultChange =
       before: boolean;
       after: boolean;
       made: FaultEvent | null;
+    }
+  | {
+      /** Forget saved faults: the list as it was, emptied. */
+      target: 'schedule';
+      before: FaultEvent[];
     };
 
 /** The engine calls undo and redo need, beyond the controls' own. */
@@ -119,7 +128,7 @@ function indexOfEvent(schedule: FaultEvent[], made: FaultEvent): number {
  */
 function recordState(
   engine: FaultUndoEngine,
-  change: FaultChange,
+  change: Exclude<FaultChange, { target: 'schedule' }>,
   to: NodeFault | null | boolean,
 ): FaultEvent | null {
   const before = engine.faultSchedule();
@@ -151,6 +160,8 @@ export function applyFaultChange(
   nowMs: number,
   setSchedule: (faults: FaultEvent[]) => void,
 ): FaultChange | null {
+  if (change.target === 'schedule')
+    return applyForget(engine, change, dir, setSchedule);
   const from = dir === 'undo' ? change.after : change.before;
   const to = dir === 'undo' ? change.before : change.after;
   const live =
@@ -188,6 +199,29 @@ export function applyFaultChange(
   return { ...change, made } as FaultChange;
 }
 
+/**
+ * Undo of Forget puts the whole forgotten list back, ahead of anything
+ * recorded since, rather than replaying it: entries already played stay
+ * past, and after Reset the ones still to come play again. Redo forgets
+ * whatever the list holds by then.
+ */
+function applyForget(
+  engine: FaultUndoEngine,
+  change: { target: 'schedule'; before: FaultEvent[] },
+  dir: FaultDirection,
+  setSchedule: (faults: FaultEvent[]) => void,
+): FaultChange | null {
+  const schedule = engine.faultSchedule();
+  if (dir === 'undo') {
+    if (change.before.length === 0) return null;
+    setSchedule([...change.before, ...schedule]);
+    return change;
+  }
+  if (schedule.length === 0) return null;
+  engine.clearFaultSchedule();
+  return { target: 'schedule', before: schedule };
+}
+
 /** Where a press lands as an undo entry. */
 export interface FaultHistory {
   history: Pick<SessionHistory, 'commitFault'>;
@@ -195,11 +229,7 @@ export interface FaultHistory {
   before: HistorySnapshot;
 }
 
-/**
- * The fault controls, each press also committed as an undo entry. Forget is
- * passed through as it is: it empties the list that makes a run replayable,
- * which is a decision about sharing, not a fault.
- */
+/** The fault controls, each press also committed as an undo entry. */
 export function undoableFaultActions(
   engine: FaultUndoEngine,
   actions: FaultActions,
@@ -229,6 +259,11 @@ export function undoableFaultActions(
     onFix: (id) => node('fix', id, () => actions.onFix(id)),
     onCut: (id) => edge('cable cut', id, () => actions.onCut(id)),
     onRestore: (id) => edge('cable restore', id, () => actions.onRestore(id)),
-    onForget: actions.onForget,
+    onForget: () => {
+      const before = engine.faultSchedule();
+      actions.onForget();
+      if (before.length === 0 || engine.faultSchedule().length > 0) return;
+      onEntry('forget saved faults', { target: 'schedule', before });
+    },
   };
 }

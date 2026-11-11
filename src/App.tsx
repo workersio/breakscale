@@ -4087,6 +4087,7 @@ export default function App() {
               spotlightId={
                 (tourShown ? tour.spotlight : null) ?? spotlightOf(shownFinding)
               }
+              spotlightKey={shownFinding?.atMs ?? null}
             />
             <RouteAlert routes={routes} nodeNames={nodeNames} />
             {/* Hidden in a challenge, where finding it is the exercise. */}

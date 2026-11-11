@@ -153,6 +153,32 @@ describe('a fault control', () => {
   });
 });
 
+describe('Forget saved faults', () => {
+  const saved = () =>
+    document.querySelector('.ins-fault-recorded .ins-hint')?.textContent;
+
+  it('is undone by Ctrl+Z without touching the node, and redone by Ctrl+Shift+Z', () => {
+    mount();
+    selectService();
+    press(must('Crash'));
+    press(must('Fix'));
+    expect(saved()).toMatch(/^2 faults are saved/);
+
+    press(must('Forget saved faults'));
+    expect(saved()).toBeUndefined();
+
+    key('KeyZ', { ctrlKey: true });
+    expect(toast()).toBe('Undid forget saved faults');
+    expect(saved()).toMatch(/^2 faults are saved/);
+    expect(status()).toBe('Working normally.');
+
+    key('KeyZ', { ctrlKey: true, shiftKey: true });
+    expect(toast()).toBe('Redid forget saved faults');
+    expect(saved()).toBeUndefined();
+    expect(status()).toBe('Working normally.');
+  });
+});
+
 describe('a fault on a design opened from a share link', () => {
   const wait = (ms: number) =>
     act(async () => {

@@ -99,7 +99,7 @@ export function FindProblem({
         {finding ? <span key={finding.atMs}>{finding.verdict.text}</span> : null}
       </div>
       {v ? (
-        <div className="fp-answer" ref={answerRef} data-spot-avoid>
+        <div className="fp-answer" ref={answerRef} data-spot-avoid data-titles-clear>
           <p
             className={v.kind === 'problem' ? 'fp-text is-problem' : 'fp-text'}
             aria-hidden="true"

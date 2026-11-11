@@ -236,6 +236,39 @@
   }
 }
 
+/* On a phone the card becomes a bottom sheet, the same as Share and
+   Settings. Only the list scrolls. The header wraps its buttons under the
+   title once both no longer fit on one line, so the title never wraps
+   beside them. app-sheet-in / app-sheet-out are declared in App.css. */
+@media (max-width: 720px) {
+  .ex-root {
+    place-items: end stretch;
+    padding: 0;
+  }
+
+  .ex-card {
+    width: 100%;
+    max-height: calc(100dvh - var(--sp-7));
+    padding-bottom: calc(var(--sp-5) + env(safe-area-inset-bottom, 0px));
+    border-bottom: 0;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    animation: app-sheet-in var(--dur-base) var(--ease-out);
+  }
+
+  .ex-root.is-closing .ex-card {
+    animation: app-sheet-out var(--dur-base) var(--ease) forwards;
+  }
+
+  .ex-head {
+    flex-wrap: wrap;
+    gap: var(--sp-3);
+  }
+
+  .ex-head > :first-child {
+    flex: 1 1 260px;
+  }
+}
+
 /* Durations collapse rather than `animation: none`, because unmount rides
    animationend and removing the animation outright would strand the dialog
    mounted forever. */

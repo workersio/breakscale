@@ -266,6 +266,29 @@
   transform: none;
 }
 
+/* On a phone the card becomes a bottom sheet, the same as Share and
+   Settings. The list in .dz-body is the part that scrolls.
+   app-sheet-in / app-sheet-out are declared in App.css. */
+@media (max-width: 720px) {
+  .dz-root {
+    place-items: end stretch;
+    padding: 0;
+  }
+
+  .dz-card {
+    width: 100%;
+    max-height: calc(100dvh - var(--sp-7));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    border-bottom: 0;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    animation: app-sheet-in var(--dur-base) var(--ease-out);
+  }
+
+  .dz-root.is-closing .dz-card {
+    animation: app-sheet-out var(--dur-base) var(--ease) forwards;
+  }
+}
+
 /* The 44px touch floor the shared .btn takes in index.css. */
 @media (pointer: coarse) {
   .dz-name {
