@@ -12,6 +12,10 @@ import { z } from 'zod';
 import { buildDesignFile } from '../../src/designFile';
 import { ShareLinkTooLargeError, buildShareUrl, decodeTopology } from '../../src/share';
 import { fetchStored, hasStoredLink } from '../../src/share/store';
+import { ATTACK_KINDS } from '../../src/sim/breakit';
+import { VERIFY_METRICS } from '../../src/sim/verify';
+import { LOCAL_BREAK, breakDesign } from './breakIt';
+import type { BreakLimits } from './breakIt';
 import { buildTopology } from './design';
 import { DEFAULT_RUN, describeRun, runDesign } from './run';
 // Build outputs, inlined by the bundler so the published server is one
@@ -89,7 +93,10 @@ function rejected(errors: string[]): CallToolResult {
   );
 }
 
-export function createServer({ budgetMs }: { budgetMs?: number } = {}): McpServer {
+export function createServer({
+  budgetMs,
+  breakLimits = LOCAL_BREAK,
+}: { budgetMs?: number; breakLimits?: BreakLimits } = {}): McpServer {
   const server = new McpServer({ name: 'Breakscale', version: '0.1.0' });
   const runOptions = { ...DEFAULT_RUN, budgetMs: budgetMs ?? DEFAULT_RUN.budgetMs };
 
@@ -163,6 +170,80 @@ export function createServer({ budgetMs }: { budgetMs?: number } = {}): McpServe
       const built = buildTopology(args);
       if (!built.ok) return rejected(built.errors);
       return text(buildDesignFile(built.topology, built.name));
+    },
+  );
+
+  server.registerTool(
+    'break_it',
+    {
+      title: 'Try to break a design',
+      description:
+        'Searches for a schedule of faults (crashes, slowdowns, errors, cut edges) that makes a design miss a goal, then makes the schedule as small as it can. ' +
+        'Returns the verdict in words and, when it breaks, a breakscale.tech link that replays the run. ' +
+        `Deterministic: the same design, goal and options always give the same answer. Tries at most ${breakLimits.maxBudget} schedules from its budget per call, then plays a few more to make a break smaller. ` +
+        'By default it never crashes, fails or cuts a single point of failure whole; includeSinglePoints turns that on. ' +
+        'Takes the same design as create_view, plus the goal.',
+      inputSchema: z.object({
+        ...design,
+        // Loose like the design: the search's own checks say what is wrong
+        // in words, where an enum would answer with a JSON path.
+        goal: z
+          .object({
+            metric: z.string().describe(`One of ${VERIFY_METRICS.join(', ')}`),
+            max: z
+              .number()
+              .describe(
+                'No more than this: percent for errorRate (1 means 1%), ms for p99 and p95, a count for lostWrites and lostJobs',
+              ),
+            route: z
+              .string()
+              .optional()
+              .describe(
+                "A client's id, to hold the goal for that client's requests only. Not for lostWrites or lostJobs",
+              ),
+          })
+          .describe('What has to hold'),
+        kinds: z
+          .array(z.string())
+          .optional()
+          .describe(
+            `Fault kinds to try, any of ${ATTACK_KINDS.join(', ')}. Default: all`,
+          ),
+        maxFaults: z
+          .number()
+          .optional()
+          .describe('Most faults at once, 1 to 3. Default 3'),
+        budget: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe(`Schedules to try. Default and most: ${breakLimits.maxBudget}`),
+        seed: z
+          .number()
+          .optional()
+          .describe("The run's seed. Default: the design's own, or 1"),
+        includeSinglePoints: z
+          .boolean()
+          .optional()
+          .describe(
+            'Also crash, fail and cut the parts every request passes through. Default false: those break any goal',
+          ),
+      }),
+      annotations: { title: 'Try to break a design', readOnlyHint: true },
+    },
+    async (args): Promise<CallToolResult> => {
+      const built = buildTopology(args);
+      if (!built.ok) return rejected(built.errors);
+      const out = await breakDesign(built.topology, args, breakLimits, APP_URL);
+      if (!out.ok) {
+        return text(
+          'The request was not accepted:\n' +
+            out.errors.map((e) => `- ${e}`).join('\n'),
+          true,
+        );
+      }
+      return text(out.text);
     },
   );
 

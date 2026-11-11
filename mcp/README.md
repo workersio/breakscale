@@ -10,10 +10,11 @@ In assistants that support [MCP Apps](https://modelcontextprotocol.io/docs/exten
 | `create_view`   | Validates a design, simulates 30 seconds of it, and shows it on the canvas                   |
 | `export_design` | Returns the design as a `.breakscale` file, which the app and the VS Code extension can open |
 | `open_design`   | Reads a breakscale.tech share link back into a design, so you can ask for changes to it      |
+| `break_it`      | Throws faults at a design until it misses a goal you set, and links to a replay of the break |
 
 ## Connect your assistant
 
-There are two ways in, and both give you the same four tools.
+There are two ways in, and both give you the same five tools.
 
 - **The hosted server**, `https://mcp.breakscale.tech/mcp`. Nothing to install and nothing to run: add the URL and ask. This is the easiest way, and the only one claude.ai can use.
 - **On your own machine**, with `npx -y breakscale-mcp --stdio`. It needs [Node](https://nodejs.org) 20 or newer, and the simulation then runs on your computer instead of ours.
@@ -173,6 +174,7 @@ Anything that speaks MCP over HTTP can use `https://mcp.breakscale.tech/mcp`, an
 - "Make a rate limiter diagram in Breakscale."
 - "Read this repo and turn its architecture into a Breakscale design. Tell me which numbers you had to guess."
 - "Double the traffic. What breaks first?" and then "Fix it without adding more servers."
+- "Try to break it. Keep errors under 1%."
 - Paste a breakscale.tech share link and ask for a change to it.
 - "Save it as a .breakscale file."
 
