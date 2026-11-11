@@ -767,8 +767,9 @@ const singleServer: Topology = {
  *    3 services: 3 x (44 slots / 25ms) = 5280 rps of their own work, with
  *                room for each one's share of the database's slots and
  *                line while they wait on it
- *    shared db:  12 slots / 25ms       = 480 rps <- bottleneck anyway
- *    default 140 rps, db bites around 3.4x.
+ *    shared db:  12 slots / 25ms       = 480 rps on paper, about 425
+ *                measured, because writes wait on locks <- bottleneck anyway
+ *    default 140 rps, db bites around 3x.
  * ------------------------------------------------------------------ */
 
 const loadBalanced: Topology = {
@@ -814,7 +815,7 @@ const loadBalanced: Topology = {
       'lb-note-db',
       40,
       480,
-      'Three servers share one database. That triples the API capacity and does nothing for the database, which still tops out near 480 a second. Adding servers only helps when the servers were the problem.',
+      'Three servers share one database. That triples the API capacity and does nothing for the database, which still tops out near 430 a second. Adding servers only helps when the servers were the problem.',
       340,
     ),
   ],
@@ -925,12 +926,14 @@ const asyncWorkers: Topology = {
  *    ceiling each request needs one attempt and load passes through 1:1.
  *    Once queueing pushes past 250ms, every request starts issuing all 3
  *    attempts, tripling the offered load onto a db already at its limit,
- *    and the system collapses. Stable to 80 rps (1.8x); collapse begins at
- *    85 (1.9x) and is total by 90 (2x).
+ *    and the system collapses. Stable to 80 rps (1.8x); collapse can begin
+ *    at 85 (1.9x) and is near total by 95 (2.1x).
  *
- *    Measured, not estimated, and the onset is genuinely stochastic: at 85
- *    rps four seeds give 39.6%, 59.1%, 93.0% and 95.0% failures, because
- *    whether the queue tips depends on the timing of the first slow batch.
+ *    Measured, not estimated, and the onset is genuinely stochastic. Over
+ *    seeds 1-8: at 80 rps every seed loses 0%; at 85 they lose 0, 1.6, 8.6,
+ *    24.6, 59.6, 71.5, 88.8 and 100%; at 90 seed 7 still loses 0% while the
+ *    rest lose 66-100%; at 95 every seed loses over 93%. Whether the queue
+ *    tips depends on the timing of the first slow batch.
  *    An earlier note here claimed collapse at 2.4x, which is well past the
  *    interesting part: by then it is uniformly dead.
  * ------------------------------------------------------------------ */
@@ -959,7 +962,7 @@ const retryStorm: Topology = {
       'rt-note-storm',
       40,
       320,
-      'The database handles 100 a second. Once waiting passes the 250ms timeout on the API, every request starts retrying three times, so the load triples onto a database that was already full. It is steady at 80 a second. Push to 85 and it starts losing most of its traffic; by 90 almost none gets through.',
+      'The database handles 100 a second. Once waiting passes the 250ms timeout on the API, every request starts trying three times, so the load triples onto a database that was already full. It is steady at 80 a second. Push to 85 and it can tip over and lose most of its traffic; by 95 almost none gets through.',
       340,
     ),
   ],
@@ -1130,14 +1133,14 @@ const cdnOrigin: Topology = {
  *    is invisible until it is needed.
  *
  *    What it buys is NOT extra goodput -- measured at 600 rps offered, the
- *    limiter serves 200 rps where removing it serves 234. It buys LATENCY for
+ *    limiter serves 200 rps where removing it serves 240. It buys LATENCY for
  *    the requests that do get through:
  *
  *      600 rps    goodput   p50     p99    api queue
- *      limiter     200.0    36ms    80ms      0
- *      no limiter  234.4   235ms   292ms     46
+ *      limiter     200.0    36ms    81ms      0
+ *      no limiter  239.9   234ms   287ms     47
  *
- *    Without the limiter every caller waits behind a 46-deep queue for an
+ *    Without the limiter every caller waits behind a 47-deep queue for an
  *    answer that mostly arrives too late to be useful. With it, the system
  *    says no quickly to some so it can say yes quickly to the rest. That
  *    trade -- a lower ceiling in exchange for a flat, predictable latency --
@@ -1171,7 +1174,7 @@ const rateLimitedApi: Topology = {
       'rl-note-trade',
       40,
       320,
-      'The limiter does not add capacity. It refuses some requests quickly so the rest are answered quickly: at 600 offered it serves 200 at 36ms, where removing it serves 234 at 235ms. Saying no fast is what buys the predictable wait.',
+      'The limiter does not add capacity. It refuses some requests quickly so the rest are answered quickly: at 600 offered it serves 200 at 36ms, where removing it serves 240 at 235ms. Saying no fast is what buys the predictable wait.',
       340,
     ),
   ],
@@ -1218,7 +1221,7 @@ const circuitBreaker: Topology = {
       'cb-note-trip',
       40,
       320,
-      'Select the payments API and press Crash in the inspector. Once half the calls in a four second window fail, the breaker opens and the rest fail in microseconds instead of waiting out a timeout. After three seconds it closes and probes again.',
+      'Select the payments API and press Crash in the inspector. Once half the calls in a four second window fail, the breaker opens and the rest fail in microseconds instead of waiting out a timeout. After three seconds it lets a few test calls through, and closes again only if they succeed.',
       340,
     ),
   ],
@@ -1315,9 +1318,10 @@ const shardedDatabase: Topology = {
  *     api: 3 INSTANCES x 3 slots each = 9 slots, each held for 23ms of its
  *     own work plus ~2.5ms on the database call -> ~350 rps, against 250 rps
  *     offered. The controller scales on work-only utilisation, which at 1x
- *     is 250 x 23ms / 9 = 64%: inside the band just under its 70% setpoint
- *     where it holds still, so the system is stable and the student sees a
- *     controller at rest.
+ *     is 250 x 23ms / 9 = 64%, just under its 70% setpoint. The system is
+ *     stable, but the controller is not at rest: measured at 1x it averages
+ *     3.2 machines with 0.5 warming up, and spends about 40% of the time in
+ *     cooldown, because noise keeps nudging it to start a fourth.
  *
  *     RETUNED for the instance model. It used to be one node with `capacity:
  *     9` and the controller moved that 9 up and down -- arithmetically the
@@ -1467,18 +1471,21 @@ const multiRegion: Topology = {
  *       shards  4 x 2 slots / 25ms  -> 320 rps total, 80 rps per shard
  *       queue   -> workers 6 / 25ms -> 240 rps of async drain
  *
- *     Both paths are sized to have real headroom at 1x and to run out of it
- *     by 4x, but they run out DIFFERENTLY, and that contrast is the lesson:
+ *     The workers are the first thing to run out. At 1x they are 75% busy;
+ *     the extra the api books goes into the queue, so the failure starts
+ *     QUIETLY: the client is still acknowledged instantly while an invisible
+ *     backlog grows. Then the queue's 5000 places fill and it turns work
+ *     away. Measured over seeds 1-3:
  *
- *       - the synchronous path (cache -> shards) fails LOUDLY. The shards
- *         saturate, sheds start, and the client sees errors and a fat tail.
- *       - the asynchronous path (queue -> workers) fails QUIETLY. The workers
- *         saturate too, but the queue absorbs the excess, so the client is
- *         still acknowledged instantly while an invisible backlog grows.
+ *       2x   queue fills in ~40s, then turns away ~100-120/s -> ~9% errors
+ *       4x   queue pinned at 5000, turns away 479/s   -> 20% client errors
+ *            shards 90% busy, turning away 0.1/s
  *
- *     A student who watches only the error rate sees half the failure. The
- *     queue depth is the other half, and it is the half that takes hours to
- *     drain after the spike is over.
+ *     So at 4x every error the client sees comes from the full queue, while
+ *     the synchronous path (cache -> shards) runs its busiest partition flat
+ *     out but turns almost nothing away. A student
+ *     who watches only the error rate blames the wrong half. A full queue
+ *     drains at 240 - 180 = 60/s once load returns to 1x, about 80s.
  * ------------------------------------------------------------------ */
 
 const fullStack: Topology = {
@@ -1559,13 +1566,13 @@ const fullStack: Topology = {
       'Two thirds of the traffic never gets past the edge cache. Only the misses reach anything below, which is why everything behind it looks so lightly loaded at rest.',
       236,
     ),
-    // The lesson. Both halves run out of room at 4x; only one of them
-    // tells you about it.
+    // The lesson. The async half runs out first, and quietly, until the
+    // queue fills and its refusals become the client's errors.
     note(
       'fs-note-lesson',
       16,
       336,
-      'Take the load to 4x and watch both halves. The sharded store saturates and the client sees errors straight away. The workers saturate too, but the queue swallows the excess, so the client is still told everything is fine while a backlog builds that takes hours to drain.',
+      "Take the load to 4x and watch the job queue. The workers fall behind and for a few seconds the queue swallows the excess, so the client is still told everything is fine. Then its 5000 places fill, and the errors the client sees come from there, while the sharded store's busiest partition is maxed out but turns almost nothing away.",
       300,
     ),
   ],
@@ -1582,8 +1589,9 @@ const fullStack: Topology = {
  *                     Writes pay +60ms of indexing and are searchable only
  *                     1.5s after commit; the stale-search rate IS that lag.
  *       recs-api   -> vectordb + graphdb. The vector index costs ~50ms per
- *                     query at 1M vectors and 0.9 recall (16 slots ->
- *                     320 rps ceiling: the knee of this preset), the graph
+ *                     query at 1M vectors and 0.9 recall (12 slots ->
+ *                     240 rps ceiling, 241 measured at 4x: the knee of this
+ *                     preset), the graph
  *                     runs friend-of-friend at depth 2 (~18ms -> 440 rps).
  *       media-api  -> objectstore. 90ms flat, 64 slots -> ~710 rps: high
  *                     latency, near-unlimited throughput. Not a database.
@@ -1597,7 +1605,8 @@ const fullStack: Topology = {
  *     At 4x the two paths fail in character: the vector index saturates
  *     LOUDLY (sheds, client errors) while the archive pipeline fails
  *     QUIETLY -- the batch client is still acknowledged instantly while
- *     cold storage sheds the restores behind the queue.
+ *     cold storage throttles the restores behind the queue (~16/s refused
+ *     at 4x).
  * ------------------------------------------------------------------ */
 
 const specialisedStores: Topology = {
@@ -1688,7 +1697,7 @@ const specialisedStores: Topology = {
       'ss-note-lesson',
       1320,
       296,
-      'Take the load to 4x. The vector index saturates and the client sees the errors immediately. The archive path saturates too and says nothing: the batch client is still acked while cold storage sheds behind the queue.',
+      'Take the load to 4x. The vector index saturates and the client sees the errors immediately. The archive path saturates too and says nothing: the batch client is still acked while cold storage turns restores away behind the queue.',
       300,
     ),
     note(
@@ -1706,24 +1715,29 @@ const specialisedStores: Topology = {
  *
  * The messaging tier in one picture, with the arithmetic worked out:
  *
- *   client 60 rps -> apigateway (300 rps bucket, 1% bad auth, 2ms)
+ *   client 60 rps -> apigateway (150 rps bucket, 1% bad auth, 2ms)
  *     routes 3:1 -> api service (16 slots / 10ms = 1600 rps ceiling) ~44 rps
- *                -> lambda (25ms warm, +350ms cold, 40 concurrent)   ~15 rps
+ *                -> lambda (25ms warm, +350ms cold, 30 concurrent)   ~15 rps
  *   api fans out to:
  *     stream broker (4 partitions, retention 2000):
  *       group A -> indexer  (4 slots / 55ms -> ~72/s; 4 partitions x
- *                  1000/55 = ~72/s -- keeps up at 1x, lags visibly at 2x+)
+ *                  1000/55 = ~72/s -- keeps up at 1x; at 2x the lag
+ *                  grows steadily, ~1000 after a minute and near the 2000
+ *                  retention after two, when old messages start to
+ *                  expire; at 4x it pins at 2000 within a minute and
+ *                  expires ~35-40/s)
  *       group B -> billing  (4 slots / 12ms -> ~330/s; never behind)
  *     pub/sub topic -> push, audit, metrics (1 publish = 3 deliveries;
  *       audit is deliberately slow (2 slots / 40ms = 50/s) so at ~44 rps it
- *       runs hot without touching the other subscribers)
+ *       runs 87% busy, and at 2x drops ~40/s, without touching the other
+ *       subscribers)
  *   chat client 30 conn/s -> websocket gateway (400 connection slots,
  *       8s sessions -> ~240 held, 60% full at 1x; 4x offers 120 conn/s =
  *       960 wanted and the gateway refuses everything past 400)
  *       -> sidecar (2ms tax, 2 retries, eject after 5) -> chat service
  *   cron: every 15s, 40 requests at once -> lambda -> shared db. The warm
- *       pool (~1-2 instances) cannot cover a burst of 40, so nearly every
- *       burst invocation pays the cold start, and the db (8 slots / 20ms =
+ *       pool between bursts (3-5 instances measured) cannot cover a burst
+ *       of 40, so each burst pays about 28 cold starts, and the db (8 slots / 20ms =
  *       400/s) absorbs a spike that shows up in interactive latency.
  * ------------------------------------------------------------------ */
 
@@ -1851,12 +1865,12 @@ const eventDriven: Topology = {
       'Everything on the left is a caller waiting for an answer. Everything on the right runs after that answer was already sent.',
       236,
     ),
-    // The lesson. Five consumers, one of which quietly cannot keep up.
+    // The lesson. Five consumers, two of which quietly cannot keep up.
     note(
       'ed-note-fanout',
       1160,
       16,
-      'One event becomes five pieces of work here, each read by its own consumer. Turn the load up and watch the audit log: it takes 40ms a message and falls behind while the four beside it keep up, and nobody calling the API sees a thing.',
+      'One event becomes five pieces of work here, each read by its own consumer. Turn the load up to 2x and watch the audit log and the search indexer: the audit log runs out of room and drops messages, and the indexer falls further behind the stream, while billing, push and metrics keep up. Nobody calling the API sees a thing.',
       300,
     ),
     note(
@@ -1994,7 +2008,7 @@ const resilientDelivery: Topology = {
       'rd-note-shed',
       16,
       16,
-      'At 4x the shedder drops the traffic marked best effort and keeps serving the rest. Choosing what to drop beats letting a queue choose for you.',
+      'At 4x the shedder drops the traffic marked best effort first, to protect the rest. Choosing what to drop beats letting a queue choose for you.',
       236,
     ),
     // The lesson. A bulkhead is the one protection whose effect you can
@@ -2310,8 +2324,13 @@ const discord: Topology = {
  *   TRIPS        trip writes go to a replicated store (reads scale,
  *                writes do not) and to the payment processor: 4 slots at
  *                ~200ms is a 20/s ceiling against ~7.5/s at 1x. At 4x it
- *                saturates and the breaker in front of it trips, failing
- *                fast instead of queueing behind a 200ms dependency.
+ *                saturates and turns ~8/s away, so riders lose ~8% of
+ *                requests with a p99 near 1.1s. The breaker in front
+ *                mostly stays closed: its failure share averages ~0.3 but
+ *                peaks near its 0.5 threshold, so over two minutes it trips
+ *                once or twice in some seeds. Crash payments and it opens
+ *                ~2s later, failing fast instead of queueing behind a dead
+ *                dependency.
  * ------------------------------------------------------------------ */
 
 const uber: Topology = {
@@ -2479,12 +2498,13 @@ const uber: Topology = {
       300,
     ),
     // The lesson. Payments is the only node in the diagram whose ceiling is
-    // low enough to hit at 4x, and the breaker's reaction is the point.
+    // low enough to hit at 4x; the breaker trips only now and then until it
+    // fails outright.
     note(
       'ub-note-pay',
       1320,
       368,
-      'Drag the load to 4x and watch payments. Each charge takes 200ms and only four run at once, so it tops out near 20 a second. The breaker in front notices and starts failing fast, which beats every trip request piling up behind a slow card network.',
+      'Drag the load to 4x and watch payments. Each charge takes 200ms and only four run at once, so it tops out near 20 a second and the extra trip requests are turned away. The breaker in front opens once half its calls fail. At 4x about a third do, so it trips only now and then. Crash payments to watch it open and fail fast.',
       300,
     ),
     note(
@@ -2797,9 +2817,11 @@ const netflix: Topology = {
  *              at 0.9 recall: ~50ms/query, 320 rps ceiling). Every 20s
  *              the Discover Weekly batch (cron -> queue -> feature
  *              pipeline, ~266 jobs/s for about a second) WRITES the
- *              same index, driving it to ~97% while the burst drains,
- *              so online p99 spikes on the batch clock. Batch and
- *              serving sharing a store is the lesson.
+ *              same index, driving it from ~13% to ~87% busy with ~14
+ *              waiting while the burst drains (~97% and ~36 waiting at
+ *              4x). There is headroom, so the home feed's p99 stays
+ *              near 66-72ms either way. Batch and serving sharing a
+ *              store is the lesson.
  *   EVENTS     600 events/s fired at the Event Delivery broker
  *              (8 partitions). Royalty & Reporting can drain 8 x
  *              1000/6ms = 1333/s; the analytics store drains in ~1.5ms
@@ -2808,12 +2830,13 @@ const netflix: Topology = {
  * What breaks, and how:
  *   4x: 4400 rps of audio pushes ~790 rps of misses into a 710 rps GCS
  *   ceiling, and the audio path saturates and sheds (loud). The gateway bucket
- *   refuses ~180 rps of app calls (loud, at the front door). Playlist
- *   WRITES pin the primary at 100% while its read replicas idle, the
- *   replica lesson in company clothing. Events run at 2400/s against a
+ *   refuses ~180 rps of app calls (loud, at the front door). That cap
+ *   keeps playlist writes under ~80/s, so the 100/s primary never pins
+ *   (the store averages 43% busy); the three read replicas carry the 55%
+ *   of playlist traffic that is reads. Events run at 2400/s against a
  *   1333/s consumer: Royalty lags, then loses data out of retention,
  *   while Analytics next to it keeps up (quiet). At 1x, crash the CDN,
- *   or watch p99 on the recs path breathe with the 20s batch cycle.
+ *   or watch the taste vectors jump on the 20s batch cycle.
  * ------------------------------------------------------------------ */
 
 const spotify: Topology = {
@@ -3016,7 +3039,7 @@ const spotify: Topology = {
       'sp-note-playlist',
       1320,
       240,
-      'Adding a song is a write, and writes only go to the one main copy of the playlist store. It manages about 100 a second while its two read copies sit idle. Reads also run up to 150ms behind, so a song you just added can be missing when the playlist loads back.',
+      'Adding a song is a write, and writes only go to the one main copy of the playlist store. It manages about 100 a second, and its three read copies only help reads. Reads also run up to 150ms behind, so a song you just added can be missing when the playlist loads back.',
       300,
     ),
     // The lesson. Batch and serving sharing one store is the thing this
@@ -3025,7 +3048,7 @@ const spotify: Topology = {
       'sp-note-batch',
       1320,
       528,
-      'Watch the taste vectors. Every 20 seconds the recommendation batch writes into the same index the home feed reads from, and the slow tail on the feed rises and falls on that clock. Turn the load up and the two fight over one store.',
+      'Watch the taste vectors. Every 20 seconds the recommendation batch writes into the same index the home feed reads from, and the index jumps from about 15 to nearly 90 percent busy for a second. There is room to spare, so the slowest requests on the feed barely move.',
       300,
     ),
     note(
@@ -3288,7 +3311,7 @@ const twitter: Topology = {
  *
  * What breaks, and how: at 4x the gateway sheds ~150 rps of charges at
  * the door (loud, clean, and exactly what the rate-limiter post says
- * to do), the card-network pool runs ~90% hot so p99 stretches, and
+ * to do), the card-network pool runs ~79% busy so p99 stretches, and
  * dashboards are throttled to their 150 rps budget while the ledger
  * never queues. Inject an 'errors' fault on Card Networks and the breaker trips:
  * charges fail fast, nothing double-bills, webhooks drain the failures
@@ -3814,7 +3837,7 @@ export const PRESETS: Preset[] = [
     name: 'Uber: ride dispatch',
     tagline: 'Matching riders to drivers, city by city',
     description:
-      'A simplified reconstruction of Uber from their published architecture; numbers are illustrative. Driver pings outnumber rider requests 13 to 1 and ride a Kafka-style stream; at 4x the geo consumer lags and dispatch matches on stale positions without a single rider-facing error. Crash the payment processor and the breaker contains it.',
+      'A simplified reconstruction of Uber from their published architecture; numbers are illustrative. Driver pings outnumber rider requests 13 to 1 and ride a Kafka-style stream; at 4x the geo consumer lags and dispatch quietly matches on stale positions, while payments fills up and turns trip requests away. Crash the payment processor and the breaker contains it.',
     topology: uber,
   },
   {
@@ -3830,7 +3853,7 @@ export const PRESETS: Preset[] = [
     name: 'Spotify: music and discovery',
     tagline: 'A steady catalogue beside a heavy recommender',
     description:
-      'A simplified reconstruction of Spotify from their engineering blog; numbers are illustrative. Audio flows from object storage through a CDN, apart from the metadata path. Playlist writes pin a replica primary while its read replicas idle, the event firehose outruns the royalty consumer at 4x, and every 20s the Discover Weekly batch writes the same vector index the home feed reads, so p99 breathes on the batch clock.',
+      'A simplified reconstruction of Spotify from their engineering blog; numbers are illustrative. Audio flows from object storage through a CDN, apart from the metadata path. Playlist writes all land on one primary while reads spread across its copies, the event firehose outruns the royalty consumer at 4x, and every 20s the Discover Weekly batch writes the same vector index the home feed reads, so the load on the index jumps on the batch clock.',
     topology: spotify,
   },
   {

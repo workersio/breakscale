@@ -77,7 +77,7 @@ export function runDesign(
   return { snapshot: engine.snapshot(), routes: engine.routes(), simulatedMs, seed };
 }
 
-const REASON_WORDS: Record<FailureReason, string> = {
+export const REASON_WORDS: Record<FailureReason, string> = {
   error: 'failed on their own (errorRate)',
   shed: 'were turned away by a full queue',
   timeout: 'timed out',

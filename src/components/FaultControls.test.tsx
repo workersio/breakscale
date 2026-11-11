@@ -398,10 +398,17 @@ describe('forgetting the saved faults', () => {
     expect(container.querySelector('.ins-fault-recorded')?.textContent).toContain(
       '1 fault is saved with this run.',
     );
-    press(button('Forget saved faults'));
+    const forget = button('Forget saved faults');
+    forget.focus();
+    press(forget);
 
     expect(engine.faultSchedule()).toEqual([]);
     expect(container.querySelector('.ins-fault-recorded')).toBeNull();
+    // The button went with its row; focus moved to the control above it,
+    // the last of the cable buttons.
+    const cables = container.querySelectorAll('.ins-fault-cables button');
+    expect(cables.length).toBeGreaterThan(0);
+    expect(document.activeElement).toBe(cables[cables.length - 1]);
     // What is in force stays in force; only the replay is gone.
     expect(engine.activeFailures().map((f) => f.kind)).toEqual(['crash']);
     engine.reset();
@@ -416,8 +423,11 @@ describe('forgetting the saved faults', () => {
     expect(container.querySelector('.ins-fault-recorded')?.textContent).toContain(
       '1 fault is saved',
     );
-    press(button('Forget saved faults'));
+    const forget = button('Forget saved faults');
+    forget.focus();
+    press(forget);
     expect(engine.faultSchedule()).toEqual([]);
+    expect(document.activeElement).toBe(button('Restore'));
   });
 });
 

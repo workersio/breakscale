@@ -230,6 +230,70 @@ describe('undoing a fault control', () => {
   });
 });
 
+describe('undoing Forget saved faults', () => {
+  function forgotten(): Rig {
+    const r = rig();
+    r.run(1000);
+    r.actions.onInject('svc', 'crash');
+    r.run(1000);
+    r.actions.onFix('svc');
+    r.run(500);
+    r.actions.onForget();
+    return r;
+  }
+
+  it('puts the forgotten list back and leaves the node as it is', () => {
+    const r = forgotten();
+    expect(r.schedule()).toEqual([]);
+    expect(r.undo()).toBe('forget saved faults');
+    expect(r.schedule()).toEqual(['inject crash svc@1000', 'clear svc@2000']);
+    expect(nodeFault(r.engine, 'svc')).toBeNull();
+    // The entry before it is still the fix, untouched by the forget.
+    expect(r.undo()).toBe('fix');
+    expect(nodeFault(r.engine, 'svc')?.kind).toBe('crash');
+  });
+
+  it('forgets again on redo', () => {
+    const r = forgotten();
+    r.undo();
+    expect(r.redo()).toBe('forget saved faults');
+    expect(r.schedule()).toEqual([]);
+    expect(r.undo()).toBe('forget saved faults');
+    expect(r.schedule()).toHaveLength(2);
+  });
+
+  it('plays the restored faults again after Reset', () => {
+    const r = forgotten();
+    r.undo();
+    r.engine.reset();
+    r.run(1500);
+    expect(nodeFault(r.engine, 'svc')?.kind).toBe('crash');
+    r.run(1000);
+    expect(nodeFault(r.engine, 'svc')).toBeNull();
+  });
+
+  it('keeps faults recorded after the forget', () => {
+    const r = forgotten();
+    r.run(500);
+    r.actions.onInject('svc', 'slow', { factor: 3 });
+    // Walk back the slow down, then the forget.
+    expect(r.undo()).toBe('slow down');
+    expect(r.undo()).toBe('forget saved faults');
+    expect(r.schedule()).toEqual([
+      'inject crash svc@1000',
+      'clear svc@2000',
+      'inject slow svc@3000',
+      'clear svc@3000',
+    ]);
+  });
+
+  it('records nothing when there was nothing to forget', () => {
+    const r = rig();
+    r.actions.onForget();
+    expect(r.history.canUndo).toBe(false);
+  });
+});
+
 describe('fault entries in the history', () => {
   it('sit between design entries in the order they were made', () => {
     const r = rig();

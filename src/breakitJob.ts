@@ -1,4 +1,4 @@
-import { playBaselines, searchBreak } from './sim/breakit';
+import { playBaselines } from './sim/breakit';
 import type {
   Attack,
   Baseline,
@@ -8,6 +8,7 @@ import type {
 } from './sim/breakit';
 import type { Goal } from './sim/challenge';
 import type { Topology } from './sim/types';
+import { searchSteps } from './sim/verify';
 
 /* ------------------------------------------------------------------ *
  * The work "Can you break it?" hands off, in a shape that can cross to a
@@ -51,7 +52,10 @@ export function* runJob(
     const baselines = yield* playBaselines(job.design, job.goals);
     return { kind: 'baseline', baselines };
   }
-  const result = yield* searchBreak(job.design, job.goal, job.opts, job.remembered);
+  const result = yield* searchSteps(job.design, job.goal, {
+    ...job.opts,
+    remembered: job.remembered,
+  });
   return { kind: 'search', result };
 }
 

@@ -45,6 +45,7 @@ import {
   formatMs,
   formatPct,
   formatRate,
+  NA,
   healthOfErr,
   healthOfLatency,
   healthOfLoad,
@@ -96,6 +97,8 @@ import type { Annotation, AnnotationFont, Note, Section } from '../sim/annotatio
 import { usePreference } from '../content/preferences';
 import { Minimap } from './Minimap';
 import { DETAIL_ZOOM, MINIMAL_ZOOM, fitViewport } from './fit';
+import { TITLE_GAP, keepsInView, titleClearPan } from './titleClear';
+import type { Box } from './titleClear';
 import { EmptyCanvas } from './EmptyCanvas';
 import { EdgeCues } from './EdgeCues';
 import type { EmptyCanvasProps } from './EmptyCanvas';
@@ -534,6 +537,11 @@ export interface CanvasProps {
    * panned into view when it changes. Null or absent draws nothing.
    */
   spotlightId?: string | null;
+  /**
+   * Changes once per answer that puts a [data-titles-clear] card over the
+   * canvas, so the camera clears the titles under it again for a new one.
+   */
+  spotlightKey?: number | null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -600,6 +608,16 @@ interface Readout {
 function frac(n: number, d: number): number {
   if (!Number.isFinite(n) || !Number.isFinite(d) || d <= 0) return 0;
   return clamp(n / d, 0, 1);
+}
+
+/**
+ * A node's p99, or n/a until it has finished a request. A box that has served
+ * nothing has no slowest request, and "0ms" would read as instant. Same rule
+ * as the latency chart's n/a.
+ */
+function p99Cell(s: NodeStats, label = 'p99'): Cell {
+  const measured = s.p99 > 0 || s.throughput > 0;
+  return { value: measured ? formatMs(s.p99) : NA, label };
 }
 
 /**
@@ -739,7 +757,7 @@ export function readoutFor(
     case 'lb':
       return {
         primary: { value: formatRate(s.throughput), label: 'served' },
-        a: { value: formatMs(s.p99), label: 'p99' },
+        a: p99Cell(s),
         b: { value: formatCount(s.queued), label: 'waiting' },
         load: util,
         health: healthOfLoad(util),
@@ -754,7 +772,7 @@ export function readoutFor(
       const miss = 1 - hit;
       return {
         primary: { value: formatPct(hit), label: 'hit' },
-        a: { value: formatMs(s.p99), label: 'p99' },
+        a: p99Cell(s),
         b: { value: formatRate(s.throughput), label: 'served' },
         load: miss,
         health: healthOfLoad(miss),
@@ -830,10 +848,7 @@ export function readoutFor(
          moment they exist; p99 fills it on a synchronous set. */
       return {
         primary: { value: formatPct(util), label: 'busy' },
-        a:
-          stale > 0
-            ? { value: formatPct(stale), label: 'stale' }
-            : { value: formatMs(s.p99), label: 'p99' },
+        a: stale > 0 ? { value: formatPct(stale), label: 'stale' } : p99Cell(s),
         b: { value: formatCount(s.queued), label: 'waiting' },
         load: util,
         health: healthOfLoad(util),
@@ -882,7 +897,7 @@ export function readoutFor(
     case 'service':
       return {
         primary: { value: formatPct(util), label: 'busy' },
-        a: { value: formatMs(s.p99), label: 'p99' },
+        a: p99Cell(s),
         b: { value: formatCount(s.queued), label: 'waiting' },
         load: held,
         health: healthOfLoad(held),
@@ -900,7 +915,7 @@ export function readoutFor(
       const contended = lockWait >= 1;
       return {
         primary: { value: formatPct(util), label: 'busy' },
-        a: { value: formatMs(s.p99), label: 'p99' },
+        a: p99Cell(s),
         b: contended
           ? { value: formatMs(lockWait), label: 'lock' }
           : { value: formatCount(s.queued), label: 'waiting' },
@@ -921,7 +936,7 @@ export function readoutFor(
       const slowdown = s.slowdownRate ?? 0;
       return {
         primary: { value: formatPct(util), label: 'busy' },
-        a: { value: formatMs(s.p99), label: 'p99' },
+        a: p99Cell(s),
         b:
           slowdown > 0
             ? { value: formatRate(slowdown), label: 'refused' }
@@ -1106,7 +1121,7 @@ export function readoutFor(
     case 'coldstorage': {
       const denied = s.throttledRate ?? 0;
       return {
-        primary: { value: formatMs(s.p99), label: 'restore' },
+        primary: p99Cell(s, 'restore'),
         a: { value: formatPct(util), label: 'busy' },
         b:
           denied > 0
@@ -1230,7 +1245,7 @@ export function readoutFor(
         b:
           state === 'open'
             ? { value: formatRate(rejected), label: 'refused' }
-            : { value: formatMs(s.p99), label: 'p99' },
+            : p99Cell(s),
         load: strain,
         health:
           state === 'open'
@@ -1302,7 +1317,7 @@ export function readoutFor(
           label: 'pool',
         },
         a: { value: formatRate(refused), label: 'refused' },
-        b: { value: formatMs(s.p99), label: 'p99' },
+        b: p99Cell(s),
         load: fill,
         health: refused > 0 ? 'danger' : healthOfLoad(fill),
         spark: fill,
@@ -1342,7 +1357,7 @@ export function readoutFor(
       return {
         primary: { value: formatPct(share), label: 'at edge' },
         a: { value: formatRate(passed), label: 'origin' },
-        b: { value: formatMs(s.p99), label: 'p99' },
+        b: p99Cell(s),
         // The meter shows what still reaches the origin; its own small pool
         // can also melt, which health tracks separately.
         load: 1 - share,
@@ -1404,7 +1419,7 @@ export function readoutFor(
     void k;
     return {
       primary: { value: formatPct(util), label: 'busy' },
-      a: { value: formatMs(s.p99), label: 'p99' },
+      a: p99Cell(s),
       b: { value: formatCount(s.queued), label: 'waiting' },
       load: util,
       health: healthOfLoad(util),
@@ -3549,6 +3564,7 @@ export default function Canvas({
   emptyActions,
   fitTight = false,
   spotlightId = null,
+  spotlightKey = null,
 }: CanvasProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
@@ -5860,58 +5876,127 @@ export default function Canvas({
   const spotNode = spotlightId ? (nodeById.get(spotlightId) ?? null) : null;
 
   /* Pan a spotlit node into view when it is off screen or under a panel,
-     keeping the zoom. Keyed on the id alone, so the camera moves once per
-     answer and never fights a pan the student makes afterwards. */
+     keeping the zoom, then pan the diagram out from under the card marked
+     [data-titles-clear] so it covers no box's title. Keyed on the id and
+     the answer, so the camera moves once per answer and never fights a pan
+     the student makes afterwards. One setView for both, so the two pans
+     cannot undo each other. */
   useEffect(() => {
-    if (!spotlightId) return;
-    const n = topoRef.current.nodes.find((x) => x.id === spotlightId);
     const rects = visibleRect();
-    if (!n || !rects) return;
+    if (!rects) return;
     const { surface, view } = rects;
     const v = viewRef.current;
-    const left = surface.left + (n.x - SPOT_PAD) * v.k + v.x;
-    const top = surface.top + (n.y - SPOT_PAD - SPOT_TAG_H - 4) * v.k + v.y;
-    const right = surface.left + (n.x + NODE_W + SPOT_PAD) * v.k + v.x;
-    const bottom = surface.top + (n.y + NODE_H + SPOT_PAD) * v.k + v.y;
-    /* Panels marked [data-spot-avoid] (the answer that named this node,
-       an open "What just happened") cover the canvas. One that overlaps
-       the node trims the band it sits in, top or bottom, from the area the
-       node is centred in. On a phone that band is most of the strip. */
-    let visTop = view.top;
-    let visBottom = view.bottom;
-    let covered = false;
-    for (const el of document.querySelectorAll('[data-spot-avoid]')) {
-      const o = el.getBoundingClientRect();
-      if (o.width === 0 || o.height === 0) continue;
-      const mid = (view.top + view.bottom) / 2;
-      if ((o.top + o.bottom) / 2 < mid) visTop = Math.max(visTop, o.bottom);
-      else visBottom = Math.min(visBottom, o.top);
-      if (o.left < right && o.right > left && o.top < bottom && o.bottom > top) {
-        covered = true;
+    let next: Viewport = v;
+    const n = spotlightId
+      ? (topoRef.current.nodes.find((x) => x.id === spotlightId) ?? null)
+      : null;
+    // The ring and its tag, in screen px, under `at`.
+    const ringOf = (at: Viewport): Box | null =>
+      n
+        ? {
+            left: surface.left + (n.x - SPOT_PAD) * at.k + at.x,
+            top: surface.top + (n.y - SPOT_PAD - SPOT_TAG_H - 4) * at.k + at.y,
+            right: surface.left + (n.x + NODE_W + SPOT_PAD) * at.k + at.x,
+            bottom: surface.top + (n.y + NODE_H + SPOT_PAD) * at.k + at.y,
+          }
+        : null;
+    const ring = ringOf(v);
+    if (n && ring) {
+      const { left, top, right, bottom } = ring;
+      /* Panels marked [data-spot-avoid] (the answer that named this node,
+         an open "What just happened") cover the canvas. One that overlaps
+         the node trims the band it sits in, top or bottom, from the area the
+         node is centred in. On a phone that band is most of the strip. */
+      let visTop = view.top;
+      let visBottom = view.bottom;
+      let covered = false;
+      for (const el of document.querySelectorAll('[data-spot-avoid]')) {
+        const o = el.getBoundingClientRect();
+        if (o.width === 0 || o.height === 0) continue;
+        const mid = (view.top + view.bottom) / 2;
+        if ((o.top + o.bottom) / 2 < mid) visTop = Math.max(visTop, o.bottom);
+        else visBottom = Math.min(visBottom, o.top);
+        if (o.left < right && o.right > left && o.top < bottom && o.bottom > top) {
+          covered = true;
+        }
+      }
+      if (
+        covered ||
+        left < view.left ||
+        right > view.right ||
+        top < view.top ||
+        bottom > view.bottom
+      ) {
+        // Panels taller than the room between them leave nothing to centre in.
+        if (visBottom - visTop < (bottom - top) / 2) {
+          visTop = view.top;
+          visBottom = view.bottom;
+        }
+        const cx = view.left + view.width / 2 - surface.left;
+        const cy = (visTop + visBottom) / 2 - surface.top;
+        next = {
+          k: v.k,
+          x: cx - (n.x + NODE_W / 2) * v.k,
+          y: cy - (n.y + NODE_H / 2) * v.k,
+        };
       }
     }
-    if (
-      !covered &&
-      left >= view.left &&
-      right <= view.right &&
-      top >= view.top &&
-      bottom <= view.bottom
-    ) {
-      return;
+
+    const card = document.querySelector('[data-titles-clear]')?.getBoundingClientRect();
+    if (card && card.width > 0 && card.height > 0) {
+      // Titles where they will be once the pan above lands; the zoom is kept.
+      const dx = next.x - v.x;
+      const dy = next.y - v.y;
+      const titles: Box[] = [];
+      for (const el of surfaceRef.current?.querySelectorAll('.cv-node-name') ?? []) {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0) continue;
+        titles.push({
+          left: r.left + dx,
+          top: r.top + dy,
+          right: r.right + dx,
+          bottom: r.bottom + dy,
+        });
+      }
+      const pan = titleClearPan(card, titles, view, ringOf(next));
+      if (pan) {
+        if (pan.dx !== 0 || pan.dy !== 0) {
+          next = { k: next.k, x: next.x + pan.dx, y: next.y + pan.dy };
+        }
+      } else {
+        /* Neither pan works: frame the whole diagram in the room below it,
+           unless that loses the named box. Then the card covers a title. */
+        const nodes = topoRef.current.nodes;
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (const m of nodes) {
+          minX = Math.min(minX, m.x);
+          minY = Math.min(minY, m.y);
+          maxX = Math.max(maxX, m.x + NODE_W);
+          maxY = Math.max(maxY, m.y + NODE_H);
+        }
+        const below = card.bottom + TITLE_GAP;
+        const fit = fitViewport(
+          { minX, minY, maxX, maxY },
+          surface,
+          {
+            left: view.left,
+            top: below,
+            width: view.width,
+            height: view.bottom - below,
+          },
+          fitTight,
+        );
+        if (fit && keepsInView(ringOf(fit), view, card)) next = fit;
+      }
     }
-    // Panels taller than the room between them leave nothing to centre in.
-    if (visBottom - visTop < (bottom - top) / 2) {
-      visTop = view.top;
-      visBottom = view.bottom;
-    }
-    const cx = view.left + view.width / 2 - surface.left;
-    const cy = (visTop + visBottom) / 2 - surface.top;
-    setView({
-      k: v.k,
-      x: cx - (n.x + NODE_W / 2) * v.k,
-      y: cy - (n.y + NODE_H / 2) * v.k,
-    });
-  }, [spotlightId, visibleRect]);
+
+    if (next !== v) setView(next);
+    // fitTight is read when the answer arrives, not followed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spotlightId, spotlightKey, visibleRect]);
 
   const detail: 0 | 1 | 2 = view.k >= DETAIL_ZOOM ? 2 : view.k >= MINIMAL_ZOOM ? 1 : 0;
   const glance = glanceScale(view.k, coarsePointer);
