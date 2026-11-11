@@ -257,7 +257,16 @@ function RecordedFaults({
         type="button"
         className="btn btn-sm"
         aria-describedby={id}
-        onClick={onForget}
+        onClick={(e) => {
+          // Forgetting removes this row, button and all. Hand focus to the
+          // control just above it first, so the keyboard is not dropped
+          // onto the page.
+          const above = e.currentTarget
+            .closest('.ins-fault-recorded')
+            ?.previousElementSibling?.querySelectorAll<HTMLElement>('button, select');
+          above?.[above.length - 1]?.focus();
+          onForget();
+        }}
       >
         Forget saved faults
       </button>
