@@ -1,4 +1,5 @@
 import type { Challenge } from './challenge';
+import { INCIDENT_BRIEFS } from './incidents';
 
 /**
  * The briefs.
@@ -414,6 +415,9 @@ export const CHALLENGES: Challenge[] = [
   },
 ];
 
+/** A brief by id, the real incidents' included. */
 export function challengeById(id: string): Challenge | undefined {
-  return CHALLENGES.find((c) => c.id === id);
+  return (
+    CHALLENGES.find((c) => c.id === id) ?? INCIDENT_BRIEFS.find((c) => c.id === id)
+  );
 }

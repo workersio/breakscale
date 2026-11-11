@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import type { Incident } from '../sim/incidents';
 import type { Preset } from '../sim/presets';
 import { usePresence } from './presence';
 import './Examples.css';
+import './Incidents.css';
 
 /* ==========================================================================
    The examples gallery.
@@ -29,6 +31,9 @@ export interface ExamplesProps {
   onLoad: (preset: Preset) => void;
   /** Opens the learning path, which orders these with the challenges. */
   onOpenPath?: () => void;
+  /** Real outages, in their own section under the examples. */
+  incidents?: readonly Incident[];
+  onOpenIncident?: (id: string) => void;
 }
 
 export function Examples({
@@ -38,6 +43,8 @@ export function Examples({
   activePresetId,
   onLoad,
   onOpenPath,
+  incidents = [],
+  onOpenIncident,
 }: ExamplesProps) {
   const { mounted, closing, unmount } = usePresence(open);
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -68,6 +75,20 @@ export function Examples({
     };
   }, [open]);
 
+  /* The incidents sit under every example. The header's button takes the
+     reader there, clearing a search that hid them, and focuses the first. */
+  const incRef = useRef<HTMLElement | null>(null);
+  const [jump, setJump] = useState(0);
+  useEffect(() => {
+    if (jump === 0) return;
+    const section = incRef.current;
+    if (!section) return;
+    section.scrollIntoView({ block: 'start' });
+    section
+      .querySelector<HTMLButtonElement>('.ex-item')
+      ?.focus({ preventScroll: true });
+  }, [jump]);
+
   if (!mounted) return null;
 
   const q = query.trim().toLowerCase();
@@ -79,6 +100,19 @@ export function Examples({
           p.description.toLowerCase().includes(q),
       )
     : presets;
+  const shownIncidents = onOpenIncident
+    ? q
+      ? incidents.filter(
+          (i) =>
+            // The section's own words count, so "incident" or "outage" finds
+            // all of them, as do a year or a company from the source.
+            'real incidents outage'.includes(q) ||
+            [i.name, i.tagline, i.date, i.source.title, ...i.story].some((t) =>
+              t.toLowerCase().includes(q),
+            ),
+        )
+      : incidents
+    : [];
 
   return createPortal(
     <div
@@ -113,6 +147,18 @@ export function Examples({
             </p>
           </div>
           <div className="ex-head-actions">
+            {onOpenIncident && incidents.length > 0 ? (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  setQuery('');
+                  setJump((n) => n + 1);
+                }}
+              >
+                Incidents
+              </button>
+            ) : null}
             {onOpenPath ? (
               <button
                 type="button"
@@ -141,38 +187,70 @@ export function Examples({
           aria-label="Search examples"
         />
 
-        {shown.length === 0 ? (
+        {shown.length === 0 && shownIncidents.length === 0 ? (
           <p className="ex-empty">
             Nothing matches “{query}”. Try a component name like cache or queue.
           </p>
         ) : (
-          <ul className="ex-grid">
-            {shown.map((preset) => {
-              const active = preset.id === activePresetId;
-              return (
-                <li key={preset.id}>
-                  <button
-                    type="button"
-                    className="ex-item"
-                    data-active={active || undefined}
-                    aria-current={active ? 'true' : undefined}
-                    onClick={() => {
-                      onLoad(preset);
-                      onClose();
-                    }}
-                  >
-                    <span className="ex-item-name">{preset.name}</span>
-                    <span className="ex-item-tagline">{preset.tagline}</span>
-                    {/* The full description is what actually helps a student
-                        choose, and it is the thing a rail row had no room
-                        for. */}
-                    <span className="ex-item-desc">{preset.description}</span>
-                    {active ? <span className="ex-item-active">Loaded</span> : null}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <div className="ex-scroll">
+            {shown.length > 0 ? (
+              <ul className="ex-grid">
+                {shown.map((preset) => {
+                  const active = preset.id === activePresetId;
+                  return (
+                    <li key={preset.id}>
+                      <button
+                        type="button"
+                        className="ex-item"
+                        data-active={active || undefined}
+                        aria-current={active ? 'true' : undefined}
+                        onClick={() => {
+                          onLoad(preset);
+                          onClose();
+                        }}
+                      >
+                        <span className="ex-item-name">{preset.name}</span>
+                        <span className="ex-item-tagline">{preset.tagline}</span>
+                        {/* The full description is what actually helps a
+                            student choose, and it is the thing a rail row
+                            had no room for. */}
+                        <span className="ex-item-desc">{preset.description}</span>
+                        {active ? <span className="ex-item-active">Loaded</span> : null}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
+            {shownIncidents.length > 0 ? (
+              <section ref={incRef} className="inc-section" aria-labelledby="inc-title">
+                <h3 id="inc-title" className="inc-section-title">
+                  Real incidents
+                </h3>
+                <p className="inc-section-sub">
+                  Real outages as simplified models. Watch one happen, then fix it.
+                </p>
+                <ul className="ex-grid">
+                  {shownIncidents.map((incident) => (
+                    <li key={incident.id}>
+                      <button
+                        type="button"
+                        className="ex-item"
+                        onClick={() => {
+                          onOpenIncident?.(incident.id);
+                          onClose();
+                        }}
+                      >
+                        <span className="ex-item-name">{incident.name}</span>
+                        <span className="inc-date">{incident.date}</span>
+                        <span className="ex-item-desc">{incident.tagline}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+          </div>
         )}
       </div>
     </div>,
