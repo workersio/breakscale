@@ -28,11 +28,13 @@ import { useGithubStars, useCountUp, formatStars } from './useGithubStars';
 import { Engine } from './sim/engine';
 import { PRESETS, makeNode } from './sim/presets';
 import { CHALLENGES, challengeById } from './sim/challenges';
+import { captionAt, INCIDENT_BRIEFS, INCIDENTS, incidentById } from './sim/incidents';
 import { evaluate, lockedFieldsFor } from './sim/challenge';
 import type { Challenge } from './sim/challenge';
 import { canonical, designKey, judgedTopology, startDesign } from './sim/judge';
 import type { Verdict } from './sim/judge';
 import { ChallengePanel } from './components/Challenge';
+import { IncidentPanel } from './components/Incidents';
 import { BreakPanel } from './components/BreakIt';
 import type { Names } from './components/breakCopy';
 import { secs } from './components/breakCopy';
@@ -140,6 +142,9 @@ import './App.css';
 /* ------------------------------------------------------------------ *
  * Persistence
  * ------------------------------------------------------------------ */
+
+/** Every brief the challenge store keeps attempts for, the incidents' too. */
+const ALL_BRIEFS: readonly Challenge[] = [...CHALLENGES, ...INCIDENT_BRIEFS];
 
 const STORAGE_KEY = 'breakscale.session.v1';
 
@@ -746,7 +751,7 @@ interface Boot {
  */
 function bootWorkspace(): Boot {
   const own = loadSession();
-  const store = loadChallengeStore(CHALLENGES);
+  const store = loadChallengeStore(ALL_BRIEFS);
   if (shareHashPresent()) {
     return {
       session: own,
@@ -880,6 +885,8 @@ export default function App() {
   const [challengesOpen, setChallengesOpen] = useState(false);
   /** "Can you break it?" is open. Only in the reader's own workspace. */
   const [breakOpen, setBreakOpen] = useState(false);
+  /** The real incident whose panel is open, by id. Only in the reader's own workspace. */
+  const [incidentId, setIncidentId] = useState<string | null>(null);
   const [pathOpen, setPathOpen] = useState(false);
 
   /**
@@ -912,7 +919,7 @@ export default function App() {
     // Read storage first: another tab may have recorded a pass or an attempt
     // since this one last looked, and writing the store from memory alone
     // would erase it. Which brief is open stays this tab's own.
-    const base = mergeStored(chalStoreRef.current, loadChallengeStore(CHALLENGES));
+    const base = mergeStored(chalStoreRef.current, loadChallengeStore(ALL_BRIEFS));
     const next = fn(base);
     if (
       next === chalStoreRef.current ||
@@ -929,7 +936,7 @@ export default function App() {
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key !== CHALLENGES_KEY) return;
-      const next = mergeStored(chalStoreRef.current, loadChallengeStore(CHALLENGES));
+      const next = mergeStored(chalStoreRef.current, loadChallengeStore(ALL_BRIEFS));
       chalStoreRef.current = next;
       setChalStore(next);
     };
@@ -1152,7 +1159,9 @@ export default function App() {
         // A brief owns its faults and its check, so this waits for the
         // reader's own workspace.
         onSelect: () => {
-          if (challengeLiveRef.current === null) setBreakOpen(true);
+          if (challengeLiveRef.current !== null) return;
+          setBreakOpen(true);
+          setIncidentId(null);
         },
       },
       {
@@ -3091,11 +3100,14 @@ export default function App() {
   /* ---------------- can you break it? ---------------- */
 
   const breakShown = breakOpen && !challenge;
+  /** The real incident whose panel shows. Never inside a brief. */
+  const incident = incidentId && !challenge ? incidentById(incidentId) : undefined;
   /* The tour's card and the break panel share the column under the bar, so
      the tour steps aside while the panel is open and comes back where it
      was when it closes. Hidden, not ended: its first step says to break it
-     on purpose, and that is not a reason to lose it. */
-  const tourShown = tour.open && !breakShown;
+     on purpose, and that is not a reason to lose it. An incident's panel
+     takes the same room. */
+  const tourShown = tour.open && !breakShown && !incident;
   const breakSearch = useBreakSearch(breakShown, topology);
   const breakView = breakSearch.view;
 
@@ -3347,8 +3359,71 @@ export default function App() {
   }, [endBreakWatch]);
   const handleToggleBreak = useCallback(() => {
     if (breakShown) handleCloseBreak();
-    else setBreakOpen(true);
+    else {
+      setBreakOpen(true);
+      setIncidentId(null);
+    }
   }, [breakShown, handleCloseBreak]);
+  /* ---------------- real incidents ---------------- */
+
+  /** Bumped when a card is opened, to move focus to the panel. */
+  const [incidentFocus, setIncidentFocus] = useState(0);
+  /** The scene as it was installed by Watch, or null when not watching. */
+  const [incidentScene, setIncidentScene] = useState<Topology | null>(null);
+
+  const handleOpenIncident = useCallback(
+    (id: string) => {
+      if (challengeLiveRef.current !== null) return;
+      if (breakShown) handleCloseBreak();
+      setIncidentId(id);
+      setIncidentScene(null);
+      setIncidentFocus((n) => n + 1);
+    },
+    [breakShown, handleCloseBreak],
+  );
+
+  /* A loaded example, one undo step back to what was there. */
+  const handleWatchIncident = useCallback(() => {
+    if (!incident) return;
+    const scene = structuredClone(incident.scene);
+    replaceDesign(scene, null, 'incident replay');
+    setIncidentScene(scene);
+    setRunning(true);
+    runningRef.current = true;
+  }, [incident, replaceDesign]);
+
+  const handleFixIncident = useCallback(() => {
+    if (!incident) return;
+    setIncidentId(null);
+    setIncidentScene(null);
+    handleStartChallenge(incident.brief.id);
+  }, [incident, handleStartChallenge]);
+
+  const handleCloseIncident = useCallback(() => {
+    setIncidentId(null);
+    setIncidentScene(null);
+    menuBtnRef.current?.focus();
+  }, []);
+
+  /* The captions follow the run only while the canvas is still the scene
+     that was installed. Moved boxes keep them; a changed design ends them,
+     because the story no longer describes what is playing. */
+  const sceneKey = (t: Topology) =>
+    canonical({ nodes: t.nodes.map((n) => [n.id, n.kind, n.config]), edges: t.edges });
+  const incidentPlaying = useMemo(
+    () =>
+      incident !== undefined &&
+      incidentScene !== null &&
+      sceneKey(topology) === sceneKey(incidentScene),
+    [incident, incidentScene, topology],
+  );
+  const incidentSec = incidentPlaying && snapshot ? Math.floor(engine.now / 1000) : -1;
+  const incidentCaption = useMemo(() => {
+    if (!incident || incidentSec < 0) return null;
+    const c = captionAt(incident, incidentSec * 1000);
+    return c ? `${secs(c.atMs)}: ${c.text}` : null;
+  }, [incident, incidentSec]);
+
   const toggleBreakRef = useRef(handleToggleBreak);
   useLayoutEffect(() => {
     toggleBreakRef.current = handleToggleBreak;
@@ -3972,7 +4047,7 @@ export default function App() {
           (layout.library ? ' has-library' : '') +
           (inspectorVisible ? ' has-inspector' : '') +
           (metricsVisible ? ' has-metrics' : '') +
-          (challenge || breakShown ? ' has-challenge' : '')
+          (challenge || breakShown || incident ? ' has-challenge' : '')
         }
         /* The three panel sizes, written here because .app-body is where the
            slots and the strip's insets all read them from. A drag rewrites
@@ -4133,6 +4208,18 @@ export default function App() {
                 nameOf={nameOf}
                 besideInspector={inspectorVisible && !phone}
                 foldOnStart={phone}
+                onSheetResize={handleSheetResize}
+              />
+            ) : null}
+            {incident ? (
+              <IncidentPanel
+                incident={incident}
+                caption={incidentCaption}
+                onWatch={handleWatchIncident}
+                onFix={handleFixIncident}
+                onClose={handleCloseIncident}
+                focusSignal={incidentFocus}
+                foldOnStart={false}
                 onSheetResize={handleSheetResize}
               />
             ) : null}
@@ -4407,6 +4494,8 @@ export default function App() {
         activePresetId={presetId}
         onLoad={handleLoadPreset}
         onOpenPath={() => setPathOpen(true)}
+        incidents={challenge ? [] : INCIDENTS}
+        onOpenIncident={handleOpenIncident}
       />
       <Challenges
         open={challengesOpen}

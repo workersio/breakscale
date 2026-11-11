@@ -6,6 +6,7 @@ import { fleetBounds } from './behaviour-control';
 import { isRouteGoal, locksFor, splitLoad } from './challenge';
 import type { Challenge, Goal } from './challenge';
 import { Engine } from './engine';
+import { incidentById } from './incidents';
 import { sanitizeFaults } from './faults';
 import { PRESETS, defaultConfig } from './presets';
 import type {
@@ -188,10 +189,13 @@ const STARTS = new WeakMap<Challenge, Topology>();
 export function startDesign(challenge: Challenge): Topology {
   const known = STARTS.get(challenge);
   if (known) return known;
-  const preset = PRESETS.find((p) => p.id === challenge.presetId);
+  // A real incident's brief starts from its scene, which is not a preset.
+  const preset =
+    PRESETS.find((p) => p.id === challenge.presetId) ??
+    incidentById(challenge.presetId);
   if (!preset)
     throw new Error(`challenge ${challenge.id}: no preset ${challenge.presetId}`);
-  let start = preset.topology;
+  let start = 'scene' in preset ? preset.scene : preset.topology;
   const changes = challenge.startOverrides;
   if (changes) {
     for (const id of Object.keys(changes)) {

@@ -59,6 +59,9 @@
 
 .ex-head {
   display: flex;
+  /* Three buttons do not fit beside the title on a phone; they drop to
+     their own row instead of pushing Close off the screen. */
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--sp-4);
@@ -66,7 +69,9 @@
 
 .ex-head-actions {
   display: flex;
+  flex-wrap: wrap;
   flex: none;
+  max-width: 100%;
   gap: var(--sp-2);
 }
 
@@ -99,6 +104,19 @@
    matter how many survive the filter.
    -------------------------------------------------------------------------- */
 
+/* The grid and the incidents under it scroll as one list. */
+.ex-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-height: 0;
+  padding: 0 var(--sp-1) var(--sp-1) 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+  overscroll-behavior: contain;
+}
+
 .ex-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -111,6 +129,16 @@
   scrollbar-width: thin;
   scrollbar-color: var(--line) transparent;
   overscroll-behavior: contain;
+}
+
+/* Never squeezed: the list scrolls, its parts keep their height. */
+.ex-scroll > * {
+  flex: none;
+}
+
+.ex-scroll .ex-grid {
+  padding: 0;
+  overflow: visible;
 }
 
 .ex-item {
