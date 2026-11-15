@@ -9,6 +9,16 @@ import { cos, exp, pow } from './fdlibm';
 import { sanitizeFaults } from './faults';
 import { Rng } from './random';
 import { DEFAULT_SEED, sanitizeSeed } from './seed';
+import {
+  EDGE_OUTCOME_SLOTS,
+  EO_CUT,
+  EO_FAILED,
+  EO_FIRST,
+  EO_LOST,
+  EO_OK,
+  EO_REFUSED,
+  EO_RETRY,
+} from './edgeOutcomes';
 import { DEFAULT_TRAFFIC_PERIOD_S } from './types';
 import type {
   ActiveFailure,
@@ -263,6 +273,32 @@ interface Req {
    * behaviour can release its own slot. Null for the ordinary path.
    */
   onDrained: ((ctx: BehaviourCtx, state: NodeStateLike, req: ReqLike) => void) | null;
+}
+
+/**
+ * Which outcome slot a resolved call books into. Refused means the target
+ * turned the call away at the door without working on it: a full line or
+ * pool, a limiter, an open breaker, a failed login. Every other failure,
+ * timeouts included, is a failure.
+ */
+function outcomeSlot(ok: boolean, reason: FailureReason): number {
+  if (ok) return EO_OK;
+  switch (reason) {
+    case 'packet-loss':
+      return EO_LOST;
+    case 'partitioned':
+      return EO_CUT;
+    case 'shed':
+    case 'conn-refused':
+    case 'bulkhead-full':
+    case 'throttled':
+    case 'deprioritized':
+    case 'rejected':
+    case 'unauthorized':
+      return EO_REFUSED;
+    default:
+      return EO_FAILED;
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -752,6 +788,12 @@ export class Engine implements BehaviourCtx {
    */
   private tickNodes: NodeState[] = [];
   private edgeFlow = new Map<string, RateCounter>();
+  /**
+   * Per-edge attempt and outcome counters, indexed by the EO_* slots. Null
+   * while nobody asked for them, which keeps the send and resolve paths to a
+   * single null check. Never read by snapshot(), so its bytes cannot move.
+   */
+  private edgeOutcomes: Map<string, RateCounter[]> | null = null;
 
   private freeReq: Req | null = null;
   private freeEv: Ev[] = [];
@@ -1484,6 +1526,72 @@ export class Engine implements BehaviourCtx {
     }
   }
 
+  /**
+   * Count what happens on every edge, for the canvas's traffic dots.
+   *
+   * Off by default. Turning it on adds no random draw and changes no event,
+   * so a run with it on snapshots byte for byte as one with it off. Counters
+   * start empty, so rates read low for the first second after turning it on.
+   */
+  setEdgeOutcomes(on: boolean): void {
+    if (on === (this.edgeOutcomes !== null)) return;
+    if (!on) {
+      this.edgeOutcomes = null;
+      return;
+    }
+    this.edgeOutcomes = new Map();
+    this.rebuildEdgeOutcomes();
+  }
+
+  /**
+   * Copy one edge's rates into `out`, indexed by the EO_* slots, per second.
+   * False, with `out` untouched, while counting is off or the edge is unknown.
+   */
+  readEdgeOutcomes(edgeId: string, out: Float64Array): boolean {
+    const slots = this.edgeOutcomes?.get(edgeId);
+    if (!slots) return false;
+    for (let i = 0; i < EDGE_OUTCOME_SLOTS; i++) out[i] = slots[i].rate(this.now);
+    return true;
+  }
+
+  /**
+   * Book how one crossing ended against the edge it crossed.
+   *
+   * `viaEdge`, not `retryTarget`: a node that retries its own downstream
+   * rewrites its request's retryTarget to that downstream edge, so by the
+   * time its answer travels back the field names the wrong wire. Only the
+   * stubs for a cut or lossy link leave viaEdge empty, and theirs is the one
+   * case where the cut or the loss happened on this edge. A cut or a loss
+   * reported up from further down is, on this edge, a failure. So is a
+   * refusal from further down: a child whose own call failed was let in by
+   * this edge's target, which turns calls away only before calling onward.
+   */
+  private countOutcome(child: Req, ok: boolean, reason: FailureReason): void {
+    const stub = child.viaEdge === '';
+    const slots = this.edgeOutcomes?.get(stub ? child.retryTarget : child.viaEdge);
+    if (!slots) return;
+    let slot = outcomeSlot(ok, reason);
+    if (!stub && (slot === EO_LOST || slot === EO_CUT)) slot = EO_FAILED;
+    if (slot === EO_REFUSED && child.childFailed) slot = EO_FAILED;
+    slots[slot].add(this.now, 1);
+  }
+
+  /** Keep one set of counters per current edge, carrying existing ones over. */
+  private rebuildEdgeOutcomes(): void {
+    const prev = this.edgeOutcomes;
+    if (prev === null) return;
+    const next = new Map<string, RateCounter[]>();
+    for (const edge of this.topology.edges) {
+      let slots = prev.get(edge.id);
+      if (!slots) {
+        slots = [];
+        for (let i = 0; i < EDGE_OUTCOME_SLOTS; i++) slots.push(new RateCounter());
+      }
+      next.set(edge.id, slots);
+    }
+    this.edgeOutcomes = next;
+  }
+
   advance(deltaMs: number): void {
     if (!(deltaMs > 0)) return;
     const dt = Math.min(deltaMs, MAX_DELTA_MS);
@@ -1837,6 +1945,11 @@ export class Engine implements BehaviourCtx {
     // replay would double-count that edge. Sparse edges (a 2 rps batch
     // client) are exactly the ones that keep such buckets alive.
     for (const counter of this.edgeFlow.values()) counter.reset();
+    if (this.edgeOutcomes !== null) {
+      for (const slots of this.edgeOutcomes.values()) {
+        for (const counter of slots) counter.reset();
+      }
+    }
     // Chaos is part of the run, not of the topology: reset() must reproduce
     // the original trajectory from t=0, which it cannot do while a fault
     // injected mid-run is still in force. What WAS scheduled, or recorded,
@@ -1979,6 +2092,7 @@ export class Engine implements BehaviourCtx {
       flow.set(edge.id, this.edgeFlow.get(edge.id) ?? new RateCounter());
     }
     this.edgeFlow = flow;
+    if (this.edgeOutcomes !== null) this.rebuildEdgeOutcomes();
 
     // Retained clients keep their already scheduled arrival. Only a new or
     // retyped client needs an initial event to start its generator.
@@ -2335,6 +2449,11 @@ export class Engine implements BehaviourCtx {
     if (!target) {
       this.childResolved(parent, false, 'no-route', 0);
       return;
+    }
+
+    const outcomes = this.edgeOutcomes;
+    if (outcomes !== null) {
+      outcomes.get(edge.id)?.[attempt > 0 ? EO_RETRY : EO_FIRST].add(this.now, 1);
     }
 
     // A partitioned link fails at the CALLER: the packet never arrives, so the
@@ -3229,6 +3348,8 @@ export class Engine implements BehaviourCtx {
     latencyMs: number,
   ): void {
     if (parent.resolved) return; // Parent already gave up: discard the result.
+
+    if (this.edgeOutcomes !== null) this.countOutcome(child, ok, reason);
 
     // Report the outcome to the caller's behaviour, for kinds that watch their
     // dependency's health. Deliberately BEFORE the retry decision, so a

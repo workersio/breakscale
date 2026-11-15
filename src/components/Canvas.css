@@ -2256,3 +2256,251 @@
   font-variant-numeric: tabular-nums;
   text-anchor: middle;
 }
+
+/* --------------------------------------------------------------------------
+   Traffic dots (TrafficDots.tsx).
+
+   Requests drawn moving along the wires, one colour per way a call ended.
+   The dashes give way while dots are on, so there is one moving layer, not
+   two telling the same story at different speeds.
+   -------------------------------------------------------------------------- */
+.cv-host.has-dots .cv-edge-flow {
+  display: none;
+}
+
+.cv-dots,
+.cv-dots-still {
+  pointer-events: none;
+}
+
+.cv-dot {
+  stroke: none;
+}
+
+.cv-dot-ring {
+  fill: none;
+  stroke-width: 1.4;
+}
+
+.cv-dot.is-ok,
+.cv-key-dot.is-ok,
+.cv-dots-bar.is-ok {
+  fill: var(--flow-ok);
+}
+
+.cv-dot.is-fail,
+.cv-key-dot.is-fail,
+.cv-dots-bar.is-fail {
+  fill: var(--flow-fail);
+}
+
+.cv-dot.is-refused,
+.cv-key-dot.is-refused,
+.cv-dots-bar.is-refused {
+  fill: var(--flow-refused);
+}
+
+.cv-dot.is-lost,
+.cv-key-dot.is-lost,
+.cv-dots-bar.is-lost {
+  fill: var(--flow-lost);
+}
+
+.cv-dot.is-pending,
+.cv-key-dot.is-pending,
+.cv-dots-bar.is-pending {
+  fill: var(--flow-pending);
+}
+
+.cv-dots-bar.is-retry {
+  fill: var(--flow-retry);
+}
+
+.cv-dot-ring.is-retry,
+.cv-key-ring.is-retry {
+  fill: none;
+  stroke: var(--flow-retry);
+  stroke-width: 1.6;
+}
+
+/* The still bar sits on a plate of the canvas colour, so a wire running
+   under it does not cut the segments in two. */
+.cv-dots-bar-back {
+  fill: var(--bg);
+}
+
+/* The key. Bottom left, one row above the metrics toggle and the ledger, so
+   it never covers either; App.css moves it past an open rail or strip with
+   the rest of the corner chrome. */
+.cv-key {
+  /* One toggle row: the metrics toggle's height and the gap above it. */
+  --key-lift: calc(32px + var(--sp-2));
+  position: absolute;
+  left: var(--sp-3);
+  bottom: calc(var(--sp-3) + var(--key-lift));
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  max-width: calc(100% - var(--sp-3) * 2);
+}
+
+.cv-key-toggle {
+  height: 32px;
+  font-size: var(--fs-sm);
+}
+
+.cv-key-body {
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--r-md);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  color: var(--text-dim);
+}
+
+.cv-key-rows {
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  gap: var(--sp-1) var(--sp-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cv-key-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  white-space: nowrap;
+}
+
+.cv-key-row svg {
+  flex: none;
+}
+
+.cv-key-scale {
+  margin: var(--sp-2) 0 0;
+  max-width: 32ch;
+  color: var(--text);
+}
+
+/* A coarse pointer grows every .btn to 44px, the toggle below included. */
+@media (pointer: coarse) {
+  .cv-key {
+    --key-lift: calc(44px + var(--sp-2));
+  }
+}
+
+/* A phone hides the zoom cluster, so the key takes the bottom right corner.
+   The left one belongs to "What just happened" and its reopen button. One
+   column, so it stays narrow. */
+@media (max-width: 720px) {
+  .cv-key {
+    left: auto;
+    right: var(--sp-3);
+    bottom: var(--sp-3);
+    align-items: flex-end;
+  }
+
+  .cv-key-rows {
+    grid-template-columns: auto;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Piling up and dropping.
+
+   A node's waiting line against its limit, calls looping back to be tried
+   again, and links that drop calls. Every one of them reads measured
+   figures; none moves except the single flash as a full line starts turning
+   calls away.
+   -------------------------------------------------------------------------- */
+
+/* The line bar shares the meter's palette: the kind's own colour while the
+   line is only waiting, danger once it is full and refusing. */
+.cv-line-track {
+  fill: var(--k-stroke);
+  fill-opacity: 0.12;
+}
+
+.cv-line-fill {
+  fill: var(--k-stroke);
+}
+
+.cv-line-brim {
+  fill: var(--k-stroke);
+  fill-opacity: 0.65;
+  pointer-events: none;
+}
+
+.cv-line.is-refusing .cv-line-fill {
+  fill: var(--danger-mark);
+}
+
+.cv-line.is-refusing .cv-line-brim {
+  fill: var(--danger);
+  fill-opacity: 1;
+  animation: cv-line-refuse var(--dur-slow) var(--ease) 1;
+}
+
+@keyframes cv-line-refuse {
+  from {
+    opacity: 0.2;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.cv-edge-retry,
+.cv-edge-loss {
+  pointer-events: none;
+}
+
+.cv-edge-retry-loop {
+  fill: none;
+  stroke: var(--flow-retry);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.cv-edge-retry-head {
+  fill: var(--flow-retry);
+}
+
+/* Text, so the text token: --flow-retry is held to the graphics floor. */
+.cv-edge-label.is-retry {
+  fill: var(--warn);
+}
+
+/* A lossy link before anything has been dropped is a property of the wire,
+   drawn faint; once a drop is measured it takes the lost colour. */
+.cv-edge-loss-tick {
+  fill: none;
+  stroke: var(--line-3);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.cv-edge-loss.is-dropping .cv-edge-loss-tick {
+  stroke: var(--flow-lost);
+}
+
+.cv-edge-label.is-severed {
+  fill: var(--text-dim);
+  font-family: var(--sans);
+  font-weight: var(--fw-med);
+  letter-spacing: var(--tr-label);
+}
+
+.cv-edge.is-state-cut .cv-edge-label.is-severed {
+  fill: var(--danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cv-line.is-refusing .cv-line-brim {
+    animation: none;
+  }
+}

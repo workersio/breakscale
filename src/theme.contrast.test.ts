@@ -286,6 +286,65 @@ describe('annotation shades', () => {
   });
 });
 
+describe('traffic dots', () => {
+  const FLOW = [
+    '--flow-ok',
+    '--flow-fail',
+    '--flow-retry',
+    '--flow-refused',
+    '--flow-lost',
+    '--flow-pending',
+  ];
+
+  const light = THEMES[0]![1];
+
+  /** The flow and shade tokens are aliases declared once; follow them into `t`. */
+  function aliased(t: Tokens, name: string): string {
+    const raw = light[name];
+    if (!raw) throw new Error(`missing ${name}`);
+    const m = /^var\((--[a-z0-9-]+)\)$/i.exec(raw.trim());
+    return m ? colour(t, m[1]!) : colour(t, name);
+  }
+
+  it.each(THEMES)(
+    'reads every dot colour on the %s canvas and section tints',
+    (_n, t) => {
+      // A dot is a graphic, so the non-text floor applies. Sections are tinted
+      // with a kind fill, and almost every wire on a large example runs inside
+      // one, so each shade's fill is a ground a dot really lands on. Tested at
+      // full strength, which is stricter than the tint the canvas paints.
+      const grounds = [
+        colour(t, '--bg'),
+        colour(t, '--surface'),
+        ...Object.keys(light)
+          .filter((k) => /^--ann-\d+-fill$/.test(k))
+          .map((k) => aliased(t, k)),
+      ];
+      for (const token of FLOW) {
+        for (const g of grounds) {
+          expect(
+            ratio(aliased(t, token), g),
+            `${token} on ${g}`,
+          ).toBeGreaterThanOrEqual(AA_LARGE);
+        }
+      }
+    },
+  );
+});
+
+describe('wire marks', () => {
+  it.each(THEMES)('reads the retry and loss marks on the %s canvas', (_n, t) => {
+    // The loss ticks before a drop is measured are a graphic on the canvas;
+    // the retry caption and the cut label are text over a --bg halo.
+    expect(ratio(colour(t, '--line-3'), colour(t, '--bg'))).toBeGreaterThanOrEqual(
+      AA_LARGE,
+    );
+    for (const ink of ['--warn', '--danger', '--text-dim']) {
+      expect(ratio(colour(t, ink), colour(t, '--bg')), ink).toBeGreaterThanOrEqual(AA);
+    }
+  });
+});
+
 describe('theme parity', () => {
   it('defines the same colour tokens in both themes', () => {
     // A token present in light and missing in dark silently falls back to the

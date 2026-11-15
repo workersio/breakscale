@@ -722,6 +722,18 @@
   bottom: calc(var(--strip-shown) + var(--sp-3) * 2);
 }
 
+/* The traffic key sits one row above the ledger and follows it. Not on a
+   phone, where the panels are sheets and the key keeps its own corner. */
+@media (min-width: 721px) {
+  .app-body.has-library .cv-key {
+    left: calc(var(--rail-w) + var(--sp-3) * 2);
+  }
+
+  .app-body.has-metrics .cv-key {
+    bottom: calc(var(--strip-shown) + var(--sp-3) * 2 + var(--key-lift));
+  }
+}
+
 /* The format bar rides the same lift, one row higher so it clears the
    ledger and the zoom cluster it shares the foot of the canvas with. */
 .app-body.has-metrics .cv-format {
@@ -740,7 +752,8 @@
 }
 
 .cv-ledger,
-.cv-zoom {
+.cv-zoom,
+.cv-key {
   transition:
     left var(--dur-base) var(--ease),
     right var(--dur-base) var(--ease),
