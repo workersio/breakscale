@@ -319,6 +319,10 @@ describe('the check', () => {
         { reason: 'dead-end-added', nodeId: 'sink', kind: 'service' },
         'the sink answers requests without passing them on',
       ],
+      [
+        { reason: 'standby-first', regionId: 'router', activeId: 'copy', nodeId: 'db' },
+        'the router serves from the copy from the start, so its requests skip the db',
+      ],
     ];
     for (const [why, line] of cases) {
       render({

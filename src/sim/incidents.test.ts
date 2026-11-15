@@ -5,7 +5,7 @@ import { Engine } from './engine';
 import { sanitizeFaults } from './faults';
 import { captionAt, INCIDENTS, incidentById } from './incidents';
 import type { Incident } from './incidents';
-import { judge, startDesign } from './judge';
+import { judge, judgedTopology, playRun, slotBudget, startDesign } from './judge';
 import { defaultConfig, PRESETS } from './presets';
 import type { NodeConfig, NodeKind, RouteStats, Topology } from './types';
 
@@ -233,6 +233,17 @@ describe('S3, 2017', () => {
     );
     expect(v).toBe('unjudgeable');
   });
+
+  it('will not take a router that serves from the second region from the start', () => {
+    const t = opened(s3);
+    secondRegion({ activeRegion: 1 })(t);
+    expect(judgedTopology(s3.brief, t).unjudgeable).toEqual({
+      reason: 'standby-first',
+      regionId: 'router',
+      activeId: 's3b',
+      nodeId: 's3',
+    });
+  });
 });
 
 describe('Cloudflare, 2019', () => {
@@ -300,5 +311,261 @@ describe('AWS, 2021', () => {
     ],
   ])('fails with %s', (_, edit) => {
     expect(status(aws, edit)).not.toBe('passed');
+  });
+});
+
+/**
+ * The same verdict on seeds 1 to 10, not only the check's own three: a
+ * failover that passes on a lucky seed would teach the wrong thing.
+ */
+function onTenSeeds(i: Incident, edit: Edit): string[] {
+  const design = opened(i);
+  edit(design);
+  const { topology, unjudgeable } = judgedTopology(i.brief, design);
+  if (unjudgeable) return [unjudgeable.reason];
+  const b = slotBudget(i.brief, topology, startDesign(i.brief));
+  if (b && b.used > b.allowed) return ['over-budget'];
+  const out: string[] = [];
+  for (let seed = 1; seed <= 10; seed++) {
+    const run = playRun(i.brief, topology, seed);
+    let step = run.next();
+    while (!step.done) step = run.next();
+    out.push(step.value.outcome);
+  }
+  return out;
+}
+
+const ENGINE = { capacity: 16, serviceMs: 25, serviceCv: 0.5, queueLimit: 128 };
+
+/** A zone switch in front of the engine and a standby of `cap` slots. */
+const standby = (cap: number, extra: Partial<NodeConfig> = {}): Edit =>
+  all(
+    add('switch', 'region', 430, 330, extra),
+    add('standby', 'service', 560, 330, { ...ENGINE, capacity: cap }),
+    unwire('api', 'engine'),
+    wire('api', 'switch'),
+    wire('switch', 'engine'),
+    wire('switch', 'standby'),
+  );
+
+describe('Coinbase, 2026', () => {
+  const cb = incident('incident-coinbase-2026');
+
+  it('plays the outage: fine, all down while the engine is, then back', () => {
+    const rows = timeline(cb.scene, 60);
+    expect(errorsAt(rows, 20)).toEqual([0]);
+    for (const s of [25, 35, 50]) expect(errorsAt(rows, s)).toEqual([100]);
+    expect(errorsAt(rows, 60)).toEqual([0]);
+  });
+
+  it('fails as it starts', () => {
+    expect(status(cb, () => {})).toBe('goal-missed');
+  });
+
+  it.each([
+    ['a standby as big as the engine', standby(16)],
+    ['a standby of 12 slots', standby(12)],
+    ['the same, with the switch set to instant', standby(16, { failoverMs: 0 })],
+  ])('passes on ten seeds with %s', (_, edit) => {
+    expect(onTenSeeds(cb, edit)).toEqual(Array(10).fill('passed'));
+  });
+
+  it.each([
+    ['no change', () => {}],
+    ['a standby at its default size', standby(8)],
+    ['two engine instances', set('engine', { instances: 2 })],
+    ['an engine of 32 slots', set('engine', { capacity: 32 })],
+    ['retries on the API', set('api', { retries: 3, timeoutMs: 200 })],
+    [
+      'the API sending to the engine and a second one',
+      all(add('standby', 'service', 560, 330, ENGINE), wire('api', 'standby')),
+    ],
+    [
+      'two engines behind a load balancer',
+      all(
+        add('lb', 'lb', 430, 330, { capacity: 1 }),
+        add('standby', 'service', 560, 330, ENGINE),
+        unwire('api', 'engine'),
+        wire('api', 'lb'),
+        wire('lb', 'engine'),
+        wire('lb', 'standby'),
+      ),
+    ],
+  ])('fails on ten seeds with %s', (_, edit) => {
+    expect(onTenSeeds(cb, edit)).toEqual(Array(10).fill('goal-missed'));
+  });
+
+  it('will not take a standby bigger than 20 slots', () => {
+    expect(status(cb, standby(24))).toBe('over-budget');
+  });
+
+  // Serving from the standby before the zone goes dark leaves the engine
+  // idle, so the crash lands on nothing and no failover is tested.
+  it.each([
+    [
+      'the switch wired to the standby first',
+      all(
+        add('switch', 'region', 430, 330),
+        add('standby', 'service', 560, 330, ENGINE),
+        unwire('api', 'engine'),
+        wire('api', 'switch'),
+        wire('switch', 'standby'),
+        wire('switch', 'engine'),
+      ),
+    ],
+    ['the switch set to serve from the standby', standby(16, { activeRegion: 1 })],
+  ])('will not check %s', (_, edit) => {
+    expect(onTenSeeds(cb, edit)).toEqual(['standby-first']);
+  });
+});
+
+/** `kind` put on the line from `from` to `to`. */
+const between = (
+  from: string,
+  to: string,
+  id: string,
+  kind: NodeKind,
+  config: Partial<NodeConfig> = {},
+): Edit =>
+  all(add(id, kind, 170, 450, config), unwire(from, to), wire(from, id), wire(id, to));
+
+/** `kind` in front of auth, taking both kinds of traffic. */
+const forEveryone = (kind: NodeKind, config: Partial<NodeConfig>): Edit =>
+  all(
+    add('gate', kind, 170, 450, config),
+    unwire('signins', 'auth'),
+    unwire('typing', 'auth'),
+    wire('signins', 'gate'),
+    wire('typing', 'gate'),
+    wire('gate', 'auth'),
+  );
+
+describe('Discord, 2023', () => {
+  const dc = incident('incident-discord-2023');
+
+  it('plays the outage: both kinds of traffic fail together, then recover', () => {
+    const rows = timeline(dc.scene, 60);
+    expect(errorsAt(rows, 20)).toEqual([0, 0]);
+    for (const s of [30, 35, 40]) {
+      const [signins, typing] = errorsAt(rows, s);
+      expect(signins).toBeGreaterThan(5);
+      expect(typing).toBeGreaterThan(5);
+    }
+    expect(errorsAt(rows, 55)).toEqual([0, 0]);
+  });
+
+  it('fails as it starts', () => {
+    expect(status(dc, () => {})).toBe('goal-missed');
+  });
+
+  it.each([
+    [
+      'a rate limiter on the typing path',
+      between('typing', 'auth', 'rl', 'ratelimiter'),
+    ],
+    [
+      'the same, let through at 150 a second',
+      between('typing', 'auth', 'rl', 'ratelimiter', { rateLimitRps: 150 }),
+    ],
+    [
+      'the same, nearly shut at 5 a second',
+      between('typing', 'auth', 'rl', 'ratelimiter', { rateLimitRps: 5 }),
+    ],
+    [
+      'a load shedder on the typing path at 100 a second',
+      between('typing', 'auth', 'rl', 'loadshedder', { rateLimitRps: 100, burst: 100 }),
+    ],
+  ])('passes on ten seeds with %s', (_, edit) => {
+    expect(onTenSeeds(dc, edit)).toEqual(Array(10).fill('passed'));
+  });
+
+  it.each([
+    ['no change', () => {}],
+    ['no retries', set('auth', { retries: 0 })],
+    ['no retries and a long timeout', set('auth', { retries: 0, timeoutMs: 1000 })],
+    ['a short line at the store', set('sessions', { queueLimit: 8 })],
+    ['a smaller auth service', set('auth', { capacity: 16 })],
+    ['typing sent at 1 a second', set('typing', { rps: 1 })],
+    ['a rate limiter for everyone', forEveryone('ratelimiter', { rateLimitRps: 300 })],
+    [
+      'a load shedder for everyone, half of it low priority',
+      forEveryone('loadshedder', { rateLimitRps: 300, lowPriorityShare: 0.5 }),
+    ],
+    ['a breaker in front of the store', between('auth', 'sessions', 'br', 'breaker')],
+    ['a breaker on the typing path', between('typing', 'auth', 'br', 'breaker')],
+  ])('fails on ten seeds with %s', (_, edit) => {
+    expect(onTenSeeds(dc, edit)).toEqual(Array(10).fill('goal-missed'));
+  });
+
+  it('will not take a bigger store', () => {
+    expect(status(dc, set('sessions', { instances: 4 }))).toBe('over-budget');
+  });
+
+  it('will not take typing cut off altogether', () => {
+    expect(status(dc, unwire('typing', 'auth'))).toBe('unjudgeable');
+  });
+});
+
+describe('Coinbase, 2021', () => {
+  const cb = incident('incident-coinbase-2021');
+
+  it('plays the outage: fine, failing while Memcached is away, then back', () => {
+    const rows = timeline(cb.scene, 45);
+    expect(errorsAt(rows, 20)).toEqual([0]);
+    for (const s of [25, 30]) expect(errorsAt(rows, s)[0]).toBeGreaterThan(10);
+    for (const s of [40, 45]) expect(errorsAt(rows, s)).toEqual([0]);
+  });
+
+  it('fails as it starts', () => {
+    expect(status(cb, () => {})).toBe('goal-missed');
+  });
+
+  it('turns reads away at the app servers while Memcached is away', () => {
+    const engine = new Engine(cb.scene, 1);
+    while (engine.now < 25_000) engine.advance(1000 / 60);
+    const app = engine.snapshot().nodes.app;
+    expect(app.shedRate).toBeGreaterThan(0);
+    expect(app.timeoutRate).toBe(0);
+  });
+
+  it.each([
+    ['Redis at 8 slots', set('redis', { capacity: 8 })],
+    ['Redis at twice its size', set('redis', { capacity: 4 })],
+    ['three Redis copies', set('redis', { instances: 3 })],
+  ])('passes on ten seeds with %s', (_, edit) => {
+    expect(onTenSeeds(cb, edit)).toEqual(Array(10).fill('passed'));
+  });
+
+  it.each([
+    ['no change', () => {}],
+    ['a better hit rate', set('memcached', { hitRate: 0.99 })],
+    ['retries on the app', set('app', { retries: 2 })],
+    ['a short timeout on the app', set('app', { timeoutMs: 200 })],
+    ['a short line at Redis', set('redis', { queueLimit: 16 })],
+    [
+      'a breaker in front of Redis',
+      all(
+        add('br', 'breaker', 820, 450),
+        unwire('lookup', 'redis'),
+        unwire('memcached', 'redis'),
+        (t) => t.edges.push({ id: 'lookup->br', from: 'lookup', to: 'br', weight: 0 }),
+        wire('memcached', 'br'),
+        wire('br', 'redis'),
+      ),
+    ],
+  ])('fails on ten seeds with %s', (_, edit) => {
+    expect(onTenSeeds(cb, edit)).toEqual(Array(10).fill('goal-missed'));
+  });
+
+  it('will not take a second Memcached', () => {
+    const second = all(
+      add('mc2', 'cache', 820, 450, { capacity: 4 }),
+      wire('lookup', 'mc2'),
+    );
+    expect(status(cb, second)).toBe('unjudgeable');
+  });
+
+  it('will not take more Memcached than the slots allow', () => {
+    expect(status(cb, set('memcached', { instances: 2 }))).toBe('over-budget');
   });
 });

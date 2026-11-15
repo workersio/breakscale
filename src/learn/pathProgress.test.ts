@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Engine } from '../sim/engine';
 import { PRESETS } from '../sim/presets';
 import { CHALLENGES } from '../sim/challenges';
+import { INCIDENT_BRIEFS } from '../sim/incidents';
 import type { Topology } from '../sim/types';
 import { LEARNING_PATH } from '../content/learningPath';
 import {
@@ -179,10 +180,20 @@ describe('where the student stands', () => {
     expect(stepStatus(challenge, new Set(), none)).toBe('todo');
   });
 
+  it('takes an incident as done once its brief is passed', () => {
+    const step = LEARNING_PATH.flatMap((t) => t.steps).find(
+      (s) => s.kind === 'incident',
+    )!;
+    expect(
+      stepStatus(step, new Set(), (id) => (id === step.id ? 'passed' : null)),
+    ).toBe('done');
+    expect(stepStatus(step, new Set(), none)).toBe('todo');
+  });
+
   it('is finished when every step is done', () => {
     const all = new Set(PRESETS.map((p) => p.id));
     expect(nextStep(all, () => 'passed')).toBeNull();
-    const passedIds = new Set(CHALLENGES.map((c) => c.id));
+    const passedIds = new Set([...CHALLENGES, ...INCIDENT_BRIEFS].map((c) => c.id));
     expect(nextStep(all, (id) => (passedIds.has(id) ? 'passed' : null))).toBeNull();
   });
 });

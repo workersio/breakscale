@@ -1,23 +1,27 @@
 /* ==========================================================================
    The learning path.
 
-   Every example and every challenge, in an order a student can follow. The
-   Examples gallery is a flat grid and the challenges are grouped by
-   difficulty; neither says what to open first, or what a challenge builds
-   on. Here each track pairs the examples that show an idea with the
+   Every example, challenge and real incident, in an order a student can
+   follow. The Examples gallery is a flat grid and the challenges are grouped
+   by difficulty; neither says what to open first, or what a challenge
+   builds on. Here each track pairs the examples that show an idea with the
    challenges that make the student use it, so a brief arrives after the
-   system it is set in.
+   system it is set in. An incident comes after the challenge that teaches
+   its fix, so the real outage is met by someone who can already fix it.
 
    Each id appears exactly once across the path. learningPath.test.ts holds
-   that against PRESETS and CHALLENGES, so a new example or brief fails the
-   suite until it is given a place here.
+   that against PRESETS, CHALLENGES and INCIDENTS, so a new example, brief or
+   incident fails the suite until it is given a place here.
    ========================================================================== */
 
-export type StepKind = 'example' | 'challenge';
+export type StepKind = 'example' | 'challenge' | 'incident';
 
 export interface PathStep {
   readonly kind: StepKind;
-  /** A preset id for an example, a challenge id for a challenge. */
+  /**
+   * A preset id for an example, a challenge id for a challenge, an incident
+   * id for an incident (which is also its brief's id).
+   */
   readonly id: string;
   /** What the student will learn, in one line. */
   readonly learn: string;
@@ -33,6 +37,7 @@ export interface PathTrack {
 
 const ex = (id: string, learn: string): PathStep => ({ kind: 'example', id, learn });
 const ch = (id: string, learn: string): PathStep => ({ kind: 'challenge', id, learn });
+const inc = (id: string, learn: string): PathStep => ({ kind: 'incident', id, learn });
 
 export const LEARNING_PATH: readonly PathTrack[] = [
   {
@@ -57,6 +62,10 @@ export const LEARNING_PATH: readonly PathTrack[] = [
       ex('cache-aside', 'See how the database only feels the reads the cache misses.'),
       ex('cdn-origin', 'See how much traffic an edge cache keeps away from you.'),
       ch('keep-it-warm', "Size a database for the cache's misses, not the whole load."),
+      inc(
+        'incident-coinbase-2021',
+        'See what a database sized for misses does when the cache empties.',
+      ),
       ch(
         'not-everyones-problem',
         'Stop one slow dependency from slowing every request.',
@@ -84,8 +93,13 @@ export const LEARNING_PATH: readonly PathTrack[] = [
     steps: [
       ex('retry-storm', 'See retries multiply the overload that caused them.'),
       ch('five-seconds', 'Make a system recover once a short slowdown ends.'),
+      inc('incident-aws-2021', 'See clients that never back off keep a network down.'),
       ex('rate-limited-api', 'See how a limit at the door keeps answers fast.'),
       ch('say-no-fast', 'Serve more people by refusing some of them right away.'),
+      inc(
+        'incident-discord-2023',
+        'Choose which work gets the room when there is not enough.',
+      ),
     ],
   },
   {
@@ -101,8 +115,17 @@ export const LEARNING_PATH: readonly PathTrack[] = [
         'lose-a-machine',
         'Spread slots across machines so one crash is not an outage.',
       ),
+      inc(
+        'incident-cloudflare-2019',
+        'See why a change should reach part of the network before all of it.',
+      ),
       ex('multi-region', 'Measure what switching to a standby region really costs.'),
       ch('lose-a-region', 'Size a standby region for the day you need it.'),
+      inc('incident-s3-2017', 'Keep the page that explains an outage up through it.'),
+      inc(
+        'incident-coinbase-2026',
+        'Make a failover happen with nobody there to press the button.',
+      ),
       ex('resilient-delivery', 'Choose which work fails, and where failed work goes.'),
       ch('saved-then-lost', 'Find saves that vanish while the error rate stays clean.'),
     ],

@@ -89,7 +89,13 @@ export type Unjudgeable =
    * A component requests reach that answers without passing them on, of a
    * kind that is never the end of the line in the brief's design.
    */
-  | { reason: 'dead-end-added'; nodeId: string; kind: NodeKind };
+  | { reason: 'dead-end-added'; nodeId: string; kind: NodeKind }
+  /**
+   * `regionId` starts out serving from `activeId`, so the requests that went
+   * to `nodeId` in the brief's design skip it until something fails. The
+   * brief's fault then never touches them, and no failover is tested.
+   */
+  | { reason: 'standby-first'; regionId: string; activeId: string; nodeId: string };
 
 /** How a goal came out on one run. */
 export interface GoalOutcome {
@@ -312,8 +318,10 @@ export function judgedTopology(
  * So the judged design has to keep every component the brief starts with,
  * reachable, and every route between them; it may not add a traffic source,
  * a direct call between two of the brief's components, a component that
- * answers on the system's behalf unless the brief allows one, or a new end of
- * the line of a kind the brief never ends on. Everything else is the
+ * answers on the system's behalf unless the brief allows one, a new end of
+ * the line of a kind the brief never ends on, or a Region that starts on a
+ * new copy and leaves one of the brief's components on standby. Everything
+ * else is the
  * reader's to change, including putting new components in between.
  * ------------------------------------------------------------------ */
 
@@ -394,6 +402,72 @@ function countKind(shape: Shape, kind: NodeKind, liveOnly: boolean): number {
   return n;
 }
 
+/**
+ * The index of the region a Region node serves from before anything fails,
+ * clamped as `configuredRegion` in behaviour-control.ts clamps it.
+ */
+function startingRegion(config: NodeConfig, edges: number): number {
+  const count = Number.isFinite(config.regions)
+    ? Math.max(1, Math.min(Math.floor(config.regions as number), edges))
+    : edges;
+  const raw = config.activeRegion;
+  if (!Number.isFinite(raw)) return 0;
+  return Math.max(0, Math.min(Math.floor(raw as number), count - 1));
+}
+
+/**
+ * Request edges as traffic takes them before anything fails: a Region only
+ * reaches the region it starts on, and the rest stand by.
+ */
+function startingRoutes(topology: Topology, out: Map<string, string[]>) {
+  const routes = new Map(out);
+  for (const node of topology.nodes) {
+    const tos = out.get(node.id);
+    if (node.kind !== 'region' || !tos || tos.length < 2) continue;
+    routes.set(node.id, [tos[startingRegion(node.config, tos.length)]]);
+  }
+  return routes;
+}
+
+function sourceIds(topology: Topology): string[] {
+  return topology.nodes
+    .filter((n) => behaviourFor(n.kind).generatesLoad)
+    .map((n) => n.id);
+}
+
+/**
+ * A call the brief's design makes before anything fails that the judged one
+ * only makes through a Region's standby. Wiring the new copy first moves the
+ * call off the part the brief breaks, so the fault lands on nothing and no
+ * failover is ever tested.
+ */
+function standbyFirst(
+  judged: Topology,
+  start: Topology,
+  a: Shape,
+  b: Shape,
+): Unjudgeable | null {
+  const was = startingRoutes(start, a.out);
+  const before = reachable(was, sourceIds(start));
+  const routes = startingRoutes(judged, b.out);
+  for (const [from, tos] of was) {
+    if (!before.has(from) || !b.live.has(from)) continue;
+    const now = reachable(routes, [from]);
+    for (const to of tos) {
+      if (!b.kinds.has(to) || now.has(to)) continue;
+      for (const node of judged.nodes) {
+        if (node.kind !== 'region' || !now.has(node.id)) continue;
+        const out = b.out.get(node.id) ?? [];
+        if (!out.some((next) => reachable(b.out, [next]).has(to))) continue;
+        const activeId = (routes.get(node.id) ?? [])[0];
+        if (activeId === undefined) continue;
+        return { reason: 'standby-first', regionId: node.id, activeId, nodeId: to };
+      }
+    }
+  }
+  return null;
+}
+
 /** The first rule the judged design breaks, or null. See above. */
 export function structureProblem(
   challenge: Challenge,
@@ -429,6 +503,9 @@ export function structureProblem(
       }
     }
   }
+
+  const sidelined = standbyFirst(judged, start, a, b);
+  if (sidelined) return sidelined;
 
   // A kind the brief allows can be added once. Each cache in a row rolls its
   // own hit rate, so three of them in front of a part pass on about 99 in

@@ -3404,6 +3404,18 @@ export default function App() {
     handleStartChallenge(incident.brief.id);
   }, [incident, handleStartChallenge]);
 
+  /* From the learning path an incident can be picked while a brief is live.
+     That leaves the brief first, as an example picked there does. When the
+     live brief is the incident's own, there is nothing to open. */
+  const handlePathIncident = useCallback(
+    (id: string) => {
+      if (challengeLiveRef.current === id) return;
+      if (challengeLiveRef.current !== null) handleLeaveChallenge();
+      handleOpenIncident(id);
+    },
+    [handleLeaveChallenge, handleOpenIncident],
+  );
+
   const handleCloseIncident = useCallback(() => {
     setIncidentId(null);
     setIncidentScene(null);
@@ -4515,12 +4527,15 @@ export default function App() {
         onClose={() => setPathOpen(false)}
         presets={PRESETS}
         challenges={CHALLENGES}
+        incidents={INCIDENTS}
         explored={explored}
         badgeOf={badgeOf}
         activePresetId={presetId}
         activeChallengeId={challengeId}
+        activeIncidentId={incident ? incident.id : null}
         onLoadExample={handleLoadPreset}
         onStartChallenge={handleStartChallenge}
+        onOpenIncident={handlePathIncident}
       />
     </div>
   );

@@ -139,7 +139,7 @@
   margin: 0;
   color: var(--text-dim);
   font-size: var(--fs-sm);
-  line-height: var(--lh-body);
+  line-height: var(--lh-base);
 }
 
 .chal-budget {
@@ -175,7 +175,7 @@
   margin: 0;
   color: var(--text-dim);
   font-size: var(--fs-sm);
-  line-height: var(--lh-body);
+  line-height: var(--lh-base);
 }
 
 .chal-goals {
@@ -242,7 +242,7 @@
   margin: 0;
   font-size: var(--fs-sm);
   font-weight: var(--fw-med);
-  line-height: var(--lh-body);
+  line-height: var(--lh-base);
 }
 
 .chal-verdict.is-ok {
@@ -330,7 +330,7 @@
   margin: 0;
   color: var(--text-dim);
   font-size: var(--fs-sm);
-  line-height: var(--lh-body);
+  line-height: var(--lh-base);
 }
 
 /* Each hint after the first is stepped in, so the order they were asked for
@@ -384,7 +384,7 @@
   border-top: var(--bw) solid var(--border);
   color: var(--text-dim);
   font-size: var(--fs-sm);
-  line-height: var(--lh-body);
+  line-height: var(--lh-base);
 }
 
 .chal-foot {

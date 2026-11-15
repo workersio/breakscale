@@ -90,6 +90,9 @@ const canvasIds = () =>
   );
 
 const s3 = incidentById('incident-s3-2017')!;
+const coinbase = incidentById('incident-coinbase-2026')!;
+const coinbase21 = incidentById('incident-coinbase-2021')!;
+const discord = incidentById('incident-discord-2023')!;
 
 function openIncident(): void {
   press(must('Menu'));
@@ -202,9 +205,41 @@ describe('finding the incidents in the examples dialog', () => {
     press(must('Menu'));
     press(must('Examples'));
     search('incident');
-    expect(incidentNames()).toHaveLength(3);
+    expect(incidentNames()).toHaveLength(6);
     search('2017');
     expect(incidentNames()).toEqual([s3.name]);
+  });
+
+  it('finds the Coinbase outage by the company, and opens its brief', () => {
+    mount();
+    press(must('Menu'));
+    press(must('Examples'));
+    search('coinbase');
+    expect(incidentNames()).toEqual([coinbase.name, coinbase21.name]);
+    press(must(coinbase.name));
+    advance(400);
+    expect(panel()?.textContent).toContain(coinbase.simNote);
+    press(must('Fix it'));
+    expect(panel()?.textContent).toContain(coinbase.brief.brief);
+    expect(canvasIds()).toEqual(coinbase.scene.nodes.map((n) => n.id));
+  });
+
+  it.each([
+    ['discord', () => discord],
+    ['memcached', () => coinbase21],
+  ])('finds %s and opens its brief on its own scene', (q, which) => {
+    const i = which();
+    mount();
+    press(must('Menu'));
+    press(must('Examples'));
+    search(q);
+    expect(incidentNames()).toEqual([i.name]);
+    press(must(i.name));
+    advance(400);
+    expect(panel()?.textContent).toContain(i.simNote);
+    press(must('Fix it'));
+    expect(panel()?.textContent).toContain(i.brief.brief);
+    expect(canvasIds()).toEqual(i.scene.nodes.map((n) => n.id));
   });
 
   it('jumps from the header to the first incident, clearing a search', () => {
@@ -214,7 +249,7 @@ describe('finding the incidents in the examples dialog', () => {
     search('cache');
     Element.prototype.scrollIntoView ??= () => {};
     press(must('Incidents'));
-    expect(incidentNames()).toHaveLength(3);
+    expect(incidentNames()).toHaveLength(6);
     expect(document.activeElement?.querySelector('.ex-item-name')?.textContent).toBe(
       incidentNames()[0],
     );

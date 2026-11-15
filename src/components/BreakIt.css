@@ -67,7 +67,7 @@
   margin: 0;
   padding-left: var(--sp-4);
   font-size: var(--fs-sm);
-  line-height: var(--lh-body);
+  line-height: var(--lh-base);
 }
 
 .brk-check {
@@ -116,7 +116,7 @@
 
 .brk-verdict {
   margin: 0;
-  line-height: var(--lh-body);
+  line-height: var(--lh-base);
 }
 
 .brk-schedule {
