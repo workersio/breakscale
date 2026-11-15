@@ -1,16 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 import type { SimSnapshot, Topology } from '../sim/types';
-import { formatPct } from '../components/format';
+import { toneClass } from '../components/format';
 import { MIN_RATE } from './bottleneck';
 import {
   STEP_COUNT,
   TOUR_RPS,
-  brokenText,
-  fixedText,
-  p99Text,
   readingOf,
   stepNumber,
   totalSlots,
+  tourFigures,
+  type TourFigure,
 } from './tourSteps';
 import type { TourState } from './useTour';
 import './Tour.css';
@@ -109,10 +108,15 @@ export function Tour({
     subject !== null
       ? (topology.nodes.find((n) => n.id === subject)?.label ?? 'It')
       : null;
-  const p99 = snapshot ? p99Text(snapshot) : null;
+  const figures =
+    subject !== null && snapshot ? tourFigures(topology, snapshot, subject) : [];
+  /** The figures a step shows, in the order the card names them. */
+  const pick = (...ids: TourFigure['id'][]) =>
+    ids.flatMap((id) => figures.filter((f) => f.id === id));
 
   let title: string;
   let body: ReactNode;
+  let shown: readonly TourFigure[] = [];
   let actions: ReactNode;
 
   switch (stage.kind) {
@@ -120,7 +124,7 @@ export function Tour({
       title = 'Break it on purpose';
       body = (
         <p>
-          This slider is how many requests your users send each second. Drag it up to
+          This slider sets how many requests your users send each second. Drag it up to
           about {TOUR_RPS} and watch what happens.
         </p>
       );
@@ -128,7 +132,7 @@ export function Tour({
         rps < TOUR_RPS ? (
           <button
             type="button"
-            className="btn btn-sm"
+            className="btn btn-sm btn-primary"
             onClick={() => onSetLoad(TOUR_RPS)}
           >
             Set it to {TOUR_RPS}
@@ -136,22 +140,20 @@ export function Tour({
         ) : null;
       break;
     case 'broken': {
-      const state = snapshot ? brokenText(topology, snapshot, stage.nodeId) : null;
-      const err = snapshot?.system.errorRate ?? 0;
       // Refused work never waits, so "every request" is only true without it.
       const refusing =
         (snapshot ? readingOf(topology, snapshot, stage.nodeId)?.r.refused : 0) ?? 0;
-      title = 'Something filled up';
-      body = (
-        <p>
-          {state ? `${state} ` : null}
-          {refusing >= MIN_RATE
-            ? 'Requests now wait their turn there, or are turned away once the line is full'
-            : 'Every request now waits its turn there'}
-          {p99 ? `, so p99 is ${p99}` : ''}
-          {err >= 0.005 ? ` and ${formatPct(err)} of requests fail` : ''}.
-        </p>
-      );
+      title = `${label ?? 'It'} filled up`;
+      body =
+        refusing >= MIN_RATE ? (
+          <p>
+            Requests now wait in line for a free slot. Once the line is full, the rest
+            are turned away.
+          </p>
+        ) : (
+          <p>Every request now waits its turn in line for a free slot.</p>
+        );
+      shown = pick('slots', 'waiting', 'refused', 'p99', 'failing');
       actions = (
         <button
           type="button"
@@ -183,49 +185,44 @@ export function Tour({
         body = (
           <p>
             Each slot is one request {label} can work on at once. Raise {SLOTS_LABEL}{' '}
-            from {cfg?.capacity ?? 0} to {(cfg?.capacity ?? 0) * 2}.
+            from <span className="num">{cfg?.capacity ?? 0}</span> to{' '}
+            <span className="num">{(cfg?.capacity ?? 0) * 2}</span>.
           </p>
         );
+        shown = pick('slots', 'waiting', 'p99', 'failing');
         actions = null;
       } else if (at?.r.struggling) {
         const since = (snapshot?.system.timeMs ?? 0) - (stage.raisedAtMs ?? 0);
         body =
           since < SETTLE_MS ? (
             <p>
-              {label} has {now} slots now. Give the line a few seconds to clear.
+              {label} has <span className="num">{now}</span> slots now. Give the line a
+              few seconds to clear.
             </p>
           ) : (
             <p>
-              {label} has {now} slots now, but it is still full at this load. Try more.
+              {label} has <span className="num">{now}</span> slots now, but it is still
+              full at this load. Try more.
             </p>
           );
+        shown = pick('slots', 'waiting', 'p99', 'failing');
         actions = null;
       } else {
-        body = (
-          <p>
-            That did it. Now watch p99 come back down as the line clears
-            {p99 ? `: ${p99}` : ''}.
-          </p>
-        );
+        body = <p>That did it. Watch p99 come back down as the line clears.</p>;
+        shown = pick('slots', 'waiting', 'p99', 'failing');
         actions = null;
       }
       break;
     }
     case 'fixed': {
-      const state = snapshot ? fixedText(topology, snapshot, stage.nodeId) : null;
       title = 'Fixed';
       body = (
-        <>
-          <p>
-            {state ? `${state} ` : null}
-            {p99 ? `p99 is back to ${p99}.` : null}
-          </p>
-          <p>
-            That is the whole loop: add load, find what breaks, fix it. The learning
-            path has what to try next.
-          </p>
-        </>
+        <p>
+          That is the whole loop: add load, find what breaks, fix it. The learning path
+          has what to try next.
+        </p>
       );
+      shown = pick('slots', 'waiting', 'p99', 'failing');
       actions = (
         <>
           <button
@@ -251,7 +248,7 @@ export function Tour({
     <div className="tour" data-chrome="tour">
       <section
         ref={cardRef}
-        className="tour-card"
+        className="card-float tour-card"
         data-spot-avoid
         role="dialog"
         aria-modal="false"
@@ -265,15 +262,28 @@ export function Tour({
           }
         }}
       >
-        <header className="tour-head">
-          <span className="tour-step">
-            Step <span className="num">{step}</span> of{' '}
-            <span className="num">{STEP_COUNT}</span>
-          </span>
+        <header className="card-float-head">
+          <p className="tour-progress">
+            <span className="sr-only">
+              Step {step} of {STEP_COUNT}
+            </span>
+            <span className="tour-dots" aria-hidden="true">
+              {Array.from({ length: STEP_COUNT }, (_, i) => (
+                <span
+                  key={i}
+                  className="tour-dot"
+                  data-at={i + 1 < step ? 'done' : i + 1 === step ? 'now' : 'next'}
+                />
+              ))}
+            </span>
+            <span className="tour-count num" aria-hidden="true">
+              {step}/{STEP_COUNT}
+            </span>
+          </p>
           {stage.kind === 'fixed' ? null : (
             <button
               type="button"
-              className="btn btn-sm btn-ghost tour-skip"
+              className="btn btn-sm btn-ghost"
               title="Skip the tour (Esc)"
               onClick={tour.end}
             >
@@ -281,13 +291,31 @@ export function Tour({
             </button>
           )}
         </header>
-        <h2 id="tour-title" className="tour-title">
+        <h2 id="tour-title" className="card-float-title">
           {title}
         </h2>
         <div id="tour-body" className="tour-body">
           {body}
+          {shown.length > 0 ? (
+            <ul className="tour-figs" aria-label={`${label ?? 'It'} right now`}>
+              {shown.map((f) => (
+                <li
+                  key={f.id}
+                  className="tour-fig"
+                  data-figure={f.id}
+                  data-health={f.health}
+                >
+                  <span className={`tour-fig-v num ${toneClass(f.health) ?? ''}`}>
+                    {f.value}
+                    {f.unit ? <span className="unit">{f.unit}</span> : null}
+                  </span>{' '}
+                  <span className="tour-fig-k">{f.label}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
-        {actions ? <div className="tour-actions">{actions}</div> : null}
+        {actions ? <div className="card-float-actions">{actions}</div> : null}
       </section>
     </div>
   );

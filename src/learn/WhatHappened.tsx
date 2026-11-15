@@ -94,15 +94,15 @@ export function WhatHappened({ topology, snapshot }: WhatHappenedProps) {
       {status}
       <div className="wh" data-chrome="what-happened">
         <section
-          className="wh-panel"
+          className="card-float wh-panel"
           data-spot-avoid
           aria-label="What just happened"
           onKeyDown={(e) => {
             if (e.key === 'Escape') close();
           }}
         >
-          <header className="wh-head">
-            <h2 className="wh-title">What just happened</h2>
+          <header className="card-float-head">
+            <h2 className="card-float-title">What just happened</h2>
             <button
               type="button"
               className="btn btn-sm btn-ghost btn-icon wh-close"
@@ -121,7 +121,7 @@ export function WhatHappened({ topology, snapshot }: WhatHappenedProps) {
           <ol className="wh-list">
             {shown.map((e) => (
               <li key={e.id} className={`wh-line is-${e.tone}`}>
-                <span className="wh-at">{formatAt(e.atMs)}</span>
+                <span className="wh-at num">{formatAt(e.atMs)}</span>
                 <span className="wh-text">{e.text}</span>
               </li>
             ))}

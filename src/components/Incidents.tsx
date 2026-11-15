@@ -26,6 +26,18 @@ export interface IncidentPanelProps {
   onSheetResize?: (height: number | null, shut: boolean) => void;
 }
 
+/** "20s: S3 stops answering." as a dated line: the time set apart in figures. */
+function captionParts(caption: string) {
+  const at = caption.indexOf(': ');
+  if (at <= 0) return caption;
+  return (
+    <>
+      <span className="inc-caption-at num">{caption.slice(0, at)}</span>
+      <span className="inc-caption-text">{caption.slice(at + 2)}</span>
+    </>
+  );
+}
+
 export function IncidentPanel({
   incident,
   caption,
@@ -160,7 +172,7 @@ export function IncidentPanel({
           appears with its first text is often not announced. */}
       {caption !== null ? (
         <p className="inc-caption" aria-hidden="true">
-          {caption}
+          {captionParts(caption)}
         </p>
       ) : null}
       <p className="sr-only" aria-live="polite">

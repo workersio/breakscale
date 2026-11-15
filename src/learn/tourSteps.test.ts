@@ -3,12 +3,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Engine } from '../sim/engine';
 import { PRESETS } from '../sim/presets';
 import type { NodeConfig, Topology } from '../sim/types';
+import { formatMs, formatPct } from '../components/format';
 import {
   TOUR_KEY,
   TOUR_RPS,
-  brokenText,
-  fixedText,
   nextStage,
+  tourFigures,
   tourSpotlight,
   tourWanted,
   type TourStage,
@@ -69,8 +69,13 @@ describe('the tour on Single server', () => {
     expect(run.until('broken', 5)).not.toBeNull();
     expect(run.stage).toEqual({ kind: 'broken', nodeId: 'db', slots: 6 });
     expect(tourSpotlight(run.stage)).toBe('db');
-    const text = brokenText(run.topology, run.engine.snapshot(), 'db');
-    expect(text).toMatch(/^Database is full: all 6 slots busy, \d+ waiting in line/);
+    const figs = tourFigures(run.topology, run.engine.snapshot(), 'db');
+    const fig = (id: string) => figs.find((f) => f.id === id);
+    expect(fig('slots')).toMatchObject({ value: '6/6', label: 'slots busy' });
+    expect(fig('slots')?.health).toBe('danger');
+    expect(fig('waiting')?.value).toMatch(/^\d+$/);
+    expect(Number(fig('waiting')?.value)).toBeGreaterThanOrEqual(1);
+    expect(fig('p99')?.unit).toMatch(/^m?s$/);
   });
 
   it('moves to the fix only once the database is selected', () => {
@@ -98,9 +103,15 @@ describe('the tour on Single server', () => {
     expect(s.system.errorRate).toBeLessThan(0.01);
     expect(s.system.p99).toBeLessThan(200);
     expect(tourSpotlight(run.stage)).toBeNull();
-    expect(fixedText(run.topology, s, 'db')).toMatch(
-      /^Database has room again: \d+% busy with 12 slots\.$/,
-    );
+    const figs = tourFigures(run.topology, s, 'db');
+    const slots = figs.find((f) => f.id === 'slots');
+    expect(slots?.value).toMatch(/^\d+\/12$/);
+    expect(slots?.health).not.toBe('danger');
+    // Every figure is the snapshot's own, unit apart.
+    const p99 = figs.find((f) => f.id === 'p99');
+    expect(`${p99?.value}${p99?.unit}`).toBe(formatMs(s.system.p99));
+    const failing = figs.find((f) => f.id === 'failing');
+    expect(`${failing?.value}${failing?.unit}`).toBe(formatPct(s.system.errorRate));
   });
 });
 

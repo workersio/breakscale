@@ -39,16 +39,30 @@
   border-radius: var(--r-sm);
 }
 
-/* The replay's caption, readable with the panel folded. */
+/* The replay's caption, readable with the panel folded. Dated the way
+   "What just happened" dates its lines: the time in figures, then what
+   happened. */
 .inc-caption {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--sp-3);
   margin: 0;
   padding: var(--sp-2) var(--sp-3);
   border-radius: var(--r-sm);
   background: var(--surface-2);
   color: var(--text);
   font-size: var(--fs-sm);
-  line-height: var(--lh-base);
+  line-height: var(--lh-sm);
   font-variant-numeric: tabular-nums;
+}
+
+.inc-caption-at {
+  min-width: 4ch;
+  color: var(--text-dim);
+}
+
+.inc-caption-text {
+  text-wrap: pretty;
 }
 
 /* --------------------------------------------------------------------------
