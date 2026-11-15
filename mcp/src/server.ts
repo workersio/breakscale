@@ -182,7 +182,7 @@ export function createServer({
         'Returns the verdict in words and, when it breaks, a breakscale.tech link that replays the run. ' +
         'For the correctness goals, doubleCharges, lostAckedWrites and staleReads, it also names the first request that broke the rule and tells its story step by step. ' +
         `Deterministic: the same design, goal and options always give the same answer. Tries at most ${breakLimits.maxBudget} schedules from its budget per call, then plays a few more to make a break smaller. ` +
-        'By default it never crashes, fails or cuts a single point of failure whole; includeSinglePoints turns that on. ' +
+        'By default it never crashes, fails or cuts a single point of failure whole, except for the correctness goals, which an outage cannot break; includeSinglePoints turns that on. ' +
         'Takes the same design as create_view, plus the goal.',
       inputSchema: z.object({
         ...design,
@@ -193,7 +193,7 @@ export function createServer({
             metric: z
               .string()
               .describe(
-                `One of ${VERIFY_METRICS.join(', ')}. doubleCharges counts payments charged more than once, such as a retry after a timeout where both tries charge; it needs chargeable. lostAckedWrites counts writes the client was told were saved that never reached storage; it needs a write-behind cache. staleReads counts reads that missed a write the same client was told was saved; it needs a replica set or a search index`,
+                `One of ${VERIFY_METRICS.join(', ')}. doubleCharges counts payments charged more than once, such as a retry after a timeout where both tries charge; it needs chargeable. lostAckedWrites counts writes the client was told were saved that never reached storage; it needs a write-behind cache, or a db or replica set with flushEveryMs above 0. staleReads counts reads that missed a write the same client was told was saved; it needs a replica set or a search index`,
               ),
             max: z
               .number()

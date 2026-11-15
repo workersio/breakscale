@@ -148,11 +148,12 @@ export function isRouteGoal(goal: Goal): goal is Goal & { route: string } {
  * snapshot, so only the check measures them.
  *
  * `doubleCharges` is a correctness goal: the calls that charged money more
- * than once at a part marked `chargeable`, read from the operation log. Only
- * "Can you break it?" and `verify` measure it; no brief uses it.
+ * than once at a part marked `chargeable`, read from the operation log that
+ * "Can you break it?", `verify` and a brief's check keep.
  *
- * `lostAckedWrites` is the other: writes a client was told were saved that
- * never reached the store behind a write-behind cache. Unlike `lostWrites`
+ * `lostAckedWrites` is the second: writes a client was told were saved that
+ * never reached storage, behind a write-behind cache or in a store that
+ * answers before its disk has them. Unlike `lostWrites`
  * it only counts writes the client itself heard succeed, and it does not
  * count a write still on its way when the run ends.
  *

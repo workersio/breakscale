@@ -1,5 +1,6 @@
 import { ShareLinkTooLargeError, buildShareUrl } from '../../src/share';
 import type { AttackKind } from '../../src/sim/breakit';
+import { isCorrectnessGoal } from '../../src/sim/challenge';
 import type { Violation } from '../../src/sim/oplog';
 import { followRequest, verifySteps } from '../../src/sim/verify';
 import type { Verdict, VerifyGoal, VerifyOptions } from '../../src/sim/verify';
@@ -294,7 +295,11 @@ export async function breakDesign(
   const points = singlePointLines(verdict.singlePoints, names);
   if (points.length > 0) {
     lines.push('', 'Single points of failure:', ...points);
-    if (!req.includeSinglePoints && verdict.status !== 'alreadyBroken') {
+    if (
+      !req.includeSinglePoints &&
+      verdict.status !== 'alreadyBroken' &&
+      !isCorrectnessGoal(verdict.goal)
+    ) {
       lines.push(
         'Losing one of these breaks any goal, so the search never crashed, failed or cut them whole. It could still slow them and take down single machines. includeSinglePoints true crashes and cuts them too.',
       );

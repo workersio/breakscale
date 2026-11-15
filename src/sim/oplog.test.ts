@@ -350,7 +350,10 @@ describe('at most once', () => {
 
 describe('verify: doubleCharges', () => {
   it('finds the smallest schedule, and the request can be followed', () => {
-    const v = verify(checkout(), GOAL);
+    // Retries only; a cable delivering twice is in duplicate.test.ts.
+    const v = verify(checkout(), GOAL, {
+      kinds: ['crash', 'crash-instance', 'slow', 'errors', 'cut'],
+    });
     if (v.status !== 'broken') throw new Error(`expected broken, got ${v.status}`);
     expect(v.schedule).toEqual([SLOW_2X]);
     expect(v.minimal).toBe(true);

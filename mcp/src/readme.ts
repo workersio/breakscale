@@ -219,13 +219,26 @@ is simulated time in milliseconds from the start of the run.
   takes a node down. Other kinds: \`slow\` with \`"opts": { "factor": 3 }\`
   (three times slower), \`errors\` with \`"opts": { "rate": 0.2 }\` (20% of
   requests fail), \`partition\` (its outgoing edges stop carrying
-  requests), and \`crash-instance\` (one of its \`instances\` dies and the
+  requests), \`crash-instance\` (one of its \`instances\` dies and the
   rest keep serving, which is how scaling out survives losing a machine
-  and scaling up does not).
+  and scaling up does not), and \`restart\` with
+  \`"opts": { "downMs": 2000 }\` (down like a crash, then back by itself
+  2 seconds later), and \`pause\` with \`"opts": { "pauseMs": 2000 }\`
+  (it stops for 2 seconds and then carries on: nothing fails or is lost,
+  its work finishes late, and callers whose timeouts fire meanwhile may
+  send the request again).
 - \`{ "atMs": 20000, "action": "clear", "nodeId": "db" }\` heals it.
 - \`{ "atMs": 5000, "action": "cut", "edgeId": "api->db" }\` cuts one edge
   and \`restore\` reconnects it. An edge's id is \`from->to\` unless you gave
   it one.
+- \`{ "atMs": 5000, "action": "duplicate", "edgeId": "api->pay", "rate": 0.05 }\`
+  makes an edge deliver 5% of the requests that cross it twice, and
+  \`undup\` stops it. The second copy does the work again at the far end,
+  and nobody hears its answer.
+- \`{ "atMs": 5000, "action": "cut-replies", "edgeId": "api->pay" }\` makes
+  an edge lose every answer coming back across it, and \`restore-replies\`
+  lets them through again. Requests still cross and do their work; the
+  caller waits until its own timeout, or for good without one.
 
 \`seed\` (a whole number, default 1) picks the random draws. The same
 design, seed and faults always give the same numbers.
@@ -237,6 +250,8 @@ It tries crashes, slowdowns, errors and cut edges, makes the schedule
 that breaks it as small as it can, and returns a link that replays the
 run. It only slows a part every request passes through, since losing one
 breaks any goal; \`includeSinglePoints: true\` crashes and cuts those too.
+For the three goals below it crashes and cuts them anyway, since an
+outage alone cannot break those.
 
 Three goals are about the data rather than speed, and a run where nothing
 gets through does not break them:
@@ -244,15 +259,23 @@ gets through does not break them:
 - \`{ "metric": "doubleCharges", "max": 0 }\` with \`"chargeable": ["pay"]\`:
   every payment is charged at most once. A caller that times out and
   retries while the first try is still running is the usual way to break
-  it. Setting \`idempotencyKeys: 1\` on the paying part fixes it.
+  it, and an edge delivering a request twice is another. For this goal
+  the search also tries \`duplicate\` and \`cut-replies\` on each edge
+  and \`pause\` on each part. Setting \`idempotencyKeys: 1\` on the
+  paying part fixes all of them.
 - \`{ "metric": "lostAckedWrites", "max": 0 }\`: no write the client was
-  told was saved is lost. Only a write-behind cache says saved before it
-  saves, so the design needs one. A job a queue accepted and then lost is
-  counted by \`lostJobs\` instead.
+  told was saved is lost. Two parts say saved before it is safe: a
+  write-behind cache, and a \`db\` or \`replica\` with \`flushEveryMs\`
+  above 0, which answers before the write is on disk and has it there
+  that many ms later. A crash or restart of the whole store loses the
+  writes still in memory. The design needs one of them. A job a queue
+  accepted and then lost is counted by \`lostJobs\` instead.
 - \`{ "metric": "staleReads", "max": 0 }\`: read your writes. Once a client
   is told a write was saved, its later reads of that record show it. A
   replica set with replication lag, or a search index with a refresh
-  delay, breaks it, usually with no faults at all.
+  delay, breaks it, usually with no faults at all. \`freshReads: 1\` on
+  a replica set fixes it: a read of a key the replicas are still behind
+  on goes to the primary, and takes one of its write slots.
 
 For these the answer names the first request that broke the rule and
 tells its story: each call, timeout, retry and charge, with its time.

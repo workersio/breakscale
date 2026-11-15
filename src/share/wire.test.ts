@@ -154,6 +154,8 @@ describe('protocol tables', () => {
       cpuMsCap: true,
       chargeable: true,
       idempotencyKeys: true,
+      flushEveryMs: true,
+      freshReads: true,
     };
     for (const field of Object.keys(every)) expect(WIRE_FIELDS).toContain(field);
   });

@@ -448,6 +448,7 @@ const db: ComponentBehaviour = {
   buffersForConsumers: false,
   pump: 'none',
   creditsJoinCompletion: true,
+  hasDisk: true,
 
   initState: (): DbExt => ({ ...initPool(), writers: 0 }),
 

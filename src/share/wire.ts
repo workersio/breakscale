@@ -229,6 +229,8 @@ const FIELDS = [
   'cpuMsCap',
   'chargeable',
   'idempotencyKeys',
+  'flushEveryMs',
+  'freshReads',
 ] as const satisfies readonly ConfigField[];
 
 /** Every field the wire can carry; exported so a test can prove it is complete. */
@@ -286,7 +288,7 @@ const SCHEMA: Record<NodeKind, readonly ConfigField[]> = {
   lb: [...COMMON, ...CORRECTNESS],
   service: [...COMMON, ...CORRECTNESS],
   cache: ['hitRate', ...COMMON.filter((f) => f !== 'hitRate'), ...CORRECTNESS],
-  db: ['readFraction', 'lockMs', ...COMMON, ...CORRECTNESS],
+  db: ['readFraction', 'lockMs', ...COMMON, ...CORRECTNESS, 'flushEveryMs'],
   queue: COMMON,
   worker: [...COMMON, ...CORRECTNESS],
   autoscaler: [
@@ -315,6 +317,8 @@ const SCHEMA: Record<NodeKind, readonly ConfigField[]> = {
     'readFraction',
     ...COMMON,
     ...CORRECTNESS,
+    'flushEveryMs',
+    'freshReads',
   ],
   shard: ['shardCount', 'shardCapacity', 'hotKeyFraction', ...COMMON, ...CORRECTNESS],
   objectstore: ['prefixRps', ...COMMON, ...CORRECTNESS],
@@ -409,6 +413,15 @@ const FAULT_OPS = [
   'cut',
   'restore',
   'crash-instance',
+  // Always followed by num(downMs): the option bits below are all taken.
+  'restart',
+  // Edge ops: 'duplicate' is always followed by num(rate), for the same reason.
+  'duplicate',
+  'undup',
+  // Always followed by num(pauseMs), as 'restart' is by its downMs.
+  'pause',
+  'cut-replies',
+  'restore-replies',
 ] as const;
 
 type FaultOp = (typeof FAULT_OPS)[number];
@@ -687,6 +700,7 @@ function packFault(
         ? indexOf(nodeIndex, f.nodeId)
         : indexOf(edgeIndex, f.edgeId),
     );
+    if (f.action === 'duplicate') w.num(f.rate);
     return;
   }
   const opts = f.opts ?? {};
@@ -697,6 +711,10 @@ function packFault(
   w.varint((FAULT_OPS.indexOf(f.kind) << FAULT_OPT_BITS) | bits);
   w.num(f.atMs);
   w.varint(indexOf(nodeIndex, f.nodeId));
+  // sanitizeFaults let a restart through only with a downMs.
+  if (f.kind === 'restart') w.num(opts.downMs ?? 0);
+  // And a pause only with a pauseMs.
+  if (f.kind === 'pause') w.num(opts.pauseMs ?? 0);
   if (opts.factor !== undefined) w.num(opts.factor);
   if (opts.rate !== undefined) w.num(opts.rate);
   if (opts.edgeIds !== undefined) {
@@ -971,14 +989,39 @@ function unpackFault(
     return e.id;
   };
 
-  if (op === 'clear' || op === 'cut' || op === 'restore') {
+  if (
+    op === 'clear' ||
+    op === 'cut' ||
+    op === 'restore' ||
+    op === 'duplicate' ||
+    op === 'undup' ||
+    op === 'cut-replies' ||
+    op === 'restore-replies'
+  ) {
     if (bits !== 0) throw new WireError('options on a fault that takes none');
     if (op === 'clear') return { atMs, action: 'clear', nodeId: nodeId() };
+    if (op === 'duplicate') {
+      const id = edgeId();
+      const rate = r.num();
+      if (!(rate > 0 && rate <= 1))
+        throw new WireError('a duplicate rate outside 0..1');
+      return { atMs, action: 'duplicate', edgeId: id, rate };
+    }
     return { atMs, action: op, edgeId: edgeId() };
   }
   const kind: FailureKind = op;
   const target = nodeId();
   const opts: FailureOpts = {};
+  if (kind === 'restart') {
+    const downMs = r.num();
+    if (!(downMs > 0)) throw new WireError('a restart that is never down');
+    opts.downMs = downMs;
+  }
+  if (kind === 'pause') {
+    const pauseMs = r.num();
+    if (!(pauseMs > 0)) throw new WireError('a pause that never stops');
+    opts.pauseMs = pauseMs;
+  }
   if (bits & FAULT_FACTOR) opts.factor = r.num();
   if (bits & FAULT_RATE) opts.rate = r.num();
   if (bits & FAULT_EDGES) {
@@ -993,7 +1036,7 @@ function unpackFault(
     action: 'inject',
     nodeId: target,
     kind,
-    ...(bits !== 0 ? { opts } : {}),
+    ...(Object.keys(opts).length > 0 ? { opts } : {}),
   };
 }
 

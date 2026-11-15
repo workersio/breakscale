@@ -1,15 +1,25 @@
 import { useId, useState } from 'react';
-import type { ActiveFailure } from '../sim/types';
+import type { ActiveDuplicate, ActiveFailure, ActiveReplyCut } from '../sim/types';
 import { formatPct } from './format';
 import {
+  DEFAULT_DUP_RATE,
   DEFAULT_GLITCH_RATE,
   DEFAULT_LOSS_RATE,
+  DEFAULT_PAUSE_MS,
+  DUP_RATES,
+  DEFAULT_RESTART_DOWN_MS,
   DEFAULT_SLOW_FACTOR,
   GLITCH_RATES,
   LOSS_RATES,
+  PAUSE_MS,
+  RESTART_DOWN_MS,
   SLOW_FACTORS,
+  dupStatus,
   faultStatus,
+  formatDownFor,
   formatFactor,
+  replyCutStatus,
+  strandedStatus,
 } from './faultWiring';
 import type { CableInfo } from './faultWiring';
 
@@ -31,6 +41,14 @@ export interface NodeFaultControlsProps {
   /** Every cable into or out of this node. */
   cables: readonly CableInfo[];
   onCrash: () => void;
+  /** Take it down, and have it start again by itself `downMs` later. */
+  onRestart: (downMs: number) => void;
+  /**
+   * What else a restart loses on this kind, as a sentence: the writes a
+   * store had not put on disk, or the messages a broker held. Absent where
+   * losing the work in progress is all.
+   */
+  restartLoses?: string;
   /**
    * Take one machine down and leave the rest serving. Absent for a node with
    * a single instance, or a kind that cannot lose one, and the row is not
@@ -46,10 +64,24 @@ export interface NodeFaultControlsProps {
    */
   canSlow?: boolean;
   onSlow: (factor: number) => void;
+  /**
+   * Stop it for a while, and have it carry on by itself. Absent for a kind
+   * that serves no requests, and the row is not shown.
+   */
+  onPause?: (pauseMs: number) => void;
   onGlitch: (rate: number) => void;
   onFix: () => void;
   onCut: (edgeId: string) => void;
   onRestore: (edgeId: string) => void;
+  /**
+   * The cable faults, offered on each cable that carries requests, so they
+   * are reachable from the keyboard as well as by selecting the cable.
+   * Duplicate uses the default share; the cable's own panel picks another.
+   */
+  onDuplicate?: (edgeId: string, rate: number) => void;
+  onUndup?: (edgeId: string) => void;
+  onCutReplies?: (edgeId: string) => void;
+  onRestoreReplies?: (edgeId: string) => void;
   /** How many entries the fault schedule holds. */
   recorded?: number;
   /** Empty the schedule. Without it, the Forget row is not shown. */
@@ -67,25 +99,38 @@ export function NodeFaultControls({
   fault,
   cables,
   onCrash,
+  onRestart,
+  restartLoses,
   onCrashOne,
   instances = 1,
   canSlow = true,
   onSlow,
+  onPause,
   onGlitch,
   onFix,
   onCut,
   onRestore,
+  onDuplicate,
+  onUndup,
+  onCutReplies,
+  onRestoreReplies,
   recorded = 0,
   onForget,
 }: NodeFaultControlsProps) {
   const id = useId();
   const [factor, setFactor] = useState(DEFAULT_SLOW_FACTOR);
   const [rate, setRate] = useState(DEFAULT_GLITCH_RATE);
+  const [downMs, setDownMs] = useState(DEFAULT_RESTART_DOWN_MS);
+  const [pauseMs, setPauseMs] = useState(DEFAULT_PAUSE_MS);
 
   const crashed = fault?.kind === 'crash';
+  // Already down, so a restart now would only move the moment it comes back.
+  const restartInert = crashed || fault?.kind === 'restart';
   const oneDown = fault?.kind === 'crash-instance';
   const slowInert = !canSlow || (fault?.kind === 'slow' && fault.factor === factor);
   const glitchSame = fault?.kind === 'errors' && fault.rate === rate;
+  // A second pause would only move the moment it carries on.
+  const paused = fault?.kind === 'pause';
   const healthy = fault === null;
 
   return (
@@ -109,6 +154,39 @@ export function NodeFaultControls({
         </button>
         <p id={`${id}-crash`} className="ins-hint">
           Stops it completely. Work it was holding is lost.
+        </p>
+      </div>
+
+      <div className="ins-fault-row">
+        <label className="row-k" htmlFor={`${id}-down`}>
+          Down for
+        </label>
+        <div className="ins-fault-pair">
+          <select
+            id={`${id}-down`}
+            className="ins-number"
+            value={downMs}
+            onChange={(e) => setDownMs(Number(e.currentTarget.value))}
+          >
+            {RESTART_DOWN_MS.map((ms) => (
+              <option key={ms} value={ms}>
+                {formatDownFor(ms)}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="btn btn-sm btn-danger"
+            aria-disabled={restartInert}
+            aria-describedby={`${id}-restart`}
+            onClick={guarded(restartInert, () => onRestart(downMs))}
+          >
+            Restart
+          </button>
+        </div>
+        <p id={`${id}-restart`} className="ins-hint">
+          Stops it, then it starts again by itself. Work in progress is lost.
+          {restartLoses ? ` ${restartLoses}` : ''}
         </p>
       </div>
 
@@ -164,6 +242,42 @@ export function NodeFaultControls({
             : 'It does no work of its own that takes time, so there is nothing here to slow down. Try it on a component that handles requests.'}
         </p>
       </div>
+
+      {onPause && (
+        <div className="ins-fault-row">
+          <label className="row-k" htmlFor={`${id}-pause`}>
+            Stall for
+          </label>
+          <div className="ins-fault-pair">
+            <select
+              id={`${id}-pause`}
+              className="ins-number"
+              value={pauseMs}
+              onChange={(e) => setPauseMs(Number(e.currentTarget.value))}
+            >
+              {PAUSE_MS.map((ms) => (
+                <option key={ms} value={ms}>
+                  {formatDownFor(ms)}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="btn btn-sm btn-danger"
+              aria-disabled={paused}
+              aria-describedby={`${id}-pause-hint`}
+              onClick={guarded(paused, () => onPause(pauseMs))}
+            >
+              Stall
+            </button>
+          </div>
+          <p id={`${id}-pause-hint`} className="ins-hint">
+            It stops for that long and then carries on, the way a long garbage
+            collection pause stalls a program. It returns no errors itself, but callers
+            that give up waiting fail or send the same request again.
+          </p>
+        </div>
+      )}
 
       <div className="ins-fault-row">
         <label className="row-k" htmlFor={`${id}-rate`}>
@@ -221,9 +335,28 @@ export function NodeFaultControls({
                   )}
                 </span>
                 <CableButton cable={c} onCut={onCut} onRestore={onRestore} named />
+                {c.carriesRequests &&
+                onDuplicate &&
+                onUndup &&
+                onCutReplies &&
+                onRestoreReplies ? (
+                  <CableExtras
+                    cable={c}
+                    onDuplicate={onDuplicate}
+                    onUndup={onUndup}
+                    onCutReplies={onCutReplies}
+                    onRestoreReplies={onRestoreReplies}
+                  />
+                ) : null}
               </li>
             ))}
           </ul>
+          {onDuplicate && cables.some((c) => c.carriesRequests) ? (
+            <p className="ins-hint">
+              Duplicate delivers {formatPct(DEFAULT_DUP_RATE)} of a cable&rsquo;s
+              requests twice. Select the cable itself to pick another share.
+            </p>
+          ) : null}
         </div>
       )}
 
@@ -319,12 +452,91 @@ function CableButton({
   );
 }
 
+/** Duplicate and answers-only switches for one row of a node's cable list. */
+function CableExtras({
+  cable,
+  onDuplicate,
+  onUndup,
+  onCutReplies,
+  onRestoreReplies,
+}: {
+  cable: CableInfo;
+  onDuplicate: (edgeId: string, rate: number) => void;
+  onUndup: (edgeId: string) => void;
+  onCutReplies: (edgeId: string) => void;
+  onRestoreReplies: (edgeId: string) => void;
+}) {
+  const named = `${cable.label.charAt(0).toLowerCase()}${cable.label.slice(1)}`;
+  return (
+    <span className="ins-fault-cable-extras">
+      {cable.duplicating ? (
+        <button
+          type="button"
+          className="btn btn-sm"
+          aria-label={`Deliver once ${named}`}
+          onClick={() => onUndup(cable.id)}
+        >
+          Deliver once
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="btn btn-sm btn-danger"
+          aria-label={`Duplicate ${formatPct(DEFAULT_DUP_RATE)} of requests ${named}`}
+          onClick={() => onDuplicate(cable.id, DEFAULT_DUP_RATE)}
+        >
+          Duplicate
+        </button>
+      )}
+      {cable.repliesCut ? (
+        <button
+          type="button"
+          className="btn btn-sm"
+          aria-label={`Let answers back ${named}`}
+          onClick={() => onRestoreReplies(cable.id)}
+        >
+          Let answers back
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="btn btn-sm btn-danger"
+          aria-label={`Cut answers only ${named}`}
+          onClick={() => onCutReplies(cable.id)}
+        >
+          Cut answers
+        </button>
+      )}
+    </span>
+  );
+}
+
 export interface EdgeFaultControlsProps {
   cable: CableInfo;
   /** Name of the node whose own fault is cutting this cable, if any. */
   cutBy?: string;
   onCut: (edgeId: string) => void;
   onRestore: (edgeId: string) => void;
+  /** Delivering some requests twice, or null. */
+  dup?: ActiveDuplicate | null;
+  /**
+   * Deliver some requests twice, and stop. Absent for a cable that carries
+   * no requests, such as a controller's, and the rows are not shown.
+   */
+  onDuplicate?: (edgeId: string, rate: number) => void;
+  onUndup?: (edgeId: string) => void;
+  /** Losing the answers back across it, or null. */
+  replyCut?: ActiveReplyCut | null;
+  /** Calls still waiting on answers this cable lost, once it has stopped losing them. */
+  stranded?: number;
+  /** The caller has no timeout, so it waits for good on a lost answer. */
+  callerWaits?: boolean;
+  /**
+   * Lose every answer back across it, and stop. Absent for a cable that
+   * carries no requests, and the row is not shown.
+   */
+  onCutReplies?: (edgeId: string) => void;
+  onRestoreReplies?: (edgeId: string) => void;
   /** How many entries the fault schedule holds. */
   recorded?: number;
   /** Empty the schedule. Without it, the Forget row is not shown. */
@@ -337,12 +549,24 @@ export function EdgeFaultControls({
   cutBy,
   onCut,
   onRestore,
+  dup = null,
+  onDuplicate,
+  onUndup,
+  replyCut = null,
+  stranded = 0,
+  callerWaits = false,
+  onCutReplies,
+  onRestoreReplies,
   recorded = 0,
   onForget,
 }: EdgeFaultControlsProps) {
+  // "Connected." beside "losing every answer" reads as a contradiction, so
+  // while a fault rides on a connected cable this line says what still works.
   const status =
     cable.state === 'connected'
-      ? 'Connected.'
+      ? dup !== null || replyCut !== null || stranded > 0
+        ? 'Requests get through.'
+        : 'Connected.'
       : cable.state === 'cut'
         ? 'Cut. Nothing crosses this cable until you restore it.'
         : cutBy
@@ -360,10 +584,169 @@ export function EdgeFaultControls({
       >
         {status}
       </p>
+      {/* Always mounted, with only the text changing: a live region added
+          to the page already holding its words is often not read out. */}
+      <p
+        className={dup !== null ? 'ins-fault-status is-danger' : 'sr-only'}
+        role="status"
+      >
+        {dup !== null ? dupStatus(dup) : ''}
+      </p>
+      <p
+        className={
+          replyCut !== null || stranded > 0 ? 'ins-fault-status is-danger' : 'sr-only'
+        }
+        role="status"
+      >
+        {replyCut !== null
+          ? replyCutStatus(replyCut, callerWaits)
+          : stranded > 0
+            ? strandedStatus(stranded)
+            : ''}
+      </p>
       <div className="ins-fault-row">
         <CableButton cable={cable} onCut={onCut} onRestore={onRestore} />
       </div>
+      {onDuplicate && onUndup ? (
+        <DuplicateRows
+          edgeId={cable.id}
+          dup={dup}
+          onDuplicate={onDuplicate}
+          onUndup={onUndup}
+        />
+      ) : null}
+      {onCutReplies && onRestoreReplies ? (
+        <ReplyCutRow
+          edgeId={cable.id}
+          cut={replyCut !== null}
+          callerWaits={callerWaits}
+          onCutReplies={onCutReplies}
+          onRestoreReplies={onRestoreReplies}
+        />
+      ) : null}
       <RecordedFaults recorded={recorded} onForget={onForget} />
+    </div>
+  );
+}
+
+/**
+ * Deliver some of a cable's requests twice, and stop. A scheduled fault
+ * like Cut cable, so it is recorded, and Reset plays it at the same moment.
+ */
+function DuplicateRows({
+  edgeId,
+  dup,
+  onDuplicate,
+  onUndup,
+}: {
+  edgeId: string;
+  dup: ActiveDuplicate | null;
+  onDuplicate: (edgeId: string, rate: number) => void;
+  onUndup: (edgeId: string) => void;
+}) {
+  const id = useId();
+  const [rate, setRate] = useState(dup?.rate ?? DEFAULT_DUP_RATE);
+  // A replay link can carry a share the list does not offer.
+  const rates =
+    dup === null || DUP_RATES.includes(dup.rate)
+      ? DUP_RATES
+      : [...DUP_RATES, dup.rate].sort((a, b) => a - b);
+  const same = dup?.rate === rate;
+  const once = dup === null;
+  return (
+    <>
+      <div className="ins-fault-row">
+        <label className="row-k" htmlFor={`${id}-dup`}>
+          Requests delivered twice
+        </label>
+        <div className="ins-fault-pair">
+          <select
+            id={`${id}-dup`}
+            className="ins-number"
+            value={rate}
+            onChange={(e) => setRate(Number(e.currentTarget.value))}
+          >
+            {rates.map((r) => (
+              <option key={r} value={r}>
+                {formatPct(r)}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="btn btn-sm btn-danger"
+            aria-disabled={same}
+            aria-describedby={`${id}-dup-hint`}
+            onClick={guarded(same, () => onDuplicate(edgeId, rate))}
+          >
+            Duplicate
+          </button>
+        </div>
+        <p id={`${id}-dup-hint`} className="ins-hint">
+          The far end gets that share of requests a second time, the way a network that
+          resends a packet can, and does the work again. Idempotency keys there spot the
+          copy.
+        </p>
+      </div>
+      <div className="ins-fault-row">
+        <button
+          type="button"
+          className="btn btn-sm"
+          aria-disabled={once}
+          onClick={guarded(once, () => onUndup(edgeId))}
+        >
+          Deliver once
+        </button>
+      </div>
+    </>
+  );
+}
+
+/**
+ * Lose the answers coming back across a cable, and stop. The cable keeps
+ * carrying requests, so this is a separate switch from Cut cable.
+ */
+function ReplyCutRow({
+  edgeId,
+  cut,
+  callerWaits,
+  onCutReplies,
+  onRestoreReplies,
+}: {
+  edgeId: string;
+  cut: boolean;
+  callerWaits: boolean;
+  onCutReplies: (edgeId: string) => void;
+  onRestoreReplies: (edgeId: string) => void;
+}) {
+  const id = useId();
+  return (
+    <div className="ins-fault-row">
+      {cut ? (
+        <button
+          type="button"
+          className="btn btn-sm"
+          aria-describedby={id}
+          onClick={() => onRestoreReplies(edgeId)}
+        >
+          Let answers back
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="btn btn-sm btn-danger"
+          aria-describedby={id}
+          onClick={() => onCutReplies(edgeId)}
+        >
+          Cut answers only
+        </button>
+      )}
+      <p id={id} className="ins-hint">
+        Requests still get through and do their work, but the answers never come back.
+        {callerWaits
+          ? ' The caller has no timeout, so every call that lost its answer stays stuck, even after you let answers back.'
+          : ' The caller waits until its timeout gives up, and with retries it does the work a second time.'}
+      </p>
     </div>
   );
 }

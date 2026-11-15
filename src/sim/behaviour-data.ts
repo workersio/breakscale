@@ -127,6 +127,7 @@ const replica: ComponentBehaviour = {
   creditsJoinCompletion: true,
   // The same lag startReplicaService and onReplicaDrained play.
   readLagMs: (config) => (config.replicationLagMs > 0 ? config.replicationLagMs : 0),
+  hasDisk: true,
 
   onDiscard(ctx: BehaviourCtx, state: NodeStateLike): void {
     // Both lines are emptied before anything is failed: failing a request
@@ -169,14 +170,20 @@ const replica: ComponentBehaviour = {
     // call re-draws, exactly as a real client re-issuing a request would.
     const isWrite = ctx.roll() >= clamp01(state.config.readFraction);
     ctx.markWrite(req, isWrite);
+    // A read of a key the replicas are still behind on, sent to the primary
+    // when the set is told to. It waits for and holds a write slot.
+    const primary =
+      isWrite ||
+      (state.config.freshReads === 1 && ctx.now < ext.visibleAt[req.key % KEYSPACE]);
+    if (primary && !isWrite) ctx.markFromPrimary(req);
 
-    const queue = isWrite ? ext.writeQueue : ext.readQueue;
-    const head = isWrite ? ext.writeHead : ext.readHead;
-    const busy = isWrite ? ext.writeBusy : ext.readBusy;
-    const capacity = isWrite ? writeCapacity(state) : readCapacity(state);
+    const queue = primary ? ext.writeQueue : ext.readQueue;
+    const head = primary ? ext.writeHead : ext.readHead;
+    const busy = primary ? ext.writeBusy : ext.readBusy;
+    const capacity = primary ? writeCapacity(state) : readCapacity(state);
 
     if (busy < capacity) {
-      startReplicaService(ctx, state, req, isWrite);
+      startReplicaService(ctx, state, req, primary);
       return 'handled';
     }
 
@@ -246,6 +253,12 @@ const replica: ComponentBehaviour = {
     const stale = ctx.counterRate(state, 'staleRead');
     const total = fresh + stale;
     stats.staleReadRate = total > 0 ? stale / total : 0;
+    // Only while reads can go to the primary, so a snapshot of a set that
+    // never does has exactly the fields it always had.
+    if (state.config.freshReads === 1) {
+      const primary = ctx.counterRate(state, 'primaryRead');
+      stats.primaryReadShare = total > 0 ? primary / total : 0;
+    }
 
     // Occupancy is the two pools together against their combined slots, so the
     // meter still means "how full is this thing".
@@ -261,19 +274,25 @@ const replica: ComponentBehaviour = {
  *
  * A write occupies a primary slot and, on completion, pushes this key's
  * visibility deadline out by the replication lag. A read occupies a replica
- * slot and is judged stale at the moment it is served.
+ * slot and is judged stale at the moment it is served, unless it was sent
+ * to the primary, which has every write and is never stale.
  */
 function startReplicaService(
   ctx: BehaviourCtx,
   state: NodeStateLike,
   req: ReqLike,
-  isWrite: boolean,
+  primary: boolean,
 ): void {
   const ext = replicaExt(state);
   const key = req.key % KEYSPACE;
+  const isWrite = req.isWrite;
 
-  if (isWrite) {
+  if (primary) {
     ext.writeBusy++;
+    if (!isWrite) {
+      ctx.countCustom(state, 'freshRead', 1);
+      ctx.countCustom(state, 'primaryRead', 1);
+    }
   } else {
     ext.readBusy++;
     // Judge staleness at service time: the replica answers from whatever it
@@ -301,7 +320,9 @@ function startReplicaService(
 /** A replica-set request finished its service time: free its slot, pull next. */
 function onReplicaDrained(ctx: BehaviourCtx, state: NodeStateLike, req: ReqLike): void {
   const ext = replicaExt(state);
-  if (req.isWrite) {
+  if (req.fromPrimary) {
+    if (ext.writeBusy > 0) ext.writeBusy--;
+  } else if (req.isWrite) {
     if (ext.writeBusy > 0) ext.writeBusy--;
     // The write has now committed on the primary. Replication starts from
     // here, so this is the moment the real visibility deadline is known.

@@ -27,9 +27,17 @@ import type { FailureReason } from './types';
  *   The work applies before the part's own downstream calls are made.
  * - A timeout cancels nothing. Work its caller gave up on keeps running and
  *   still applies, which is how a retry after a timeout charges twice.
- * - A write-behind cache's ack is the only place a write is said to be
- *   saved before it is. Every other store answers once the write is done,
- *   so a crash there fails the call and the caller hears it. A queue also
+ * - A link set to deliver some calls twice hands the second copy over
+ *   right behind the first, as the same call down the same path. It does
+ *   the work again and nobody hears its answer, which is how a network
+ *   resending a packet charges twice with no retry anywhere.
+ * - A write is said to be saved before it is safe in two places. A
+ *   write-behind cache says so while it only holds the write in memory. A
+ *   database or replica set set to answer before its writes reach disk
+ *   (`flushEveryMs` above 0) says so once the write applies, and it is on
+ *   disk `flushEveryMs` later: a crash or restart of the whole store before
+ *   then loses it. Every other store answers once the write is safe, so a
+ *   crash there fails the call and the caller hears it. A queue also
  *   answers before the work is done, but what it holds is a job, and the
  *   tally's `lostJobs` counts those. The buffered copy lands when the store
  *   behind the cache answers a try of its flush with success, even one the
@@ -63,6 +71,12 @@ export const BUFFER_PENDING = 0;
 export const BUFFER_LANDED = 1;
 export const BUFFER_DROPPED = 2;
 
+/** Which kind of copy a buffered write is. */
+/** A write-behind cache's copy, on its way to the store behind it. */
+export const COPY_CACHE = 0;
+/** A store's own write, applied and answered but not on its disk yet. */
+export const COPY_DISK = 1;
+
 /**
  * Everything one run recorded, as a copy the caller owns. Ids are indexes
  * into `names`. Requests are indexed by `rid - ridBase`.
@@ -87,9 +101,11 @@ export interface OpLog {
     t: Float64Array;
   };
   /**
-   * Every write a write-behind cache said was saved, in the order it did,
-   * with what became of the copy it kept: BUFFER_PENDING, BUFFER_LANDED or
-   * BUFFER_DROPPED, and when.
+   * Every write said to be saved before it was safe, in the order it was
+   * said, with what became of it: BUFFER_PENDING, BUFFER_LANDED or
+   * BUFFER_DROPPED, and when. `copy` says whose: COPY_CACHE for a
+   * write-behind cache's copy, which lands when the store behind it has it,
+   * or COPY_DISK for a store's own write, which lands when it reaches disk.
    */
   buffers: {
     rid: Int32Array;
@@ -102,6 +118,8 @@ export interface OpLog {
     reason: Int32Array;
     /** Name index of the part whose failure lost it, else -1. */
     lostAt: Int32Array;
+    /** COPY_CACHE or COPY_DISK. */
+    copy: Uint8Array;
   };
   /**
    * Every read and write a store whose reads trail its writes applied.
@@ -130,7 +148,10 @@ interface EventColumns {
   attempt: Int32Array;
   /** The call's path, on an apply. */
   value: Int32Array;
-  /** By type: charged on an apply, still running on a dedupe, who heard an answer. */
+  /**
+   * By type: charged on an apply, still running on a dedupe, who heard an
+   * answer, and COPY_CACHE or COPY_DISK on a copy's events.
+   */
   flag: Uint8Array;
   reason: Int32Array;
 }
@@ -146,6 +167,8 @@ const E_ANSWER = 7;
 const E_BUFFER = 8;
 const E_LANDED = 9;
 const E_DROPPED = 10;
+const E_DUPLICATE = 11;
+const E_REPLY_LOST = 12;
 
 /* Flags on an answer: who heard it. */
 const HEARD_CALLER = 0;
@@ -230,6 +253,7 @@ export class OpLogRecorder {
   private bLostAt: Int32Array = new Int32Array(INITIAL_BUFFERS);
   /** The cache stopped waiting for the copy, with tries still out. */
   private bGaveUp: Uint8Array = new Uint8Array(INITIAL_BUFFERS);
+  private bCopy: Uint8Array = new Uint8Array(INITIAL_BUFFERS);
 
   private nAcc = 0;
   private aRid: Int32Array = new Int32Array(INITIAL_ACCESSES);
@@ -370,6 +394,40 @@ export class OpLogRecorder {
       this.event(t, rid, E_SEND, from, to, edge, attempt, 0, 0, null);
   }
 
+  /**
+   * The link from `from` to `to` handed this call over a second time. The
+   * copy does the work again, and nobody hears its answer.
+   */
+  duplicate(
+    t: number,
+    rid: number,
+    from: string,
+    to: string,
+    edge: string,
+    attempt: number,
+  ): void {
+    if (this.follows(rid))
+      this.event(t, rid, E_DUPLICATE, from, to, edge, attempt, 0, 0, null);
+  }
+
+  /**
+   * `node` answered its caller `to`, and the answer was lost on the way
+   * back across `edge`. The work it reports was done. `ok` is what the
+   * answer said.
+   */
+  replyLost(
+    t: number,
+    rid: number,
+    node: string,
+    to: string,
+    edge: string,
+    attempt: number,
+    ok: boolean,
+  ): void {
+    if (this.follows(rid))
+      this.event(t, rid, E_REPLY_LOST, node, to, edge, attempt, 0, ok ? 1 : 0, null);
+  }
+
   /** A call that never reached its target: a cut or lossy link. */
   lost(
     t: number,
@@ -497,6 +555,35 @@ export class OpLogRecorder {
    * log is not keeping it.
    */
   buffer(t: number, rid: number, path: number, node: string): number {
+    return this.addCopy(t, rid, path, node, COPY_CACHE);
+  }
+
+  /**
+   * A store applied this write and will answer that it is saved, but it is
+   * not on the store's disk yet. Returns the copy's number for `onDisk` and
+   * `lostFromMemory`, or -1 when the log is not keeping it.
+   */
+  unflushed(t: number, rid: number, path: number, node: string): number {
+    return this.addCopy(t, rid, path, node, COPY_DISK);
+  }
+
+  /** Copy `i`, a store's own write, reached its disk at `t`. */
+  onDisk(i: number, rid: number, t: number): void {
+    if (this.ownCopy(i, rid)) this.land(i, t);
+  }
+
+  /** Copy `i`, a store's own write, was lost from memory when `at` went down. */
+  lostFromMemory(i: number, rid: number, t: number, at: string): void {
+    if (this.ownCopy(i, rid)) this.drop(i, t, at, 'crashed');
+  }
+
+  private addCopy(
+    t: number,
+    rid: number,
+    path: number,
+    node: string,
+    copy: number,
+  ): number {
     const r = rid - this.ridBase;
     if (r < 0 || r >= this.nReq) return -1;
     const i = this.nBuf++;
@@ -511,6 +598,7 @@ export class OpLogRecorder {
       this.bLostAt = grownI32(this.bLostAt, i + 1);
       this.bTries = grownI32(this.bTries, i + 1);
       this.bGaveUp = grownU8(this.bGaveUp, i + 1);
+      this.bCopy = grownU8(this.bCopy, i + 1);
     }
     this.bRid[i] = rid;
     this.bNode[i] = this.name(node);
@@ -522,8 +610,9 @@ export class OpLogRecorder {
     this.bLostAt[i] = -1;
     this.bTries[i] = 0;
     this.bGaveUp[i] = 0;
+    this.bCopy[i] = copy;
     if (this.follows(rid))
-      this.event(t, rid, E_BUFFER, node, null, null, 0, path, 0, null);
+      this.event(t, rid, E_BUFFER, node, null, null, 0, path, copy, null);
     return i;
   }
 
@@ -616,7 +705,7 @@ export class OpLogRecorder {
     const rid = this.bRid[i];
     if (!this.follows(rid)) return;
     const node = this.names[this.bNode[i]];
-    this.event(t, rid, type, node, at, null, 0, this.bPath[i], 0, reason);
+    this.event(t, rid, type, node, at, null, 0, this.bPath[i], this.bCopy[i], reason);
   }
 
   /**
@@ -667,6 +756,7 @@ export class OpLogRecorder {
         endMs: this.bEnd.slice(0, this.nBuf),
         reason: this.bReason.slice(0, this.nBuf),
         lostAt: this.bLostAt.slice(0, this.nBuf),
+        copy: this.bCopy.slice(0, this.nBuf),
       },
       accesses: {
         rid: this.aRid.slice(0, this.nAcc),
@@ -809,15 +899,23 @@ export interface LostWrite {
   invokedMs: number;
   /** When the client heard it was saved. */
   ackedMs: number;
-  /** The write-behind cache that held it. */
+  /**
+   * Whose copy was lost: a write-behind cache's, on its way to the store,
+   * or a store's own write, before it reached disk.
+   */
+  copy: 'cache' | 'disk';
+  /** The write-behind cache that held it, or the store that applied it. */
   nodeId: string;
-  /** When the cache said it was saved. */
+  /** When the cache or the store said it was saved. */
   bufferedMs: number;
   /** When its copy was lost. */
   lostMs: number;
-  /** Why the copy was lost: the cache crashed, or the flush failed. */
+  /**
+   * Why the copy was lost: the cache crashed, or the flush failed. A store's
+   * own write is only lost to a crash.
+   */
   reason: FailureReason;
-  /** The part whose failure lost it: the cache, or the store it flushes to. */
+  /** The part whose failure lost it: the cache, the store it flushes to, or the store. */
   lostAt: string;
 }
 
@@ -836,8 +934,9 @@ export interface LostWritesResult {
 
 /**
  * No acknowledged write lost: among requests a client sent in
- * `[fromMs, toMs)` and was told succeeded, count the writes a write-behind
- * cache said were saved whose copy never landed and was lost. One write is
+ * `[fromMs, toMs)` and was told succeeded, count the writes said to be
+ * saved before they were safe, by a write-behind cache or by a store that
+ * answers before its disk has them, that never landed and were lost. One write is
  * one request down one path, so when a retry was buffered again, even by
  * another copy of the cache, either copy landing saves it. A copy still waiting to flush when the run ended is
  * pending, not lost, so it is counted apart.
@@ -876,6 +975,7 @@ export function checkLostAckedWrites(
     const r = b.rid[i] - log.ridBase;
     violations.push({
       check: 'lostAckedWrite',
+      copy: b.copy[i] === COPY_DISK ? 'disk' : 'cache',
       rid: b.rid[i],
       clientId: log.names[log.client[r]] ?? '',
       key: log.key[r],
@@ -1022,6 +1122,28 @@ export type TimelineEvent =
       attempt: number;
       reason: FailureReason;
     }
+  /** The link handed the call to `to` a second time; that copy does the work again. */
+  | {
+      t: number;
+      type: 'duplicate';
+      from: string;
+      to: string;
+      edge: string;
+      attempt: number;
+    }
+  /**
+   * `node` answered `to`, and the answer was lost on the way back across
+   * `edge`; `to` never hears it. `ok` is what it said.
+   */
+  | {
+      t: number;
+      type: 'reply-lost';
+      node: string;
+      to: string;
+      edge: string;
+      attempt: number;
+      ok: boolean;
+    }
   /** `node` stopped waiting for its call to `to`. That call keeps running. */
   | { t: number; type: 'timeout'; node: string; to: string; attempt: number }
   /** `node` will call `to` again; `attempt` is the try it is about to send. */
@@ -1038,12 +1160,23 @@ export type TimelineEvent =
       charge: boolean;
       repeat: boolean;
     }
-  /** `node`, a write-behind cache, told its caller the write was saved and kept a copy. */
-  | { t: number; type: 'buffered'; node: string }
-  /** The copy `node` kept reached the store. */
-  | { t: number; type: 'landed'; node: string }
+  /**
+   * `node` said the write was saved before it was safe. A write-behind cache
+   * kept a copy to pass on; with `disk`, a store applied it and has not
+   * written it to its disk yet.
+   */
+  | { t: number; type: 'buffered'; node: string; disk: boolean }
+  /** The copy `node` kept reached the store, or with `disk`, its own disk. */
+  | { t: number; type: 'landed'; node: string; disk: boolean }
   /** The copy `node` kept was lost when `at` failed: the cache itself, or the store. */
-  | { t: number; type: 'dropped'; node: string; at: string; reason: FailureReason }
+  | {
+      t: number;
+      type: 'dropped';
+      node: string;
+      at: string;
+      reason: FailureReason;
+      disk: boolean;
+    }
   /** `node` had this call already: answered from it, or refused while it ran. */
   | { t: number; type: 'dedupe'; node: string; attempt: number; inFlight: boolean }
   /**
@@ -1107,6 +1240,27 @@ export function timelineOf(log: OpLog, rid: number): RequestTimeline | null {
           reason: reasonOf(e.reason[i]) ?? 'error',
         });
         break;
+      case E_DUPLICATE:
+        events.push({
+          t,
+          type: 'duplicate',
+          from: node,
+          to: name(e.peer[i]),
+          edge: name(e.edge[i]),
+          attempt,
+        });
+        break;
+      case E_REPLY_LOST:
+        events.push({
+          t,
+          type: 'reply-lost',
+          node,
+          to: name(e.peer[i]),
+          edge: name(e.edge[i]),
+          attempt,
+          ok: e.flag[i] === 1,
+        });
+        break;
       case E_TIMEOUT:
       case E_RETRY:
         events.push({
@@ -1131,10 +1285,10 @@ export function timelineOf(log: OpLog, rid: number): RequestTimeline | null {
         events.push({ t, type: 'dedupe', node, attempt, inFlight: e.flag[i] === 1 });
         break;
       case E_BUFFER:
-        events.push({ t, type: 'buffered', node });
+        events.push({ t, type: 'buffered', node, disk: e.flag[i] === COPY_DISK });
         break;
       case E_LANDED:
-        events.push({ t, type: 'landed', node });
+        events.push({ t, type: 'landed', node, disk: e.flag[i] === COPY_DISK });
         break;
       case E_DROPPED:
         events.push({
@@ -1143,6 +1297,7 @@ export function timelineOf(log: OpLog, rid: number): RequestTimeline | null {
           node,
           at: name(e.peer[i]),
           reason: reasonOf(e.reason[i]) ?? 'error',
+          disk: e.flag[i] === COPY_DISK,
         });
         break;
       case E_ANSWER: {
@@ -1166,6 +1321,10 @@ export function timelineOf(log: OpLog, rid: number): RequestTimeline | null {
         break;
     }
   }
+  // A store's write reaching disk is recorded when the engine next looks,
+  // with the time it happened, so it can sit after later events. The sort is
+  // stable, so events at one moment keep the order they happened in.
+  events.sort((x, y) => x.t - y.t);
   const r = rid - log.ridBase;
   const known = r >= 0 && r < log.invokeMs.length;
   if (events.length === 0 && !known) return null;

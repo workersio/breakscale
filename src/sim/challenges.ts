@@ -1,5 +1,8 @@
-import type { Challenge } from './challenge';
+import type { Challenge, FieldLock } from './challenge';
 import { INCIDENT_BRIEFS } from './incidents';
+
+/** Which part charges money is what the part is for, not a design choice. */
+const CHARGES: FieldLock = { kind: '*', field: 'chargeable' };
 
 /**
  * The briefs.
@@ -412,6 +415,152 @@ export const CHALLENGES: Challenge[] = [
     ],
     lesson:
       "A system can fail loudly and quietly at once: the hot shard made pages slow, while the workers fell a little further behind every second and the queue hid it. Fixing only the loud problem would meet the speed goals and still leave a backlog that never drains. Size each path for the load it really gets, and watch the queue's depth, because users won't report it.",
+  },
+
+  /* ---------------- checking correctness ----------------
+     Each of these is fast and mostly up as it starts. What breaks is the
+     data, which only the correctness checks in the operation log see, so
+     the error goal in each is there to rule out switching the retries off,
+     not to catch the problem. */
+  {
+    id: 'charged-twice',
+    version: 1,
+    tier: 4,
+    name: 'Charged twice',
+    brief:
+      "Checkout gets 100 orders a second. The API gives Payments 300ms to answer, then tries twice more. Payments also fails 3 in 100 calls on its own, so those retries matter. At 30 seconds, Payments stalls for one second: it keeps its work but does none of it. Afterwards, some customers find two charges on their card. Charge nobody twice, and lose no more than 3 in 100 orders. You can't change how long the API waits.",
+    presetId: 'checkout',
+    startOverrides: { pay: { errorRate: 0.03 } },
+    loadRps: 100,
+    faults: [
+      {
+        atMs: 30_000,
+        action: 'inject',
+        nodeId: 'pay',
+        kind: 'pause',
+        opts: { pauseMs: 1000 },
+      },
+    ],
+    locks: [
+      // Waiting longer than the stall hides it, and the next stall is longer.
+      { kind: 'service', field: 'timeoutMs' },
+      CHARGES,
+    ],
+    goals: [
+      { metric: 'doubleCharges', max: 0 },
+      { metric: 'errorRate', max: 3 },
+    ],
+    hints: [
+      'The error chart barely moves. Count how many times Payments did the work for one order, not how many orders failed.',
+      'When the API stops waiting, its first try is still inside Payments. It has not failed. It is only late.',
+      'Turning the retries off stops the second charge, but then every glitch at Payments loses an order. Look at Payments. How could it tell a call is one it has already done?',
+    ],
+    lesson:
+      'A timeout tells the caller nothing about whether the work happened. The first try was stalled, not lost, so when Payments carried on it charged the card, and so did the retry. Keys on the API do not help, because the charge happens behind it. Idempotency keys at Payments let it see that the retry is the same order and not charge it again, so the retries can stay. A retry is only safe where the part doing the work can spot a repeat.',
+  },
+  {
+    id: 'lost-on-the-way-back',
+    version: 1,
+    tier: 4,
+    name: 'Lost on the way back',
+    brief:
+      "The same checkout, 100 orders a second. At 30 seconds, for 0.8 seconds, the network drops every answer coming back from Payments. The requests still get there, and the cards are still charged. The API hears nothing, gives up after 300ms and tries again. Charge nobody twice, and lose no more than 1 in 100 orders. You can't change how long the API waits.",
+    presetId: 'checkout',
+    loadRps: 100,
+    faults: [
+      { atMs: 30_000, action: 'cut-replies', edgeId: 'api->pay' },
+      { atMs: 30_800, action: 'restore-replies', edgeId: 'api->pay' },
+    ],
+    locks: [{ kind: 'service', field: 'timeoutMs' }, CHARGES],
+    goals: [
+      { metric: 'doubleCharges', max: 0 },
+      { metric: 'errorRate', max: 1 },
+    ],
+    hints: [
+      'Payments did every charge it was asked for. Look at what the API thinks happened.',
+      'Without its retries, the API reports those orders as failed even though the customer paid. Count how many that is.',
+      'The retry is the same order as the first try. Look at Payments. What would it need to answer a retry without charging again?',
+    ],
+    lesson:
+      "When an answer is lost, the caller can't tell a call that failed from one that worked. Retrying charges twice, and not retrying tells paying customers their order failed. Idempotency keys at Payments end that choice: the retry carries the same key, so Payments answers it with the first result and the API hears that it worked. That is why payment APIs ask for a key on every request.",
+  },
+  {
+    id: 'sent-twice',
+    version: 1,
+    tier: 4,
+    name: 'Sent twice',
+    brief:
+      'From 20 seconds in, the network between the API and Payments delivers 5 in 100 requests twice, the way a network that resends a packet can. Each copy does the work, so the card is charged again, and nobody hears the second answer. Nothing fails and nothing is slow. Charge nobody twice, and lose no more than 1 in 100 orders.',
+    presetId: 'checkout',
+    loadRps: 100,
+    faults: [{ atMs: 20_000, action: 'duplicate', edgeId: 'api->pay', rate: 0.05 }],
+    locks: [CHARGES],
+    goals: [
+      { metric: 'doubleCharges', max: 0 },
+      { metric: 'errorRate', max: 1 },
+    ],
+    hints: [
+      'Nothing failed and nothing timed out. Count the charges at Payments instead of the errors.',
+      'The API sent each request once. Turning its retries off changes nothing here.',
+      'Look at Payments. Both copies carry the same request. How could Payments tell the second one apart?',
+    ],
+    lesson:
+      'A duplicate needs no retry: networks and message queues deliver some messages more than once, and only the part doing the work sees both copies. The API cannot help, since it sent one request. Idempotency keys at Payments catch the copy, because it carries the same key as the first. Delivery "at least once" is common, so the work at the end of the line has to be safe to repeat.',
+  },
+  {
+    id: 'saved-then-gone',
+    version: 1,
+    tier: 4,
+    name: 'Saved, then gone',
+    brief:
+      'Orders DB says "saved" as soon as an order is in memory, and writes it to disk within a second. At 30 seconds it restarts and is down for 2 seconds. Orders that fail while it is down are fine: the shop shows an error and the customer tries again later. But dozens of orders the shop was told were saved are simply gone afterwards. Lose none of those, and lose no more than 6 in 100 orders overall.',
+    presetId: 'checkout',
+    startOverrides: { orders: { flushEveryMs: 1000 } },
+    loadRps: 100,
+    faults: [
+      {
+        atMs: 30_000,
+        action: 'inject',
+        nodeId: 'orders',
+        kind: 'restart',
+        opts: { downMs: 2000 },
+      },
+    ],
+    goals: [
+      { metric: 'lostAckedWrites', max: 0 },
+      { metric: 'errorRate', max: 6 },
+    ],
+    hints: [
+      'The lost orders never showed an error. Look for writes that were saved and then disappeared.',
+      'More slots or more machines for Orders DB do not change what is still in memory when the whole store goes down.',
+      'Look at Orders DB. When does an order reach disk, compared with when it says "saved"?',
+    ],
+    lesson:
+      'A store that says "saved" before the write is on disk is quick to answer, and a crash loses everything still waiting, with no error anyone sees. Even writing to disk within 10ms lost an order on some runs, because a crash can land at any moment. Only writing each order to disk before answering kept every one. Real databases make the same choice, and on a real disk waiting for the write costs time, which this model does not charge.',
+  },
+  {
+    id: 'read-your-own-write',
+    version: 1,
+    tier: 4,
+    name: 'Read your own write',
+    brief:
+      "People change their profile and then look at it. Reads go to three copies of the data, and each copy hears about a write 60ms after the primary saves it. So over 400 times in the 45 seconds checked, someone sees their old profile right after being told the change was saved. Make every read show the reader's own saved change. Keep the slowest 1 in 100 requests within 150ms, and lose no more than 1 in 100. The copies can't catch up any faster.",
+    presetId: 'read-replicas',
+    loadRps: 300,
+    // How far behind the copies run is the network between them.
+    locks: [{ kind: 'replica', field: 'replicationLagMs' }],
+    goals: [
+      { metric: 'staleReads', max: 0 },
+      { metric: 'p99', max: 150 },
+      { metric: 'errorRate', max: 1 },
+    ],
+    hints: [
+      'Nothing failed. Count the reads that came back older than a write the same person had already been told was saved.',
+      'More copies all trail the primary by the same 60ms, so they go stale the same way.',
+      'Only one part always has the latest write. Look at the replica set. Which reads could go there instead?',
+    ],
+    lesson:
+      'Copies that trail the primary give you read capacity at the price of sometimes reading the past. Sending a read to the primary only while the copies are behind on that record gives each person their own writes back, and leaves every other read on the copies. The cost is load on the primary, which also takes every write, so this works while few reads need it.',
   },
 ];
 

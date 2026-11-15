@@ -249,6 +249,7 @@ describe('break_it: correctness', () => {
       goal: { metric: 'doubleCharges', max: 0 },
       chargeable: ['pay'],
       budget: 5,
+      kinds: ['crash', 'crash-instance', 'slow', 'errors', 'cut'],
     });
     expect(text).toContain('Held.');
     expect(text).toContain(

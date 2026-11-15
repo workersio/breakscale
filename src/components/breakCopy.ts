@@ -47,6 +47,12 @@ export function faultPhrase(a: Attack, names: Names): string {
       return `make ${names.node(a.target)} fail ${pct(a.rate)} of requests`;
     case 'cut':
       return `cut ${names.edge(a.target)}`;
+    case 'duplicate':
+      return `make ${names.edge(a.target)} deliver ${pct(a.rate)} of requests twice`;
+    case 'pause':
+      return `stall ${names.node(a.target)}`;
+    case 'cut-replies':
+      return `make ${names.edge(a.target)} lose its answers`;
   }
 }
 
@@ -303,6 +309,9 @@ export function evidenceSentence(v: Violation, names: Names): string {
   if (v.check === 'readYourWrites') {
     return `Request ${v.rid} read a record at ${names.node(v.nodeId)} at ${clock(v.readMs)}. The same client had been told at ${clock(v.savedMs)} that request ${v.wroteRid} saved a change to it, but the change only showed up in reads at ${clock(v.visibleMs)}, so the read got the old value.`;
   }
+  if (v.copy === 'disk') {
+    return `Request ${v.rid} was saved by ${names.node(v.nodeId)} at ${clock(v.bufferedMs)}, and the client was told so, but it was still in memory. It was lost when ${names.node(v.lostAt)} went down at ${clock(v.lostMs)}, before it reached disk.`;
+  }
   return `Request ${v.rid} was held in ${names.node(v.nodeId)} at ${clock(v.bufferedMs)}, and the client was told it was saved. It was lost ${lostHow(v.reason, names.node(v.lostAt))} at ${clock(v.lostMs)}, before it reached storage.`;
 }
 
@@ -335,6 +344,17 @@ function eventLine(e: TimelineEvent, names: Names, v?: Violation): TimelineLine 
       );
     case 'lost':
       return line(`${n(e.from)}'s call to ${n(e.to)} never arrives.`, 'lost');
+    case 'reply-lost':
+      return line(
+        e.ok
+          ? `${n(e.node)} answers, but the answer is lost on the way back to ${n(e.to)}.`
+          : `${n(e.node)} answers that it failed, but the answer is lost on the way back to ${n(e.to)}.`,
+        'lost',
+      );
+    case 'duplicate':
+      return line(
+        `The cable delivers ${n(e.from)}'s call to ${n(e.to)} a second time.`,
+      );
     case 'timeout':
       return line(
         `${n(e.node)} stops waiting for ${n(e.to)}. That try keeps running there.`,
@@ -359,11 +379,24 @@ function eventLine(e: TimelineEvent, names: Names, v?: Violation): TimelineLine 
           : `${n(e.node)} has done this request already, so it answers with the first result.`,
       );
     case 'buffered':
-      return line(`${n(e.node)} says it is saved, but only holds it in memory.`);
+      return line(
+        e.disk
+          ? `${n(e.node)} saves it and says so, but has not written it to disk yet.`
+          : `${n(e.node)} says it is saved, but only holds it in memory.`,
+      );
     case 'landed':
-      return line(`${n(e.node)}'s copy reaches storage.`);
+      return line(
+        e.disk
+          ? `${n(e.node)} writes it to disk.`
+          : `${n(e.node)}'s copy reaches storage.`,
+      );
     case 'dropped':
-      return line(`${n(e.node)}'s copy is lost ${lostHow(e.reason, n(e.at))}.`, 'lost');
+      return line(
+        e.disk
+          ? `${n(e.node)} goes down before writing it to disk, so it is lost.`
+          : `${n(e.node)}'s copy is lost ${lostHow(e.reason, n(e.at))}.`,
+        'lost',
+      );
     case 'answer':
       if (e.heard === 'client') {
         return line(
@@ -389,7 +422,20 @@ export function timelineWords(
   names: Names,
   v?: Violation,
 ): TimelineLine[] {
-  return tl.events.map((e) => eventLine(e, names, v));
+  // A try whose answer was lost has already finished, so when its caller
+  // gives up on it, it is not still running anywhere.
+  const answered = new Set<string>();
+  return tl.events.map((e) => {
+    if (e.type === 'reply-lost') answered.add(`${e.to}|${e.node}|${e.attempt}`);
+    if (e.type === 'timeout' && answered.has(`${e.node}|${e.to}|${e.attempt}`)) {
+      return {
+        t: e.t,
+        text: `${names.node(e.node)} stops waiting for ${names.node(e.to)}, never having heard back.`,
+        tag: null,
+      };
+    }
+    return eventLine(e, names, v);
+  });
 }
 
 /**
@@ -420,7 +466,7 @@ export const TRUNCATED_LINE =
  */
 export function nothingRetriesLine(charged: readonly string[], names: Names): string {
   const parts = listed(charged.map(names.node));
-  return `Nothing on the way to ${parts} sends a call again, so nothing can be charged twice. Turn on retries before it to test it.`;
+  return `Nothing on the way to ${parts} sends a call again, and no cable was tried delivering a call twice, so nothing tried could charge twice. Turn on retries before it, or let the search deliver requests twice, to test it.`;
 }
 
 /**

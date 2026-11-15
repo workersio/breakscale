@@ -365,6 +365,13 @@
   height: 32px;
 }
 
+/* A choice worded in a phrase ("Before it answers") rather than a number
+   takes the width of its longest option instead of clipping it. */
+.ins-number.is-phrase {
+  width: auto;
+  max-width: 100%;
+}
+
 /* A mixed multi-selection shows a placeholder rather than one node's value
    dressed up as everyone's. */
 .ins-number[data-mixed] {
@@ -1108,10 +1115,20 @@
 
 .ins-fault-cable {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-2);
   min-width: 0;
+}
+
+/* The cable faults beyond Cut, on their own line under the cable's name. */
+.ins-fault-cable-extras {
+  display: flex;
+  flex-wrap: wrap;
+  flex-basis: 100%;
+  justify-content: flex-end;
+  gap: var(--sp-2);
 }
 
 .ins-fault-cable .row-k {

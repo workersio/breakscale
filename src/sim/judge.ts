@@ -3,11 +3,13 @@
 // side reads that table before it exists.
 import { behaviourFor } from './behaviour';
 import { fleetBounds } from './behaviour-control';
-import { isRouteGoal, locksFor, splitLoad } from './challenge';
+import { isCorrectnessGoal, isRouteGoal, locksFor, splitLoad } from './challenge';
 import type { Challenge, Goal } from './challenge';
 import { Engine } from './engine';
 import { incidentById } from './incidents';
-import { sanitizeFaults } from './faults';
+import { faultTarget, sanitizeFaults } from './faults';
+import { checkAtMostOnce, checkLostAckedWrites, checkReadYourWrites } from './oplog';
+import type { OpLog, Violation } from './oplog';
 import { PRESETS, defaultConfig } from './presets';
 import type {
   FailureReason,
@@ -57,6 +59,12 @@ export const KEPT_UP_FLOOR = 0.98;
  * measured in it.
  */
 export const SETTLE_MS = 2000;
+/**
+ * Ms the check keeps playing after the window when a brief has a
+ * correctness goal, so a call its caller gave up on, or a retry of it, has
+ * finished before the calls are counted. "Can you break it?" waits as long.
+ */
+export const CORRECTNESS_SETTLE_MS = 5000;
 
 /** Why a design could not be put through the brief at all. */
 export type Unjudgeable =
@@ -132,6 +140,11 @@ export interface RunResult {
    * null when the design has no queue.
    */
   queueDepth: number | null;
+  /**
+   * The earliest thing a correctness check found, for the first correctness
+   * goal the run missed. Absent when it missed none.
+   */
+  evidence?: Violation;
   goals: GoalOutcome[];
   outcome: 'passed' | 'goal-missed' | 'nothing-completed' | 'falling-behind';
   /**
@@ -290,8 +303,7 @@ export function judgedTopology(
   const dropped: Unjudgeable[] = [];
   const faults = sanitizeFaults(wanted, loaded, (index, why) => {
     const f = wanted[index];
-    const target = f.action === 'cut' || f.action === 'restore' ? f.edgeId : f.nodeId;
-    dropped.push({ reason: 'fault-target-missing', target, why });
+    dropped.push({ reason: 'fault-target-missing', target: faultTarget(f), why });
   });
   const topology = faults.length > 0 ? { ...loaded, faults } : loaded;
   const unjudgeable: Unjudgeable | null = !loaded.nodes.some((n) => n.kind === 'client')
@@ -594,12 +606,23 @@ export function nearestRank(sorted: Float64Array, p: number): number | null {
   return sorted[rank - 1];
 }
 
+/** What a correctness check counted, by the goal's metric. */
+type Checked = Partial<
+  Record<'doubleCharges' | 'lostAckedWrites' | 'staleReads', CheckFound>
+>;
+
+interface CheckFound {
+  count: number;
+  first: Violation | undefined;
+}
+
 function measure(
   goal: Goal,
   run: Pick<
     RunResult,
     'p95' | 'p99' | 'loss' | 'lostWrites' | 'lostJobs' | 'queueDepth'
   >,
+  checked: Checked = {},
 ): number | null {
   switch (goal.metric) {
     case 'p99':
@@ -617,9 +640,34 @@ function measure(
     case 'doubleCharges':
     case 'lostAckedWrites':
     case 'staleReads':
-      // Read from the operation log, which the check does not keep.
-      return null;
+      // Read from the operation log, when the run kept one.
+      return checked[goal.metric]?.count ?? null;
   }
+}
+
+/**
+ * Run the correctness checks the goals name over requests sent in the
+ * window. A check is about every client's requests, so a correctness goal
+ * that names a route is read for the whole system.
+ */
+function runChecks(
+  goals: readonly Goal[],
+  log: OpLog,
+  fromMs: number,
+  toMs: number,
+): Checked {
+  const out: Checked = {};
+  for (const g of goals) {
+    if (!isCorrectnessGoal(g) || out[g.metric as keyof Checked] !== undefined) continue;
+    const found =
+      g.metric === 'doubleCharges'
+        ? checkAtMostOnce(log, fromMs, toMs)
+        : g.metric === 'lostAckedWrites'
+          ? checkLostAckedWrites(log, fromMs, toMs)
+          : checkReadYourWrites(log, fromMs, toMs);
+    out[g.metric as keyof Checked] = { count: found.count, first: found.violations[0] };
+  }
+  return out;
 }
 
 /**
@@ -708,7 +756,13 @@ export interface WindowFigures {
 export function measureWindow(
   goals: readonly Goal[],
   tally: RunTally,
-  extras: { writes: boolean; jobs: boolean; queueDepth: number | null },
+  extras: {
+    writes: boolean;
+    jobs: boolean;
+    queueDepth: number | null;
+    /** The run's operation log and its window, for correctness goals. */
+    log?: { log: OpLog; fromMs: number; toMs: number };
+  },
 ): WindowFigures {
   const lostWrites = extras.writes ? tally.writesAcked - tally.writesLanded : null;
   const lostJobs = extras.jobs ? tally.jobsFailed : null;
@@ -719,12 +773,19 @@ export function measureWindow(
   const p95 = nearestRank(sorted, 0.95);
   const p99 = nearestRank(sorted, 0.99);
   const loss = settled > 0 ? tally.failed / settled : null;
+  const at = extras.log;
+  const checked = at ? runChecks(goals, at.log, at.fromMs, at.toMs) : {};
   const outcomes = goals.map((goal) => {
-    const actual = isRouteGoal(goal)
-      ? measure(goal, routeFigures(tally.byRoute[goal.route]))
-      : measure(goal, { p95, p99, loss, lostWrites, lostJobs, queueDepth });
+    const actual =
+      isRouteGoal(goal) && !isCorrectnessGoal(goal)
+        ? measure(goal, routeFigures(tally.byRoute[goal.route]))
+        : measure(goal, { p95, p99, loss, lostWrites, lostJobs, queueDepth }, checked);
     return { goal, actual, met: actual !== null && actual <= goal.max };
   });
+  const missed = outcomes.find((g) => !g.met && isCorrectnessGoal(g.goal));
+  const evidence = missed
+    ? checked[missed.goal.metric as keyof Checked]?.first
+    : undefined;
   // The gates read what the goals read: when every goal names a client, a
   // backlog from some other client is not this run's failure.
   const gate = gateOf(goals, tally);
@@ -746,6 +807,7 @@ export function measureWindow(
     lostWrites,
     lostJobs,
     queueDepth,
+    ...(evidence !== undefined ? { evidence } : {}),
     goals: outcomes,
     outcome,
   };
@@ -785,9 +847,13 @@ export function* playRun(
   const endMs = warmupMs + windowMs;
   const writes = challenge.goals.some((g) => g.metric === 'lostWrites');
   const jobs = challenge.goals.some((g) => g.metric === 'lostJobs');
-  const settle = writes || jobs;
-  const lastMs = endMs + (settle ? SETTLE_MS : 0);
+  const correct = challenge.goals.some(isCorrectnessGoal);
+  const settle = writes || jobs || correct;
+  const lastMs = endMs + (correct ? CORRECTNESS_SETTLE_MS : settle ? SETTLE_MS : 0);
   const engine = new Engine(judged, seed);
+  // From the start: a request sent before the window can still be retried
+  // into it, and the log only knows requests sent while it runs.
+  if (correct) engine.startOpLog();
   yield* playTo(engine, warmupMs, frameMs, lastMs);
   engine.startTally();
   yield* playTo(engine, endMs, frameMs, lastMs);
@@ -797,7 +863,13 @@ export function* playRun(
   const tally = engine.readTally();
   // Started just above, and only reset() clears one.
   if (tally === null) throw new Error('tally missing after a run');
-  const m = measureWindow(challenge.goals, tally, { writes, jobs, queueDepth });
+  const log = correct ? engine.readOpLog() : null;
+  const m = measureWindow(challenge.goals, tally, {
+    writes,
+    jobs,
+    queueDepth,
+    ...(log !== null ? { log: { log, fromMs: warmupMs, toMs: endMs } } : {}),
+  });
   return {
     seed,
     arrived: tally.arrived,

@@ -1,8 +1,14 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { takesCorrectness } from '../sim/behaviour';
-import { HARDER_BUDGET, replayOf, retriesTowardCharges } from '../sim/breakit';
+import {
+  HARDER_BUDGET,
+  kindFits,
+  replayOf,
+  retriesTowardCharges,
+} from '../sim/breakit';
 import type { Attack, AttackKind, BreakOptions, SearchProgress } from '../sim/breakit';
+import { isCorrectnessGoal } from '../sim/challenge';
 import type { Goal } from '../sim/challenge';
 import type { Violation } from '../sim/oplog';
 import type { SimNode, Topology } from '../sim/types';
@@ -65,6 +71,9 @@ const KIND_LABEL: Record<AttackKind, string> = {
   slow: 'Slowdowns',
   errors: 'Glitches (errors)',
   cut: 'Cut cables',
+  duplicate: 'Requests delivered twice',
+  pause: 'Stalls (a process pauses)',
+  'cut-replies': 'Answers lost on the way back',
 };
 
 /** A template's name in the radio group. */
@@ -523,19 +532,33 @@ function Picking({
               <li key={line}>{line}</li>
             ))}
           </ul>
-          <p className="chal-note">
-            Each of these is a single point of failure: lose one and that traffic has
-            nowhere to go, which breaks any goal. So the search only slows them and
-            takes down single machines.
-          </p>
-          <label className="brk-check">
-            <input
-              type="checkbox"
-              checked={opts.includeSinglePoints}
-              onChange={(e) => set({ includeSinglePoints: e.currentTarget.checked })}
-            />
-            Crash and cut them too
-          </label>
+          {isCorrectnessGoal(search.goal) ? (
+            // An outage cannot break a goal about the data, and a crash of the
+            // one store is how its writes get lost, so nothing is spared.
+            <p className="chal-note">
+              Each of these is a single point of failure. This goal is about the data,
+              not about staying up, so the search crashes and cuts them like any other
+              part.
+            </p>
+          ) : (
+            <>
+              <p className="chal-note">
+                Each of these is a single point of failure: lose one and that traffic
+                has nowhere to go, which breaks any goal. So the search only slows them
+                and takes down single machines.
+              </p>
+              <label className="brk-check">
+                <input
+                  type="checkbox"
+                  checked={opts.includeSinglePoints}
+                  onChange={(e) =>
+                    set({ includeSinglePoints: e.currentTarget.checked })
+                  }
+                />
+                Crash and cut them too
+              </label>
+            </>
+          )}
         </div>
       ) : null}
 
@@ -543,16 +566,18 @@ function Picking({
         <summary>What can go wrong</summary>
         <fieldset className="brk-kinds">
           <legend className="sr-only">Kinds of fault</legend>
-          {(Object.keys(KIND_LABEL) as AttackKind[]).map((k) => (
-            <label key={k} className="brk-check">
-              <input
-                type="checkbox"
-                checked={opts.kinds.includes(k)}
-                onChange={() => toggleKind(k)}
-              />
-              {KIND_LABEL[k]}
-            </label>
-          ))}
+          {(Object.keys(KIND_LABEL) as AttackKind[])
+            .filter((k) => kindFits(k, search.goal))
+            .map((k) => (
+              <label key={k} className="brk-check">
+                <input
+                  type="checkbox"
+                  checked={opts.kinds.includes(k)}
+                  onChange={() => toggleKind(k)}
+                />
+                {KIND_LABEL[k]}
+              </label>
+            ))}
         </fieldset>
         <label className="brk-check">
           Up to{' '}
@@ -589,7 +614,7 @@ function Picking({
         <button
           type="button"
           className="btn btn-sm btn-primary"
-          disabled={opts.kinds.length === 0 || unmarked}
+          disabled={!opts.kinds.some((k) => kindFits(k, search.goal)) || unmarked}
           onClick={() => search.start()}
         >
           Try to break it
@@ -761,7 +786,9 @@ function Verdict({
           {triedLine(r.bySize)} Each landed between 10s and 15s, and the goal was
           measured from 5s to 35s on three runs of traffic.
         </p>
-        {view.goal.metric === 'doubleCharges' && !retriesTowardCharges(view.design) ? (
+        {view.goal.metric === 'doubleCharges' &&
+        !r.triedDuplicates &&
+        !retriesTowardCharges(view.design) ? (
           <p className="chal-note">
             {nothingRetriesLine(
               view.design.nodes
@@ -903,9 +930,9 @@ function GoalTerms({ metric }: { metric: Goal['metric'] }) {
         A payment charged twice breaks the <Term id="at-most-once">at most once</Term>{' '}
         rule. It happens when a call that already charged looks failed to its caller,
         after a <Term id="timeout">timeout</Term> or an error further on, and the{' '}
-        <Term id="retry">retry</Term> charges again. An{' '}
-        <Term id="idempotency-key">idempotency key</Term> on the part that charges is
-        the usual fix.
+        <Term id="retry">retry</Term> charges again, or when the network delivers the
+        same call twice. An <Term id="idempotency-key">idempotency key</Term> on the
+        part that charges is the usual fix.
       </p>
     );
   }

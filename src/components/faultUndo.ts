@@ -46,6 +46,22 @@ export type FaultChange =
       made: FaultEvent | null;
     }
   | {
+      target: 'replies';
+      id: string;
+      /** Losing its answers before and after. */
+      before: boolean;
+      after: boolean;
+      made: FaultEvent | null;
+    }
+  | {
+      target: 'dup';
+      id: string;
+      /** The share it delivered twice before and after, or null for none. */
+      before: number | null;
+      after: number | null;
+      made: FaultEvent | null;
+    }
+  | {
       /** Forget saved faults: the list as it was, emptied. */
       target: 'schedule';
       before: FaultEvent[];
@@ -60,8 +76,13 @@ export type FaultUndoEngine = FaultEngine & {
 export type FaultDirection = 'undo' | 'redo';
 
 /** Toast words, read after "Undid" or "Redid". */
-const INJECT_LABEL: Record<'crash' | 'crash-instance' | 'slow' | 'errors', string> = {
+const INJECT_LABEL: Record<
+  'crash' | 'crash-instance' | 'slow' | 'errors' | 'restart' | 'pause',
+  string
+> = {
   crash: 'crash',
+  restart: 'restart',
+  pause: 'stall',
   'crash-instance': 'crash one instance',
   slow: 'slow down',
   errors: 'glitch',
@@ -73,6 +94,8 @@ function nodeFaultOf(f: ActiveFailure | undefined): NodeFault | null {
   if (f.factor !== undefined) opts.factor = f.factor;
   if (f.rate !== undefined) opts.rate = f.rate;
   if (f.edgeIds !== undefined) opts.edgeIds = f.edgeIds.slice();
+  if (f.downMs !== undefined) opts.downMs = f.downMs;
+  if (f.pauseMs !== undefined) opts.pauseMs = f.pauseMs;
   return { kind: f.kind, opts };
 }
 
@@ -84,10 +107,21 @@ function liveEdge(engine: FaultUndoEngine, id: string): boolean {
   return engine.activeCuts().includes(id);
 }
 
+function liveReplies(engine: FaultUndoEngine, id: string): boolean {
+  return engine.activeReplyCuts().some((r) => r.edgeId === id);
+}
+
+function liveDup(engine: FaultUndoEngine, id: string): number | null {
+  return engine.activeDuplicates().find((d) => d.edgeId === id)?.rate ?? null;
+}
+
 function sameNodeFault(a: NodeFault | null, b: NodeFault | null): boolean {
   if (a === null || b === null) return a === b;
   if (a.kind !== b.kind) return false;
   if (a.opts.factor !== b.opts.factor || a.opts.rate !== b.opts.rate) return false;
+  if (a.opts.downMs !== b.opts.downMs || a.opts.pauseMs !== b.opts.pauseMs) {
+    return false;
+  }
   const xs = a.opts.edgeIds ?? [];
   const ys = b.opts.edgeIds ?? [];
   return xs.length === ys.length && xs.every((x, i) => x === ys[i]);
@@ -129,13 +163,19 @@ function indexOfEvent(schedule: FaultEvent[], made: FaultEvent): number {
 function recordState(
   engine: FaultUndoEngine,
   change: Exclude<FaultChange, { target: 'schedule' }>,
-  to: NodeFault | null | boolean,
+  to: NodeFault | null | boolean | number,
 ): FaultEvent | null {
   const before = engine.faultSchedule();
   if (change.target === 'node') {
     const want = to as NodeFault | null;
     if (want === null) engine.recordClearFailure(change.id);
     else engine.recordFailure(change.id, want.kind, want.opts);
+  } else if (change.target === 'dup') {
+    if (typeof to === 'number') engine.recordDuplicateEdge(change.id, to);
+    else engine.recordUndupEdge(change.id);
+  } else if (change.target === 'replies') {
+    if (to === true) engine.recordCutReplies(change.id);
+    else engine.recordRestoreReplies(change.id);
   } else if (to === true) {
     engine.recordCutEdge(change.id);
   } else {
@@ -167,7 +207,11 @@ export function applyFaultChange(
   const live =
     change.target === 'node'
       ? liveNode(engine, change.id)
-      : liveEdge(engine, change.id);
+      : change.target === 'dup'
+        ? liveDup(engine, change.id)
+        : change.target === 'replies'
+          ? liveReplies(engine, change.id)
+          : liveEdge(engine, change.id);
   const atFrom =
     change.target === 'node'
       ? sameNodeFault(live as NodeFault | null, from as NodeFault | null)
@@ -253,12 +297,40 @@ export function undoableFaultActions(
     if (!made) return;
     onEntry(label, { target: 'edge', id, before, after: liveEdge(engine, id), made });
   };
+  const replies = (label: string, id: string, act: () => void) => {
+    const before = liveReplies(engine, id);
+    const schedule = engine.faultSchedule();
+    act();
+    const made = writtenEntry(schedule, engine.faultSchedule());
+    if (!made) return;
+    onEntry(label, {
+      target: 'replies',
+      id,
+      before,
+      after: liveReplies(engine, id),
+      made,
+    });
+  };
+  const dup = (label: string, id: string, act: () => void) => {
+    const before = liveDup(engine, id);
+    const schedule = engine.faultSchedule();
+    act();
+    const made = writtenEntry(schedule, engine.faultSchedule());
+    if (!made) return;
+    onEntry(label, { target: 'dup', id, before, after: liveDup(engine, id), made });
+  };
   return {
     onInject: (id, kind, opts) =>
       node(INJECT_LABEL[kind], id, () => actions.onInject(id, kind, opts)),
     onFix: (id) => node('fix', id, () => actions.onFix(id)),
     onCut: (id) => edge('cable cut', id, () => actions.onCut(id)),
     onRestore: (id) => edge('cable restore', id, () => actions.onRestore(id)),
+    onDuplicate: (id, rate) =>
+      dup('deliver twice', id, () => actions.onDuplicate(id, rate)),
+    onUndup: (id) => dup('deliver once', id, () => actions.onUndup(id)),
+    onCutReplies: (id) => replies('answer cut', id, () => actions.onCutReplies(id)),
+    onRestoreReplies: (id) =>
+      replies('answer restore', id, () => actions.onRestoreReplies(id)),
     onForget: () => {
       const before = engine.faultSchedule();
       actions.onForget();

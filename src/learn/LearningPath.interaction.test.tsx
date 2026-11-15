@@ -136,7 +136,7 @@ describe('the learning path', () => {
     const d = openPath();
     expect(document.activeElement?.textContent).toBe('Open Single server');
     expect(d.querySelector('.ex-sub')?.textContent).toBe(
-      'Every example and challenge in an order that builds up. You have done 0 of 36.',
+      'Every example and challenge in an order that builds up. You have done 0 of 42.',
     );
     expect(d.querySelector('.lp-step[data-next] .lp-status')?.textContent).toBe(
       'Up next',

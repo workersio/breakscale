@@ -201,17 +201,15 @@ describe('verify: lostAckedWrites', () => {
   it('finds the smallest schedule, and the lost write can be followed', () => {
     const v = verify(writeBehind(), GOAL);
     if (v.status !== 'broken') throw new Error(`expected broken, got ${v.status}`);
-    // Every request passes through the cache, so by default the search
-    // leaves it whole and cuts its flushes off instead.
-    expect(v.schedule).toEqual([
-      { kind: 'cut', target: 'buf->db', atMs: 10_000, forMs: 500 },
-    ]);
+    // Every request passes through the cache, but an outage cannot break a
+    // goal about the data, so the search crashes it like any other part.
+    expect(v.schedule).toEqual([crash('buf')]);
     expect(v.minimal).toBe(true);
-    expect(v.measured.actual).toBe(60);
+    expect(v.measured.actual).toBe(25);
     expect(v.withoutFaults.actual).toBe(0);
     const first = v.first;
     if (first?.check !== 'lostAckedWrite') throw new Error('no first lost write');
-    expect(first.reason).toBe('partitioned');
+    expect(first.reason).toBe('crashed');
     const tl = followRequest(v.replay, first.rid);
     if (tl === null) throw new Error('request not found');
     const story = tl.events.flatMap((e) =>
@@ -228,11 +226,15 @@ describe('verify: lostAckedWrites', () => {
     ]);
   });
 
-  it('crashes the cache itself when single points are allowed', () => {
-    const v = verify(writeBehind(), GOAL, { includeSinglePoints: true });
+  it('cuts the flushes off when only cuts are on the list', () => {
+    const v = verify(writeBehind(), GOAL, { kinds: ['cut'] });
     if (v.status !== 'broken') throw new Error(`expected broken, got ${v.status}`);
-    expect(v.schedule).toEqual([crash('buf')]);
-    expect(v.measured.actual).toBe(25);
+    expect(v.schedule).toEqual([
+      { kind: 'cut', target: 'buf->db', atMs: 10_000, forMs: 500 },
+    ]);
+    expect(v.measured.actual).toBe(60);
+    if (v.first?.check !== 'lostAckedWrite') throw new Error('no first lost write');
+    expect(v.first.reason).toBe('partitioned');
   });
 
   it('gives the same verdict every time', () => {

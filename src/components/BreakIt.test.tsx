@@ -561,7 +561,12 @@ describe('BreakPanel: correctness goals', () => {
             : n,
       ),
     };
-    const result = runSearch(noRetry, once, { ...DEFAULT_OPTIONS, budget: 5 });
+    // With cables delivering twice left out: a duplicate needs no retry.
+    const result = runSearch(noRetry, once, {
+      ...DEFAULT_OPTIONS,
+      kinds: DEFAULT_OPTIONS.kinds.filter((k) => k !== 'duplicate'),
+      budget: 5,
+    });
     if (result.status !== 'held')
       throw new Error(`expected held, got ${result.status}`);
     render(

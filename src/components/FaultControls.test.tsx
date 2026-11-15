@@ -285,7 +285,14 @@ describe('fault controls on a selected node', () => {
     const names = [...container.querySelectorAll('.ins-fault-cable button')].map((b) =>
       b.getAttribute('aria-label'),
     );
-    expect(names).toEqual(['Cut cable from API Server', 'Cut cable to Payments API']);
+    expect(names).toEqual([
+      'Cut cable from API Server',
+      'Duplicate 5% of requests from API Server',
+      'Cut answers only from API Server',
+      'Cut cable to Payments API',
+      'Duplicate 5% of requests to Payments API',
+      'Cut answers only to Payments API',
+    ]);
 
     press(button('Cut cable to Payments API'));
     expect(engine.activeCuts()).toEqual(['breaker->payments']);
@@ -427,7 +434,8 @@ describe('forgetting the saved faults', () => {
     forget.focus();
     press(forget);
     expect(engine.faultSchedule()).toEqual([]);
-    expect(document.activeElement).toBe(button('Restore'));
+    // The control just above the row it removes: the cable's last one.
+    expect(document.activeElement).toBe(button('Cut answers only'));
   });
 });
 

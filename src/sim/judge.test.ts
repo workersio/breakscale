@@ -1483,6 +1483,142 @@ const FIXTURES: Record<string, BriefFixtures> = {
       ),
     ],
   },
+  'charged-twice': {
+    answers: [
+      fx('keys at Payments', set('pay', { idempotencyKeys: 1 })),
+      fx(
+        'keys at Payments and the API',
+        all(set('pay', { idempotencyKeys: 1 }), set('api', { idempotencyKeys: 1 })),
+      ),
+      fx(
+        'keys at Payments, with more of its slots',
+        all(set('pay', { idempotencyKeys: 1 }), set('pay', { capacity: 24 })),
+      ),
+    ],
+    wrong: [
+      fx('keys at the API', set('api', { idempotencyKeys: 1 })),
+      fx('no retries', set('api', { retries: 0 })),
+      fx('one retry', set('api', { retries: 1 })),
+      fx('Payments with twice the slots', set('pay', { capacity: 24 })),
+      fx('a deeper line at Payments', set('pay', { queueLimit: 512 })),
+      fx(
+        'a breaker in front of Payments',
+        between('api', 'pay', 'breaker', { capacity: 256 }),
+      ),
+    ],
+    exploits: [
+      ...aroundEveryBrief(),
+      fx('the API waiting 3s, put back', set('api', { timeoutMs: 3000 })),
+      fx('Payments charging nothing, put back', set('pay', { chargeable: 0 })),
+      fx('Payments never failing, put back', set('pay', { errorRate: 0 })),
+      fx(
+        'the stall ended by the reader',
+        userFault({ atMs: 30_001, action: 'clear', nodeId: 'pay' }),
+      ),
+      fx('Payments deleted', remove('pay')),
+    ],
+  },
+  'lost-on-the-way-back': {
+    answers: [
+      fx('keys at Payments', set('pay', { idempotencyKeys: 1 })),
+      fx(
+        'keys at Payments and the API',
+        all(set('pay', { idempotencyKeys: 1 }), set('api', { idempotencyKeys: 1 })),
+      ),
+    ],
+    wrong: [
+      fx('keys at the API', set('api', { idempotencyKeys: 1 })),
+      fx('no retries', set('api', { retries: 0 })),
+      fx('five retries', set('api', { retries: 5 })),
+      fx('Payments with twice the slots', set('pay', { capacity: 24 })),
+      fx('the API with twice the slots', set('api', { capacity: 128 })),
+    ],
+    exploits: [
+      ...aroundEveryBrief(),
+      fx('the API waiting 3s, put back', set('api', { timeoutMs: 3000 })),
+      fx('Payments charging nothing, put back', set('pay', { chargeable: 0 })),
+      fx(
+        'the answers let back by the reader',
+        userFault({ atMs: 30_001, action: 'restore-replies', edgeId: 'api->pay' }),
+      ),
+      fx('Payments deleted', remove('pay')),
+    ],
+  },
+  'sent-twice': {
+    answers: [
+      fx('keys at Payments', set('pay', { idempotencyKeys: 1 })),
+      fx(
+        'keys at Payments, with no retries',
+        all(set('pay', { idempotencyKeys: 1 }), set('api', { retries: 0 })),
+      ),
+    ],
+    wrong: [
+      fx('keys at the API', set('api', { idempotencyKeys: 1 })),
+      fx('no retries', set('api', { retries: 0 })),
+      fx('the API waiting 3s', set('api', { timeoutMs: 3000 })),
+      fx('Payments with twice the slots', set('pay', { capacity: 24 })),
+    ],
+    exploits: [
+      ...aroundEveryBrief(),
+      fx('Payments charging nothing, put back', set('pay', { chargeable: 0 })),
+      fx(
+        'the copies stopped by the reader',
+        userFault({ atMs: 20_001, action: 'undup', edgeId: 'api->pay' }),
+      ),
+      fx('Payments deleted', remove('pay')),
+    ],
+  },
+  'saved-then-gone': {
+    answers: [
+      fx('on disk before it answers', set('orders', { flushEveryMs: undefined })),
+      fx(
+        'on disk before it answers, with more slots',
+        set('orders', { flushEveryMs: undefined, capacity: 16 }),
+      ),
+    ],
+    wrong: [
+      fx('on disk within 10ms', set('orders', { flushEveryMs: 10 })),
+      fx('on disk within 100ms', set('orders', { flushEveryMs: 100 })),
+      fx('two machines for Orders DB', set('orders', { instances: 2 })),
+      fx('Orders DB with twice the slots', set('orders', { capacity: 16 })),
+      fx('keys at Orders DB', set('orders', { idempotencyKeys: 1 })),
+      fx('no retries', set('api', { retries: 0 })),
+    ],
+    exploits: [
+      ...aroundEveryBrief(),
+      fx(
+        'a write-behind cache in front of Orders DB',
+        between('api', 'orders', 'writebehind'),
+      ),
+      fx(
+        'the restart ended by the reader',
+        userFault({ atMs: 30_001, action: 'clear', nodeId: 'orders' }),
+      ),
+      fx('Orders DB deleted', remove('orders')),
+    ],
+  },
+  'read-your-own-write': {
+    answers: [
+      fx('reads from the primary while behind', set('replicas', { freshReads: 1 })),
+      fx(
+        'reads from the primary while behind, with a fourth copy',
+        set('replicas', { freshReads: 1, replicaCount: 4 }),
+      ),
+    ],
+    wrong: [
+      fx('six copies', set('replicas', { replicaCount: 6 })),
+      fx('bigger copies', set('replicas', { capacity: 8 })),
+      fx('a deeper line', set('replicas', { queueLimit: 1000 })),
+      fx('api retries twice after 200ms', set('api', { retries: 2, timeoutMs: 200 })),
+    ],
+    exploits: [
+      ...aroundEveryBrief(),
+      fx('no replication lag, put back', set('replicas', { replicationLagMs: 0 })),
+      fx('every request a read, put back', set('replicas', { readFraction: 1 })),
+      fx('a cache in front of the copies', between('api', 'replicas', 'cache')),
+      fx('replica set deleted', remove('replicas')),
+    ],
+  },
   'loud-and-quiet': {
     answers: [
       fx(

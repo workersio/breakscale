@@ -1,9 +1,11 @@
 import {
   behaviourFor,
   canCrashOneInstance,
+  flushesLater,
   type ComponentBehaviour,
 } from './behaviour';
 import type { BehaviourCtx, NodeStateLike, ReqLike } from './engine-types';
+import { UnflushedWrites } from './durability';
 import { MinHeap, type Timed } from './heap';
 import { OpLogRecorder, type OpLog, type OpLogOptions } from './oplog';
 import { cos, exp, pow } from './fdlibm';
@@ -12,7 +14,10 @@ import { Rng } from './random';
 import { DEFAULT_SEED, sanitizeSeed } from './seed';
 import { DEFAULT_TRAFFIC_PERIOD_S } from './types';
 import type {
+  ActiveDuplicate,
   ActiveFailure,
+  ActiveReplyCut,
+  StrandedReplies,
   EdgeState,
   FailureCounts,
   FailureKind,
@@ -43,6 +48,10 @@ import type {
 const MAX_DELTA_MS = 100;
 /** Hard ceiling on events processed per advance() call. */
 const MAX_EVENTS_PER_ADVANCE = 60000;
+/** How long a 'restart' with no `downMs` of its own stays down. */
+export const RESTART_DOWN_MS = 2000;
+/** How long a 'pause' with no `pauseMs` of its own lasts. */
+export const PAUSE_MS = 2000;
 /** Hop-depth ceiling; deeper resolves as FailureReason 'depth'. */
 const MAX_HOP_DEPTH = 32;
 /**
@@ -119,6 +128,17 @@ const EV_RETRY = 4;
 const EV_LINK_ARRIVE = 5;
 /** A timer owned by a behaviour for a request it held at admission. */
 const EV_BEHAVIOUR_WAKE = 6;
+/**
+ * A 'restart' or 'pause' fault ends by itself: the node starts again, or
+ * carries on. `token` names the fault.
+ */
+const EV_FAULT_ENDS = 7;
+/** A request that reached a paused node, let in now that it carries on. */
+const EV_PAUSE_ADMIT = 8;
+/** An answer that reached a paused caller, handed to it now that it carries on. */
+const EV_PAUSE_ANSWER = 9;
+/** An event moved to a later time, left in the heap to be skipped. */
+const EV_MOVED = 10;
 
 interface Ev extends Timed {
   time: number;
@@ -239,6 +259,12 @@ interface Req {
   /** Guards double resolution. */
   resolved: boolean;
   /**
+   * Its answer was lost on a cable that drops replies. Resolved, but its
+   * caller still waits, so it is kept until the caller's timeout fires and
+   * recycled there.
+   */
+  replyLost: boolean;
+  /**
    * Partition / cache key this request concerns. Drawn once by the client
    * from `KEYSPACE` and inherited unchanged by every downstream call, so a
    * shard or replica set several hops away partitions on the key the client
@@ -247,6 +273,11 @@ interface Req {
   key: number;
   /** True when this request is a write. Classified once, inherited downstream. */
   isWrite: boolean;
+  /**
+   * True on a read a replica set sent to its primary because the replicas
+   * had not caught up on its key. Never inherited.
+   */
+  fromPrimary: boolean;
   /**
    * The logical request this call belongs to, set by the client and kept by
    * every child call, retry and relayed copy. A counter, never drawn, so the
@@ -506,6 +537,13 @@ class LatencyRing {
   }
 }
 
+/** The snapshot's stranded field, absent when the list came back empty. */
+function strandedField(list: StrandedReplies[]): {
+  repliesStranded?: StrandedReplies[];
+} {
+  return list.length > 0 ? { repliesStranded: list } : {};
+}
+
 function quantile(sorted: Float64Array, n: number, q: number): number {
   if (n === 1) return sorted[0];
   const pos = q * (n - 1);
@@ -651,6 +689,42 @@ interface Fault {
   rate: number;
   /** 'partition': edge ids cut. Empty means "every edge leaving the node". */
   edgeIds: string[];
+  /** 'restart': ms it stays down. */
+  downMs: number;
+  /** 'pause': ms it stops for. */
+  pauseMs: number;
+  /** 'restart' and 'pause': the token of the event that ends it. */
+  upToken: number;
+  /** 'pause': what the node did not do while stopped, or null otherwise. */
+  pause: PauseState | null;
+}
+
+/**
+ * Everything that happened to a paused node while it was stopped, in the
+ * order it happened, for it to deal with when it carries on: its own events
+ * (work finishing, timers), requests that reached it, and answers to its own
+ * calls. Only a paused node has one, so a run without the fault builds none.
+ */
+interface PauseState {
+  /** When it stopped. */
+  startMs: number;
+  parked: ParkedEv[];
+  /** How many of `parked` are requests waiting to be let in. */
+  waiting: number;
+}
+
+interface ParkedEv {
+  kind: number;
+  /** When it was due. */
+  time: number;
+  req: Req | null;
+  token: number;
+  /** EV_PAUSE_ANSWER only: the call's caller, and what the call said. */
+  parent: Req | null;
+  parentToken: number;
+  ok: boolean;
+  reason: FailureReason;
+  latencyMs: number;
 }
 
 /* ------------------------------------------------------------------ *
@@ -824,6 +898,14 @@ interface NodeState {
   num: number;
   /** The keys of calls this node has seen, or null unless it keeps idempotency keys. */
   dedupe: IdempotencyKeys | null;
+  /**
+   * Writes this store has said are saved that may not be on disk yet, each
+   * with the tally that counted it. Null until its first write with
+   * `flushEveryMs` above 0.
+   */
+  unflushed: UnflushedWrites<Tally> | null;
+  /** Writes lost from memory the last time the whole store went down. */
+  lostInLastCrash: number;
 }
 
 /* ------------------------------------------------------------------ *
@@ -871,6 +953,24 @@ export class Engine implements BehaviourCtx {
   private tallyStopped: Tally | null = null;
   /** The operation log, or null, tested the same way the tally is. */
   private opLog: OpLogRecorder | null = null;
+  /** The store whose crash `loseWrite` is reporting. */
+  private losingAt = '';
+  /**
+   * What becomes of a write a store held in memory: on disk at `dueMs`, or
+   * lost with the store. Made once, so settling a list allocates nothing.
+   */
+  private readonly landWrite = (
+    dueMs: number,
+    rid: number,
+    copy: number,
+    tally: Tally | null,
+  ): void => {
+    if (tally !== null) tally.writesLanded++;
+    if (copy >= 0) this.opLog?.onDisk(copy, rid, dueMs);
+  };
+  private readonly loseWrite = (rid: number, copy: number): void => {
+    if (copy >= 0) this.opLog?.lostFromMemory(copy, rid, this.now, this.losingAt);
+  };
   /** The last request id handed out. */
   private ridSeq = 0;
   /** The last NodeState number handed out. */
@@ -909,6 +1009,29 @@ export class Engine implements BehaviourCtx {
    * one Set and never learns which of the two cut the wire.
    */
   private severed = new Set<string>();
+  /**
+   * Edges handing some of their requests over twice, by edge id. Empty on
+   * every run without the fault, so the send path pays one size check for
+   * it and draws nothing.
+   */
+  private dupEdges = new Map<string, ActiveDuplicate>();
+  /** Edges losing every answer back across them, by edge id, tested like `dupEdges`. */
+  private replyCut = new Map<string, ActiveReplyCut>();
+  /**
+   * Callers left waiting for good on an answer one of those edges lost,
+   * by edge id: their caller has no timeout, so nothing ends the wait and
+   * the cut outlives its restore. Each entry keeps the waiting request and
+   * its token, so one a crash freed, or the pool reused, is not counted.
+   * Empty on every run without the fault.
+   */
+  private stranded = new Map<string, { req: Req; token: number }[]>();
+  /**
+   * How many nodes are paused. Zero on every run without the fault, so the
+   * event loop and the answer path pay one number comparison for it.
+   */
+  private pausedCount = 0;
+  /** Answers a paused caller is about to be handed, by the call that gave them. */
+  private pausedAnswers = new Map<Req, ParkedEv>();
 
   /**
    * The fault schedule, sorted by `atMs` (stable, so entries sharing a time
@@ -1035,6 +1158,9 @@ export class Engine implements BehaviourCtx {
         (fault.kind === 'crash-instance' && !canCrashOneInstance(state.kind))
       ) {
         this.faults.delete(nodeId);
+        // What it held while stopped goes back on the queue, where a node
+        // that is gone answers each one as gone.
+        if (fault.pause !== null) this.endPause(nodeId, fault);
         droppedNodes.push(nodeId);
       }
     }
@@ -1056,6 +1182,26 @@ export class Engine implements BehaviourCtx {
         if (!edgeIds.has(id)) {
           this.severed.delete(id);
           droppedEdges.push(id);
+        }
+      }
+    }
+    const droppedDups: string[] = [];
+    if (this.dupEdges.size > 0) {
+      const edgeIds = new Set(this.topology.edges.map((e) => e.id));
+      for (const id of [...this.dupEdges.keys()]) {
+        if (!edgeIds.has(id)) {
+          this.dupEdges.delete(id);
+          droppedDups.push(id);
+        }
+      }
+    }
+    const droppedReplyCuts: string[] = [];
+    if (this.replyCut.size > 0) {
+      const edgeIds = new Set(this.topology.edges.map((e) => e.id));
+      for (const id of [...this.replyCut.keys()]) {
+        if (!edgeIds.has(id)) {
+          this.replyCut.delete(id);
+          droppedReplyCuts.push(id);
         }
       }
     }
@@ -1103,6 +1249,16 @@ export class Engine implements BehaviourCtx {
     for (const edgeId of droppedEdges) {
       if (this.playedLast(edgeId, 'edge') === 'cut') {
         this.appendRecorded({ atMs: this.now, action: 'restore', edgeId });
+      }
+    }
+    for (const edgeId of droppedDups) {
+      if (this.playedLast(edgeId, 'dup') === 'duplicate') {
+        this.appendRecorded({ atMs: this.now, action: 'undup', edgeId });
+      }
+    }
+    for (const edgeId of droppedReplyCuts) {
+      if (this.playedLast(edgeId, 'replies') === 'cut-replies') {
+        this.appendRecorded({ atMs: this.now, action: 'restore-replies', edgeId });
       }
     }
 
@@ -1179,6 +1335,12 @@ export class Engine implements BehaviourCtx {
     if (!state) return false;
     if (kind === 'crash-instance' && !canCrashOneInstance(state.kind)) return false;
 
+    // A new fault replaces a pause, so the node carries on first and then
+    // takes the new one, the way a stalled process is still a process.
+    const prev = this.faults.get(nodeId);
+    const wasPaused = prev !== undefined && prev.pause !== null;
+    if (wasPaused) this.endPause(nodeId, prev);
+
     const fault: Fault = {
       kind,
       sinceMs: this.now,
@@ -1186,6 +1348,16 @@ export class Engine implements BehaviourCtx {
       factor: opts.factor !== undefined && opts.factor > 1 ? opts.factor : 1,
       rate: opts.rate !== undefined ? clamp01(opts.rate) : 1,
       edgeIds: opts.edgeIds ? opts.edgeIds.slice() : [],
+      downMs:
+        kind === 'restart' && opts.downMs !== undefined && opts.downMs > 0
+          ? opts.downMs
+          : RESTART_DOWN_MS,
+      pauseMs:
+        kind === 'pause' && opts.pauseMs !== undefined && opts.pauseMs > 0
+          ? opts.pauseMs
+          : PAUSE_MS,
+      upToken: -1,
+      pause: null,
     };
     this.faults.set(nodeId, fault);
     state.instancesDown = kind === 'crash-instance' ? 1 : 0;
@@ -1195,20 +1367,165 @@ export class Engine implements BehaviourCtx {
     // Without this the node would keep answering for one service time after
     // being killed, and a student watching the graph would see the failure
     // arrive late for no visible reason.
-    if (kind === 'crash') this.killInFlight(nodeId);
+    if (kind === 'crash' || kind === 'restart') this.killInFlight(nodeId);
     else if (kind === 'crash-instance') this.killOneInstance(state);
+    // A restart brings itself back. The event's token is its own sequence
+    // number, so a restart that a Fix or a later fault replaced is not
+    // healed by the event the first one left behind.
+    if (kind === 'restart') {
+      fault.upToken = this.seq;
+      this.push(this.now + fault.downMs, EV_FAULT_ENDS, nodeId, null, fault.upToken);
+    } else if (kind === 'pause') {
+      fault.pause = { startMs: this.now, parked: [], waiting: 0 };
+      this.pausedCount++;
+      fault.upToken = this.seq;
+      this.push(this.now + fault.pauseMs, EV_FAULT_ENDS, nodeId, null, fault.upToken);
+    } else if (wasPaused) {
+      // Work that waited in line through the pause can start now.
+      this.pumpQueue(state);
+    }
     return true;
   }
 
   /** Heal a node. Work that already failed stays failed; new work succeeds. */
   clearFailure(nodeId: string): void {
-    if (!this.faults.delete(nodeId)) return;
+    const fault = this.faults.get(nodeId);
+    if (fault === undefined) return;
+    this.faults.delete(nodeId);
+    if (fault.pause !== null) this.endPause(nodeId, fault);
     this.rebuildCutEdges();
     const state = this.nodes.get(nodeId);
     if (!state) return;
     state.instancesDown = 0;
     // A healed node may have callers' work waiting on it right now.
     this.pumpQueue(state);
+  }
+
+  /**
+   * A paused node carries on. Work that was in service when it stopped
+   * finishes as late as the pause was long, having done none of it in
+   * between. Everything it did not do while stopped happens now, in the
+   * order it came: its timers fire (a timeout that came due is overdue, not
+   * owed), the requests that reached it are let in, and the answers to its
+   * calls are handed over. Each goes back on the event queue rather than
+   * running here, so it lands after whatever ended the pause, and a node
+   * crashed by that fault sees each one as a crashed node would. Draws
+   * nothing.
+   */
+  private endPause(nodeId: string, fault: Fault): void {
+    const pause = fault.pause;
+    if (pause === null) return;
+    fault.pause = null;
+    this.pausedCount--;
+    const lag = this.now - pause.startMs;
+
+    // Work still in service. Nothing starts at a paused node, so each one
+    // began before the pause and owes all of it. Collected first, since
+    // the heap must not change while it is walked, and ordered by when each
+    // was scheduled so the order is the run's own.
+    if (lag > 0) {
+      const due: Ev[] = [];
+      this.heap.each((ev) => {
+        if (
+          ev.kind === EV_SERVICE_DONE &&
+          ev.nodeId === nodeId &&
+          ev.req !== null &&
+          ev.req.token === ev.token
+        ) {
+          due.push(ev);
+        }
+      });
+      due.sort((a, b) => a.seq - b.seq);
+      for (const ev of due) {
+        const req = ev.req;
+        ev.kind = EV_MOVED;
+        this.push(ev.time + lag, EV_SERVICE_DONE, nodeId, req, ev.token);
+      }
+    }
+
+    for (const p of pause.parked) {
+      if (p.kind === EV_SERVICE_DONE) {
+        // It came due while stopped, with `p.time - startMs` of it left.
+        this.push(p.time + lag, EV_SERVICE_DONE, nodeId, p.req, p.token);
+        continue;
+      }
+      if (p.kind === EV_PAUSE_ANSWER && p.req !== null) {
+        this.pausedAnswers.set(p.req, p);
+      }
+      this.push(this.now, p.kind, nodeId, p.req, p.token);
+    }
+  }
+
+  /**
+   * Put off an event for a paused node: work finishing there, its timers
+   * and its wakes, and anything already put off once and handed back to a
+   * node paused again. Returns false when the node is not paused, or the
+   * event is one a pause does not hold, such as the one that ends it.
+   */
+  private parkIfPaused(ev: Ev): boolean {
+    const pause = this.faults.get(ev.nodeId)?.pause;
+    if (pause === undefined || pause === null) return false;
+    switch (ev.kind) {
+      case EV_ARRIVAL:
+      case EV_SERVICE_DONE:
+      case EV_TIMEOUT:
+      case EV_WORKER_POLL:
+      case EV_RETRY:
+      case EV_BEHAVIOUR_WAKE:
+      case EV_PAUSE_ADMIT:
+        break;
+      case EV_PAUSE_ANSWER: {
+        // Back to the list it came from, answer and all.
+        const held = ev.req !== null ? this.pausedAnswers.get(ev.req) : undefined;
+        if (held === undefined || ev.req === null) return false;
+        this.pausedAnswers.delete(ev.req);
+        pause.parked.push(held);
+        return true;
+      }
+      default:
+        return false;
+    }
+    // A stale event stays stale; there is nothing to keep.
+    if (ev.req !== null && ev.req.token !== ev.token) return true;
+    if (ev.kind === EV_PAUSE_ADMIT) pause.waiting++;
+    pause.parked.push(parkedEv(ev.kind, ev.time, ev.req, ev.token));
+    return true;
+  }
+
+  /**
+   * Hand a call's answer to its caller later, when the caller is a paused
+   * node: the answer has arrived, but nobody there is running to read it.
+   * Returns false when the caller is not paused.
+   */
+  private holdAnswer(
+    child: Req,
+    parent: Req,
+    ok: boolean,
+    reason: FailureReason,
+    latencyMs: number,
+  ): boolean {
+    const pause = this.faults.get(parent.nodeId)?.pause;
+    if (pause === undefined || pause === null) return false;
+    const p = parkedEv(EV_PAUSE_ANSWER, this.now, child, child.token);
+    p.parent = parent;
+    p.parentToken = parent.token;
+    p.ok = ok;
+    p.reason = reason;
+    p.latencyMs = latencyMs;
+    pause.parked.push(p);
+    return true;
+  }
+
+  /** Hand over an answer a pause held. The call that gave it is done with here. */
+  private deliverHeldAnswer(child: Req): void {
+    const p = this.pausedAnswers.get(child);
+    if (p === undefined) return;
+    this.pausedAnswers.delete(child);
+    const parent = p.parent;
+    if (parent !== null && parent.token === p.parentToken) {
+      this.childResolvedFrom(child, parent, p.ok, p.reason, p.latencyMs);
+    }
+    this.recycle(child);
   }
 
   /**
@@ -1242,6 +1559,90 @@ export class Engine implements BehaviourCtx {
     return [...this.severed];
   }
 
+  /**
+   * Make one edge hand over `rate` of the requests that cross it twice, 0
+   * to 1. The second copy reaches the far end right behind the first and
+   * does the work again, but its answer goes to nobody, the way a network
+   * that resends a packet it thought was lost delivers it twice. Only a
+   * request edge carries requests, so on a control edge it changes nothing.
+   * Returns false when there is no such edge, the rate is not above 0, or
+   * the edge already duplicates at this rate.
+   */
+  duplicateEdge(edgeId: string, rate: number): boolean {
+    if (!(rate > 0) || !Number.isFinite(rate)) return false;
+    if (!this.topology.edges.some((e) => e.id === edgeId)) return false;
+    const r = Math.min(1, rate);
+    if (this.dupEdges.get(edgeId)?.rate === r) return false;
+    this.dupEdges.set(edgeId, { edgeId, rate: r, sinceMs: this.now, delivered: 0 });
+    return true;
+  }
+
+  /** Stop an edge delivering anything twice. Returns false when it was not. */
+  undupEdge(edgeId: string): boolean {
+    return this.dupEdges.delete(edgeId);
+  }
+
+  /** Edges delivering some requests twice right now, as copies. */
+  activeDuplicates(): ActiveDuplicate[] {
+    return [...this.dupEdges.values()].map((d) => ({ ...d }));
+  }
+
+  /**
+   * Make one edge lose every answer coming back across it, the way a link
+   * that fails in one direction does. Requests still cross and the far end
+   * does the work, but the caller never hears, so it waits until its own
+   * timeout gives up, and may send the call again. A caller with no timeout
+   * waits for good, holding whatever it holds. Draws nothing. Returns false
+   * when there is no such edge or it already loses its answers.
+   */
+  cutReplies(edgeId: string): boolean {
+    if (this.replyCut.has(edgeId)) return false;
+    if (!this.topology.edges.some((e) => e.id === edgeId)) return false;
+    this.replyCut.set(edgeId, { edgeId, sinceMs: this.now, lost: 0 });
+    return true;
+  }
+
+  /** Let answers back across an edge again. Returns false when they were not lost. */
+  restoreReplies(edgeId: string): boolean {
+    return this.replyCut.delete(edgeId);
+  }
+
+  /** Edges losing their answers right now, as copies. */
+  activeReplyCuts(): ActiveReplyCut[] {
+    return [...this.replyCut.values()].map((r) => ({ ...r }));
+  }
+
+  /**
+   * Edges whose lost answers still leave a caller waiting, with how many
+   * calls wait, counted now. Outlasts the cut, since a caller with no
+   * timeout keeps waiting after the answers get through again.
+   */
+  strandedReplies(): StrandedReplies[] {
+    const out: StrandedReplies[] = [];
+    for (const [edgeId, list] of this.stranded) {
+      let w = 0;
+      for (let i = 0; i < list.length; i++) {
+        const e = list[i];
+        // A crash takes the thread back and leaves the request to fail
+        // when its call answers, which this one never will.
+        const r = e.req;
+        if (r.token === e.token && !r.resolved && r.lostReason === null) list[w++] = e;
+      }
+      list.length = w;
+      if (w === 0) this.stranded.delete(edgeId);
+      else out.push({ edgeId, waiting: w });
+    }
+    return out;
+  }
+
+  /** Count an answer lost on its way back across `edgeId`, if that edge loses them. */
+  private loseReply(edgeId: string): boolean {
+    const cut = this.replyCut.get(edgeId);
+    if (cut === undefined) return false;
+    cut.lost++;
+    return true;
+  }
+
   /* ---------------- recording ---------------- *
    *
    * The same four operations, applied now AND written into the schedule at
@@ -1264,6 +1665,11 @@ export class Engine implements BehaviourCtx {
     if (opts.factor !== undefined) copy.factor = opts.factor;
     if (opts.rate !== undefined) copy.rate = opts.rate;
     if (opts.edgeIds !== undefined) copy.edgeIds = opts.edgeIds.slice();
+    // The length the engine used, not the one asked for: a missing or bad
+    // value falls back to the default, and the replay must play that.
+    const used = this.faults.get(nodeId);
+    if (kind === 'restart' && used) copy.downMs = used.downMs;
+    if (kind === 'pause' && used) copy.pauseMs = used.pauseMs;
     this.appendRecorded({
       atMs: this.now,
       action: 'inject',
@@ -1294,6 +1700,39 @@ export class Engine implements BehaviourCtx {
     this.applyOverdueFaults();
     if (!this.restoreEdge(edgeId)) return false;
     this.appendRecorded({ atMs: this.now, action: 'restore', edgeId });
+    return true;
+  }
+
+  /** duplicateEdge(), recorded. Returns what duplicateEdge() returned. */
+  recordDuplicateEdge(edgeId: string, rate: number): boolean {
+    this.applyOverdueFaults();
+    if (!this.duplicateEdge(edgeId, rate)) return false;
+    const r = this.dupEdges.get(edgeId)?.rate ?? rate;
+    this.appendRecorded({ atMs: this.now, action: 'duplicate', edgeId, rate: r });
+    return true;
+  }
+
+  /** undupEdge(), recorded. Returns what undupEdge() returned. */
+  recordUndupEdge(edgeId: string): boolean {
+    this.applyOverdueFaults();
+    if (!this.undupEdge(edgeId)) return false;
+    this.appendRecorded({ atMs: this.now, action: 'undup', edgeId });
+    return true;
+  }
+
+  /** cutReplies(), recorded. Returns what cutReplies() returned. */
+  recordCutReplies(edgeId: string): boolean {
+    this.applyOverdueFaults();
+    if (!this.cutReplies(edgeId)) return false;
+    this.appendRecorded({ atMs: this.now, action: 'cut-replies', edgeId });
+    return true;
+  }
+
+  /** restoreReplies(), recorded. Returns what restoreReplies() returned. */
+  recordRestoreReplies(edgeId: string): boolean {
+    this.applyOverdueFaults();
+    if (!this.restoreReplies(edgeId)) return false;
+    this.appendRecorded({ atMs: this.now, action: 'restore-replies', edgeId });
     return true;
   }
 
@@ -1394,6 +1833,7 @@ export class Engine implements BehaviourCtx {
   readTally(): RunTally | null {
     const t = this.tally ?? this.tallyStopped;
     if (t === null) return null;
+    this.settleUnflushed();
     return {
       fromMs: t.fromMs,
       toMs: t.toMs < 0 ? this.now : t.toMs,
@@ -1437,7 +1877,9 @@ export class Engine implements BehaviourCtx {
 
   /** What the log has recorded so far, as a copy the caller owns, or null. */
   readOpLog(): OpLog | null {
-    return this.opLog?.read() ?? null;
+    if (this.opLog === null) return null;
+    this.settleUnflushed();
+    return this.opLog.read();
   }
 
   private appendRecorded(entry: FaultEvent): void {
@@ -1454,13 +1896,21 @@ export class Engine implements BehaviourCtx {
     while (this.nextFaultMs <= this.now) this.applyDueFaults();
   }
 
-  /** The action of the last entry already played on a node or an edge. */
-  private playedLast(id: string, target: 'node' | 'edge'): FaultEvent['action'] | null {
+  /**
+   * The action of the last entry already played on a node, or on an edge:
+   * among cuts and restores for 'edge', among duplicates and undups for
+   * 'dup', and among reply cuts and their restores for 'replies', since
+   * those are separate faults on one wire.
+   */
+  private playedLast(
+    id: string,
+    target: 'node' | 'edge' | 'dup' | 'replies',
+  ): FaultEvent['action'] | null {
     for (let i = this.scheduleNext - 1; i >= 0; i--) {
       const f = this.schedule[i];
       if (f.action === 'inject' || f.action === 'clear') {
         if (target === 'node' && f.nodeId === id) return f.action;
-      } else if (target === 'edge' && f.edgeId === id) {
+      } else if (f.edgeId === id && target === edgeFaultOf(f.action)) {
         return f.action;
       }
     }
@@ -1484,6 +1934,15 @@ export class Engine implements BehaviourCtx {
   private killInFlight(nodeId: string): void {
     const state = this.nodes.get(nodeId);
     if (!state) return;
+
+    // A store that answered before its writes reached disk loses the ones
+    // still in memory. Only here, where the whole store goes down: one
+    // machine of several lost leaves the data with the rest.
+    const memory = state.unflushed;
+    if (memory !== null) {
+      this.losingAt = nodeId;
+      state.lostInLastCrash = memory.crash(this.now, this.landWrite, this.loseWrite);
+    }
 
     const waiting: Req[] = [];
     for (let i = state.waitHead; i < state.waiting.length; i++) {
@@ -1661,7 +2120,11 @@ export class Engine implements BehaviourCtx {
       if (f.action === 'inject') this.injectFailure(f.nodeId, f.kind, f.opts);
       else if (f.action === 'clear') this.clearFailure(f.nodeId);
       else if (f.action === 'cut') this.cutEdge(f.edgeId);
-      else this.restoreEdge(f.edgeId);
+      else if (f.action === 'restore') this.restoreEdge(f.edgeId);
+      else if (f.action === 'duplicate') this.duplicateEdge(f.edgeId, f.rate);
+      else if (f.action === 'undup') this.undupEdge(f.edgeId);
+      else if (f.action === 'cut-replies') this.cutReplies(f.edgeId);
+      else this.restoreReplies(f.edgeId);
     }
     this.scheduleThroughMs = atMs;
     this.nextFaultMs =
@@ -1753,6 +2216,11 @@ export class Engine implements BehaviourCtx {
         entry.waitingOnDownstream = parked;
       }
       entry.queued = state.waiting.length - state.waitHead;
+      // A paused node's line includes the requests waiting at its door.
+      if (this.pausedCount > 0) {
+        const pause = this.faults.get(state.id)?.pause;
+        if (pause) entry.queued += pause.waiting;
+      }
       entry.throughput = completions;
       entry.arrivalRate = state.arrivals.rate(now);
       entry.utilization = state.utilization;
@@ -1771,6 +2239,12 @@ export class Engine implements BehaviourCtx {
       // never grows a branch per kind, exactly as the event loop does not.
       if (state.behaviour.decorateStats) {
         state.behaviour.decorateStats(this, state, entry);
+      }
+      // Only on a store that has answered before its disk had a write, or is
+      // set to, so a design that never does snapshots as it always has.
+      if (state.unflushed !== null || flushesLater(state)) {
+        entry.unflushedWrites = state.unflushed?.pending(now) ?? 0;
+        entry.lostInLastCrash = state.lostInLastCrash;
       }
 
       // The instance vector is built AFTER decorateStats, because a custom
@@ -1817,6 +2291,9 @@ export class Engine implements BehaviourCtx {
       failuresByReason: this.failures,
       activeFailures: this.snapshotFailures(),
       trace: this.lastTrace,
+      ...(this.dupEdges.size > 0 ? { duplicating: this.activeDuplicates() } : {}),
+      ...(this.replyCut.size > 0 ? { repliesCut: this.activeReplyCuts() } : {}),
+      ...(this.stranded.size > 0 ? strandedField(this.strandedReplies()) : {}),
     };
   }
 
@@ -1970,6 +2447,11 @@ export class Engine implements BehaviourCtx {
     this.faults.clear();
     this.severed.clear();
     this.cutEdges.clear();
+    this.dupEdges.clear();
+    this.replyCut.clear();
+    this.stranded.clear();
+    this.pausedCount = 0;
+    this.pausedAnswers.clear();
     this.snapFailures.length = 0;
     this.scheduleNext = 0;
     this.nextFaultMs = this.schedule.length > 0 ? this.schedule[0].atMs : Infinity;
@@ -2153,6 +2635,7 @@ export class Engine implements BehaviourCtx {
       this.dispatchOrphan(ev);
       return;
     }
+    if (this.pausedCount > 0 && this.parkIfPaused(ev)) return;
 
     switch (ev.kind) {
       case EV_ARRIVAL:
@@ -2191,6 +2674,24 @@ export class Engine implements BehaviourCtx {
           state.behaviour.onWake?.(this, state, ev.req);
         }
         break;
+      case EV_FAULT_ENDS: {
+        const fault = this.faults.get(ev.nodeId);
+        if (
+          (fault?.kind === 'restart' || fault?.kind === 'pause') &&
+          fault.upToken === ev.token
+        ) {
+          this.clearFailure(ev.nodeId);
+        }
+        break;
+      }
+      case EV_PAUSE_ADMIT:
+        if (ev.req && ev.req.token === ev.token && !ev.req.resolved) {
+          this.enter(state, ev.req);
+        }
+        break;
+      case EV_PAUSE_ANSWER:
+        if (ev.req && ev.req.token === ev.token) this.deliverHeldAnswer(ev.req);
+        break;
       default:
         break;
     }
@@ -2212,7 +2713,11 @@ export class Engine implements BehaviourCtx {
     switch (ev.kind) {
       case EV_SERVICE_DONE:
       case EV_LINK_ARRIVE:
+      case EV_PAUSE_ADMIT:
         if (!req.resolved) this.resolve(req, false, 'no-route', 0);
+        break;
+      case EV_PAUSE_ANSWER:
+        this.deliverHeldAnswer(req);
         break;
       case EV_TIMEOUT:
         this.onTimeout(req);
@@ -2528,6 +3033,15 @@ export class Engine implements BehaviourCtx {
       return;
     }
 
+    // A link that delivers some crossings twice. Rolled after the loss roll,
+    // and only while the fault is on this edge, so a run without it draws
+    // exactly what it drew before.
+    let dup: ActiveDuplicate | null = null;
+    if (this.dupEdges.size > 0) {
+      const d = this.dupEdges.get(edge.id);
+      if (d !== undefined && this.rng.next() < d.rate) dup = d;
+    }
+
     const child = this.acquireReq();
     child.nodeId = target.id;
     child.parent = parent;
@@ -2560,6 +3074,42 @@ export class Engine implements BehaviourCtx {
     const counter = this.edgeFlow.get(edge.id);
     if (counter) counter.add(this.now, 1);
 
+    // The second copy is the same call, down the same path, so a part that
+    // keeps idempotency keys knows it, and one that does not does the work
+    // twice. Nobody sent it, so nobody waits for it: it has no parent and
+    // no deadline, and its answer is dropped as an abandoned call's is.
+    // Built now, before the first copy is offered, because that offer can
+    // answer the caller at once and recycle it.
+    let twin: Req | null = null;
+    if (dup !== null) {
+      dup.delivered++;
+      twin = this.acquireReq();
+      twin.nodeId = child.nodeId;
+      twin.parent = null;
+      twin.abandoned = true;
+      twin.rootStartMs = child.rootStartMs;
+      twin.enterMs = this.now;
+      twin.hop = child.hop;
+      twin.attempt = attempt;
+      twin.viaEdge = edge.id;
+      twin.retryTarget = edge.id;
+      twin.detached = child.detached;
+      twin.key = child.key;
+      twin.isWrite = child.isWrite;
+      twin.rid = child.rid;
+      twin.path = child.path;
+      if (log !== null) {
+        log.duplicate(this.now, twin.rid, parentState.id, target.id, edge.id, attempt);
+        // A write-behind flush delivered twice is two tries of it: either
+        // one landing puts the write in the store.
+        if (child.opFlush >= 0) {
+          twin.opFlush = child.opFlush;
+          log.flushSent(child.opFlush, twin.rid);
+        }
+      }
+      if (counter) counter.add(this.now, 1);
+    }
+
     // The caller's timeout bounds THIS attempt, not the whole retry budget:
     // each re-issued call gets a fresh deadline, exactly like a real client.
     // It is armed at send time, so link latency counts against the deadline
@@ -2570,13 +3120,18 @@ export class Engine implements BehaviourCtx {
     // is a plain synchronous admission and the event stream is unchanged.
     // bandwidthRps is declared on SimEdge but not yet applied; the networking
     // phase adds it alongside this delay.
+    // The first copy is offered first, and the second right behind it.
     const linkMs = edge.latencyMs;
     if (linkMs !== undefined && linkMs > 0) {
       this.push(this.now + linkMs, EV_LINK_ARRIVE, target.id, child, child.token);
+      if (twin !== null) {
+        this.push(this.now + linkMs, EV_LINK_ARRIVE, target.id, twin, twin.token);
+      }
       return;
     }
 
     this.admit(target, child);
+    if (twin !== null) this.admit(target, twin);
   }
 
   /* ---------------- admission ---------------- */
@@ -2639,7 +3194,14 @@ export class Engine implements BehaviourCtx {
     // Stamped here, at the ONE point every request enters a node, so the
     // queued time the tracer reports cannot miss a path.
     req.arriveMs = this.now;
+    this.enter(state, req);
+  }
 
+  /**
+   * Let an arrived request in. Split from admit() so a request a pause held
+   * at the door comes in once the node carries on, without arriving twice.
+   */
+  private enter(state: NodeState, req: Req): void {
     // A crashed node accepts nothing. Checked before the behaviour runs, so a
     // crash takes a node out whatever kind it is, and the caller sees an
     // immediate failure it can retry (or that its breaker can count).
@@ -2648,6 +3210,13 @@ export class Engine implements BehaviourCtx {
       state.errors.add(this.now, 1);
       state.totalFailed++;
       this.resolve(req, false, 'crashed', 0);
+      return;
+    }
+    // A paused node lets nothing in, and refuses nothing either: the request
+    // waits at the door, and its caller's timeout keeps running.
+    if (fault && fault.pause !== null) {
+      fault.pause.parked.push(parkedEv(EV_PAUSE_ADMIT, this.now, req, req.token));
+      fault.pause.waiting++;
       return;
     }
 
@@ -3102,6 +3671,7 @@ export class Engine implements BehaviourCtx {
   private pumpQueue(state: NodeState): void {
     const mode = state.behaviour.pump;
     if (mode === 'none' || state.discarded) return;
+    if (this.pausedCount > 0 && this.isPaused(state.id)) return;
     if (mode === 'sources') {
       this.pumpWorker(state);
       return;
@@ -3120,6 +3690,7 @@ export class Engine implements BehaviourCtx {
   /** Workers pull messages out of the queue nodes that feed them. */
   private pumpWorker(state: NodeState): void {
     if (state.discarded) return;
+    if (this.pausedCount > 0 && this.isPaused(state.id)) return;
     const capacity = this.effectiveCapacity(state);
     // A call wired straight into a consumer, not through a queue, waits in
     // the consumer's own line when every slot is taken. Its caller is waiting
@@ -3242,15 +3813,30 @@ export class Engine implements BehaviourCtx {
       );
       // A store whose reads trail its writes: a read sees what was visible
       // when its service started, and a write shows once the lag has passed.
+      // A read the primary served sees every write done before it arrived,
+      // which is what the replicas show a lag later.
       const lag = state.behaviour.readLagMs;
       if (lag !== undefined) {
         log.access(
-          req.isWrite ? this.now + lag(state.config) : req.enterMs,
+          req.isWrite
+            ? this.now + lag(state.config)
+            : req.fromPrimary
+              ? req.enterMs + lag(state.config)
+              : req.enterMs,
           req.rid,
           state.id,
           req.key,
           req.isWrite,
         );
+      }
+    }
+    // A store that answers before its disk has the write keeps it in memory
+    // until then. One property read for every other kind.
+    if (req.isWrite && state.behaviour.hasDisk === true) {
+      const every = state.config.flushEveryMs;
+      // A file can carry anything; only a real positive number delays a write.
+      if (typeof every === 'number' && every > 0 && every < Infinity) {
+        this.holdUnflushed(state, req, every);
       }
     }
 
@@ -3266,6 +3852,28 @@ export class Engine implements BehaviourCtx {
     }
 
     this.dispatchDownstream(state, req);
+  }
+
+  /**
+   * A store applied a write it will say is saved, and has it on disk
+   * `everyMs` from now. The tally and the log count it as a promise, the
+   * way a write-behind cache's ack is one.
+   */
+  private holdUnflushed(state: NodeState, req: Req, everyMs: number): void {
+    let memory = state.unflushed;
+    if (memory === null) memory = state.unflushed = new UnflushedWrites<Tally>();
+    else memory.settle(this.now, this.landWrite);
+    const tally = this.tally;
+    if (tally !== null) tally.writesAcked++;
+    const copy = this.opLog?.unflushed(this.now, req.rid, req.path, state.id) ?? -1;
+    memory.push(this.now + everyMs, req.rid, copy, tally);
+  }
+
+  /** Every store's writes due on disk by now, landed, before a count is read. */
+  private settleUnflushed(): void {
+    for (const state of this.nodes.values()) {
+      state.unflushed?.settle(this.now, this.landWrite);
+    }
   }
 
   /** Record this node's own latency and resolve the call upward. */
@@ -3295,7 +3903,9 @@ export class Engine implements BehaviourCtx {
    * so it must stay on the books.
    */
   private onTimeout(call: Req): void {
-    if (call.resolved) return;
+    // A call whose answer was lost on the way back is done, but its caller
+    // is still waiting for it, so this is where that wait ends.
+    if (call.resolved && !call.replyLost) return;
 
     // Attribute the timeout to the caller that gave up.
     const parent = call.parent;
@@ -3324,6 +3934,7 @@ export class Engine implements BehaviourCtx {
     if (parent && !parent.resolved) {
       this.childResolvedFrom(call, parent, false, 'timeout', this.now - call.enterMs);
     }
+    if (call.replyLost) this.recycle(call);
   }
 
   /* ---------------- resolution & join ---------------- */
@@ -3356,6 +3967,10 @@ export class Engine implements BehaviourCtx {
       req.idemAt = null;
       idem.dedupe?.settle(req.rid, req.path, ok);
     }
+    // An answer to a caller, back across a cable that loses replies, never
+    // gets there. The work it reports was done all the same.
+    const replyLost =
+      this.replyCut.size > 0 && req.parent !== null && this.loseReply(req.viaEdge);
     const log = this.opLog;
     if (log !== null && req.rid > 0) {
       const heard =
@@ -3364,7 +3979,19 @@ export class Engine implements BehaviourCtx {
           : req.detached || req.abandoned
             ? 'nobody'
             : 'client';
-      log.answer(this.now, req.rid, req.nodeId, ok, reason, heard);
+      if (replyLost && req.parent !== null) {
+        log.replyLost(
+          this.now,
+          req.rid,
+          req.nodeId,
+          req.parent.nodeId,
+          req.viaEdge,
+          req.attempt,
+          ok,
+        );
+      } else {
+        log.answer(this.now, req.rid, req.nodeId, ok, reason, heard);
+      }
       if (req.opFlush >= 0) {
         log.flushEnded(req.opFlush, this.now, req.rid, req.nodeId, ok, reason);
       }
@@ -3456,6 +4083,26 @@ export class Engine implements BehaviourCtx {
       return;
     }
 
+    // The caller is left waiting, with no answer coming. This call is kept
+    // for its caller's timeout, which gives up on it and recycles it there;
+    // without a timeout the caller waits for good.
+    if (replyLost) {
+      req.replyLost = true;
+      const callerTimeout = this.nodes.get(parent.nodeId)?.config.timeoutMs ?? 0;
+      if (!(callerTimeout > 0)) {
+        let list = this.stranded.get(req.viaEdge);
+        if (list === undefined) {
+          list = [];
+          this.stranded.set(req.viaEdge, list);
+        }
+        list.push({ req: parent, token: parent.token });
+      }
+      return;
+    }
+    // A paused caller is handed the answer when it carries on.
+    if (this.pausedCount > 0 && this.holdAnswer(req, parent, ok, reason, latencyMs)) {
+      return;
+    }
     this.childResolvedFrom(req, parent, ok, reason, latencyMs);
     this.recycle(req);
   }
@@ -3603,7 +4250,14 @@ export class Engine implements BehaviourCtx {
   /** Queued (not yet in service) request count. */
   queueDepth(state: NodeStateLike): number {
     const s = state as NodeState;
-    return s.waiting.length - s.waitHead;
+    const depth = s.waiting.length - s.waitHead;
+    // Requests at a paused node's door are waiting too, and a balancer that
+    // picks the least loaded sees them pile up.
+    if (this.pausedCount > 0) {
+      const pause = this.faults.get(s.id)?.pause;
+      if (pause) return depth + pause.waiting;
+    }
+    return depth;
   }
 
   effectiveQueueLimit(state: NodeStateLike): number {
@@ -3852,6 +4506,12 @@ export class Engine implements BehaviourCtx {
     return ctrl[0].to;
   }
 
+  /** Whether a 'pause' has this node stopped right now. */
+  private isPaused(nodeId: string): boolean {
+    const f = this.faults.get(nodeId);
+    return f !== undefined && f.pause !== null;
+  }
+
   isCrashed(nodeId: string): boolean {
     const fault = this.faults.get(nodeId);
     const state = this.nodes.get(nodeId);
@@ -3865,6 +4525,7 @@ export class Engine implements BehaviourCtx {
   private downBy(fault: Fault, state: NodeState): boolean {
     return (
       fault.kind === 'crash' ||
+      fault.kind === 'restart' ||
       (fault.kind === 'crash-instance' && this.effectiveInstances(state) <= 1)
     );
   }
@@ -3915,6 +4576,10 @@ export class Engine implements BehaviourCtx {
 
   markWrite(reqLike: ReqLike, isWrite: boolean): void {
     (reqLike as Req).isWrite = isWrite;
+  }
+
+  markFromPrimary(reqLike: ReqLike): void {
+    (reqLike as Req).fromPrimary = true;
   }
 
   /**
@@ -4293,8 +4958,10 @@ export class Engine implements BehaviourCtx {
       pooled.retryAttempt = 0;
       pooled.ownMs = 0;
       pooled.resolved = false;
+      pooled.replyLost = false;
       pooled.key = 0;
       pooled.isWrite = false;
+      pooled.fromPrimary = false;
       pooled.rid = 0;
       pooled.path = 0;
       pooled.pickedOne = false;
@@ -4337,8 +5004,10 @@ export class Engine implements BehaviourCtx {
       ownMs: 0,
       next: null,
       resolved: false,
+      replyLost: false,
       key: 0,
       isWrite: false,
+      fromPrimary: false,
       rid: 0,
       path: 0,
       pickedOne: false,
@@ -4472,6 +5141,8 @@ function createNodeState(node: SimNode): NodeState {
     route: behaviourFor(node.kind).generatesLoad ? createRouteState() : null,
     num: 0,
     dedupe: node.config.idempotencyKeys === 1 ? new IdempotencyKeys() : null,
+    unflushed: null,
+    lostInLastCrash: 0,
   };
 }
 
@@ -4493,11 +5164,49 @@ function mixPath(path: number, num: number): number {
  * the knobs that actually apply to its kind so the UI does not render a
  * meaningless "factor 1" against a crash.
  */
+/** Which of an edge's separate faults a schedule action belongs to. */
+function edgeFaultOf(action: FaultEvent['action']): 'edge' | 'dup' | 'replies' | null {
+  switch (action) {
+    case 'cut':
+    case 'restore':
+      return 'edge';
+    case 'duplicate':
+    case 'undup':
+      return 'dup';
+    case 'cut-replies':
+    case 'restore-replies':
+      return 'replies';
+    default:
+      return null;
+  }
+}
+
+function parkedEv(
+  kind: number,
+  time: number,
+  req: Req | null,
+  token: number,
+): ParkedEv {
+  return {
+    kind,
+    time,
+    req,
+    token,
+    parent: null,
+    parentToken: 0,
+    ok: false,
+    reason: 'error',
+    latencyMs: 0,
+  };
+}
+
 function describeFault(nodeId: string, f: Fault): ActiveFailure {
   const out: ActiveFailure = { nodeId, kind: f.kind, sinceMs: f.sinceMs };
   if (f.kind === 'slow') out.factor = f.factor;
   else if (f.kind === 'errors') out.rate = f.rate;
   else if (f.kind === 'partition') out.edgeIds = f.edgeIds.slice();
+  else if (f.kind === 'restart') out.downMs = f.downMs;
+  else if (f.kind === 'pause') out.pauseMs = f.pauseMs;
   return out;
 }
 

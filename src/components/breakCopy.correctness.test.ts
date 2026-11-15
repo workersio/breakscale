@@ -61,7 +61,12 @@ const NO_DASH = /—/;
 
 describe('correctness evidence', () => {
   it('tells the double charge from the first request that broke it', () => {
-    const v = verify(CHECKOUT, { metric: 'doubleCharges', max: 0 });
+    // Retries only: a cable delivering twice tells another story, below.
+    const v = verify(
+      CHECKOUT,
+      { metric: 'doubleCharges', max: 0 },
+      { kinds: ['crash', 'crash-instance', 'slow', 'errors', 'cut'] },
+    );
     if (v.status !== 'broken' || v.first?.check !== 'atMostOnce') {
       throw new Error(`expected a double charge, got ${v.status}`);
     }
@@ -173,6 +178,7 @@ describe('correctness evidence', () => {
       evidenceSentence(
         {
           check: 'lostAckedWrite',
+          copy: 'cache',
           rid: 3,
           clientId: 'client',
           key: 0,
@@ -188,6 +194,31 @@ describe('correctness evidence', () => {
       ),
     ).toBe(
       'Request 3 was held in Cache at 9.01s, and the client was told it was saved. It was lost when Database crashed at 10.01s, before it reached storage.',
+    );
+  });
+
+  it('says the store answered before its disk had the write', () => {
+    const names: Names = { node: () => 'Orders DB', edge: (id) => id };
+    expect(
+      evidenceSentence(
+        {
+          check: 'lostAckedWrite',
+          copy: 'disk',
+          rid: 9,
+          clientId: 'client',
+          key: 0,
+          invokedMs: 9000,
+          ackedMs: 9010,
+          nodeId: 'db',
+          bufferedMs: 9005,
+          lostMs: 9500,
+          reason: 'crashed',
+          lostAt: 'db',
+        },
+        names,
+      ),
+    ).toBe(
+      'Request 9 was saved by Orders DB at 9.01s, and the client was told so, but it was still in memory. It was lost when Orders DB went down at 9.50s, before it reached disk.',
     );
   });
 
@@ -217,7 +248,7 @@ describe('correctness evidence', () => {
     expect(goneLine('saved')).toMatch(/no saved write can be lost/);
     expect(goneLine('up:checkout')).toBe('That traffic source is gone.');
     expect(nothingRetriesLine(['pay'], namesOf(CHECKOUT))).toBe(
-      'Nothing on the way to Payment Provider sends a call again, so nothing can be charged twice. Turn on retries before it to test it.',
+      'Nothing on the way to Payment Provider sends a call again, and no cable was tried delivering a call twice, so nothing tried could charge twice. Turn on retries before it, or let the search deliver requests twice, to test it.',
     );
   });
 });

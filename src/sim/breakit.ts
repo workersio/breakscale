@@ -1,10 +1,17 @@
 // behaviour before judge: judge imports behaviour-control through behaviour,
 // in the order its own header explains.
-import { behaviourFor, canCrashOneInstance, takesCorrectness } from './behaviour';
+import {
+  acksBeforeSafe,
+  behaviourFor,
+  canCrashOneInstance,
+  canPause,
+  takesCorrectness,
+} from './behaviour';
 import { isCorrectnessGoal, isRouteGoal } from './challenge';
 import type { Goal } from './challenge';
 import { Engine } from './engine';
 import {
+  CORRECTNESS_SETTLE_MS,
   KEPT_UP_FLOOR,
   SETTLE_MS,
   SHORTCUT_KINDS,
@@ -72,6 +79,12 @@ export const DURATIONS_MS: readonly (number | null)[] = [
 export const BREAK_SLOW_FACTORS: readonly number[] = [2, 3, 5, 10, 20];
 /** Error fractions, the same ones the fault controls offer. */
 export const BREAK_ERROR_RATES: readonly number[] = [0.1, 0.25, 0.5, 0.75, 1];
+/** Shares of requests a cable delivers twice, the same ones the controls offer. */
+export const BREAK_DUP_RATES: readonly number[] = [0.01, 0.05, 0.1, 0.25];
+/** How long a pause lasts, shortest first. A pause always ends by itself. */
+export const BREAK_PAUSE_MS: readonly number[] = DURATIONS_MS.filter(
+  (d): d is number => d !== null,
+);
 /** How far past the goal, and past the fault-free run, a break must land. */
 export const BREAK_MARGIN = 0.1;
 /** Faults kept from the single-fault pass for building bigger schedules. */
@@ -83,38 +96,66 @@ export const MAX_REMEMBERED = 5;
 export const DEFAULT_BUDGET = 500;
 export const HARDER_BUDGET = 1000;
 /**
- * Ms a correctness goal's run keeps playing after the window, so a try its
- * caller gave up on, or a retry, has finished before the calls are counted.
- * Longer than SETTLE_MS: after a slow fault a request can still be waiting
- * out its retries.
+ * Ms a correctness goal's run keeps playing after the window, the same wait
+ * a brief's check gives it. Longer than SETTLE_MS: after a slow fault a
+ * request can still be waiting out its retries.
  */
-export const CORRECTNESS_SETTLE_MS = 5000;
+export { CORRECTNESS_SETTLE_MS };
 /** Draws in a row that only found schedules already tried, before a phase gives up. */
 const MAX_REPEATS = 200;
 
-export type AttackKind = 'crash' | 'crash-instance' | 'slow' | 'errors' | 'cut';
+export type AttackKind =
+  | 'crash'
+  | 'crash-instance'
+  | 'slow'
+  | 'errors'
+  | 'cut'
+  | 'duplicate'
+  | 'pause'
+  | 'cut-replies';
 export const ATTACK_KINDS: readonly AttackKind[] = [
   'crash',
   'crash-instance',
   'slow',
   'errors',
   'cut',
+  'duplicate',
+  'pause',
+  'cut-replies',
 ];
 
 /**
- * One fault in a schedule. `target` is a node id, or an edge id for `cut`.
- * `forMs` null lasts to the end of the run.
+ * Whether a kind of fault can move this goal at all. A request delivered
+ * twice does its work twice, which is a double charge; it adds load too,
+ * but a little extra load is what a slowdown already tries far harder, so
+ * only the double-charge goal searches it. A pause and a cable that loses
+ * its answers stall work rather than fail it, and what they teach is the
+ * caller that gives up and sends it again while the first try still
+ * finishes. For staying up and staying fast, a slowdown and a cut already
+ * try the same harder, so they too are searched for that goal only.
+ */
+export function kindFits(kind: AttackKind, goal: Goal): boolean {
+  return (
+    (kind !== 'duplicate' && kind !== 'pause' && kind !== 'cut-replies') ||
+    goal.metric === 'doubleCharges'
+  );
+}
+
+/**
+ * One fault in a schedule. `target` is a node id, or an edge id for `cut`,
+ * `duplicate` and `cut-replies`. `forMs` null lasts to the end of the run;
+ * for `pause` it is how long the node stops, and is never null.
  */
 export type Attack =
   | {
-      kind: 'crash' | 'crash-instance' | 'cut';
+      kind: 'crash' | 'crash-instance' | 'cut' | 'cut-replies' | 'pause';
       target: string;
       atMs: number;
       forMs: number | null;
     }
   | { kind: 'slow'; target: string; factor: number; atMs: number; forMs: number | null }
   | {
-      kind: 'errors';
+      kind: 'errors' | 'duplicate';
       target: string;
       rate: number;
       atMs: number;
@@ -261,6 +302,11 @@ export type SearchResult =
       simMs: number;
       notes: SearchNote[];
       baseline: Baseline;
+      /**
+       * Some cable was tried delivering requests twice. When none was and
+       * nothing retries toward a charge, no fault tried could charge twice.
+       */
+      triedDuplicates: boolean;
     };
 
 /**
@@ -287,6 +333,29 @@ export function toSchedule(attacks: readonly Attack[]): FaultEvent[] {
     if (a.kind === 'cut') {
       out.push({ atMs: a.atMs, action: 'cut', edgeId: a.target });
       if (end !== null) out.push({ atMs: end, action: 'restore', edgeId: a.target });
+      continue;
+    }
+    if (a.kind === 'duplicate') {
+      out.push({ atMs: a.atMs, action: 'duplicate', edgeId: a.target, rate: a.rate });
+      if (end !== null) out.push({ atMs: end, action: 'undup', edgeId: a.target });
+      continue;
+    }
+    if (a.kind === 'cut-replies') {
+      out.push({ atMs: a.atMs, action: 'cut-replies', edgeId: a.target });
+      if (end !== null) {
+        out.push({ atMs: end, action: 'restore-replies', edgeId: a.target });
+      }
+      continue;
+    }
+    if (a.kind === 'pause') {
+      // It ends by itself, so there is no clear to schedule.
+      out.push({
+        atMs: a.atMs,
+        action: 'inject',
+        nodeId: a.target,
+        kind: 'pause',
+        opts: { pauseMs: a.forMs ?? BREAK_PAUSE_MS[BREAK_PAUSE_MS.length - 1] },
+      });
       continue;
     }
     const opts =
@@ -709,11 +778,21 @@ export function singlePointsFor(t: Topology, goal: Goal): SinglePoint[] {
   return isRouteGoal(goal) ? all.filter((p) => p.clients.includes(goal.route)) : all;
 }
 
+/**
+ * Whether the search leaves the single points alone: it does for a goal an
+ * outage breaks, unless asked not to. A correctness goal is about the data,
+ * and losing a part everything passes through is how a store loses writes,
+ * so there they are crashed and cut like any other part.
+ */
+export function sparesSinglePoints(goal: Goal, opts: BreakOptions): boolean {
+  return !opts.includeSinglePoints && !isCorrectnessGoal(goal);
+}
+
 /** Every place a fault can land under these options, in id order. */
 export function breakTargets(t: Topology, goal: Goal, opts: BreakOptions): Target[] {
   const protect = new Set(opts.protect);
   const spof = new Set(
-    opts.includeSinglePoints ? [] : singlePointsFor(t, goal).map((p) => p.id),
+    sparesSinglePoints(goal, opts) ? singlePointsFor(t, goal).map((p) => p.id) : [],
   );
   const allowed = new Set(opts.kinds);
   const out: Target[] = [];
@@ -735,13 +814,25 @@ export function breakTargets(t: Topology, goal: Goal, opts: BreakOptions): Targe
     }
     if (allowed.has('slow')) kinds.push('slow');
     if (whole && allowed.has('errors')) kinds.push('errors');
+    if (allowed.has('pause') && kindFits('pause', goal) && canPause(n.kind)) {
+      kinds.push('pause');
+    }
     if (kinds.length > 0) out.push({ id: n.id, type: 'node', kinds });
   }
-  if (allowed.has('cut')) {
+  const dup = allowed.has('duplicate') && kindFits('duplicate', goal);
+  const replies = allowed.has('cut-replies') && kindFits('cut-replies', goal);
+  if (allowed.has('cut') || dup || replies) {
     for (const w of requestWires(t)) {
-      if (clients.has(w.from) || protect.has(w.from) || protect.has(w.to)) continue;
-      if (protect.has(w.id) || spof.has(w.id)) continue;
-      out.push({ id: w.id, type: 'edge', kinds: ['cut'] });
+      if (protect.has(w.from) || protect.has(w.to) || protect.has(w.id)) continue;
+      const kinds: AttackKind[] = [];
+      if (allowed.has('cut') && !clients.has(w.from) && !spof.has(w.id)) {
+        kinds.push('cut');
+      }
+      // A client's own cable is fair game here: a client whose request is
+      // delivered twice is the plainest way to charge twice.
+      if (dup) kinds.push('duplicate');
+      if (replies) kinds.push('cut-replies');
+      if (kinds.length > 0) out.push({ id: w.id, type: 'edge', kinds });
     }
   }
   return out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
@@ -770,6 +861,21 @@ function hardest(
         rate: BREAK_ERROR_RATES[BREAK_ERROR_RATES.length - 1],
         atMs,
         forMs,
+      };
+    case 'duplicate':
+      return {
+        kind,
+        target,
+        rate: BREAK_DUP_RATES[BREAK_DUP_RATES.length - 1],
+        atMs,
+        forMs,
+      };
+    case 'pause':
+      return {
+        kind,
+        target,
+        atMs,
+        forMs: forMs ?? BREAK_PAUSE_MS[BREAK_PAUSE_MS.length - 1],
       };
     default:
       return { kind, target, atMs, forMs };
@@ -814,7 +920,9 @@ export function breakKey(design: Topology, goal: Goal, opts: BreakOptions): stri
     goal,
     opts: {
       ...opts,
-      kinds: [...opts.kinds].sort(),
+      // A kind the goal never searches changes nothing, so it is left out
+      // of the key, and a search keeps its answer whether it is ticked.
+      kinds: opts.kinds.filter((k) => kindFits(k, goal)).sort(),
       protect: [...opts.protect].sort(),
     },
   };
@@ -876,7 +984,7 @@ export function breakGoals(t: Topology): GoalTemplate[] {
       out.push({ id: `fast:${c}`, goal: { metric: 'p99', max: 300, route: c } });
     }
   }
-  if (t.nodes.some((n) => behaviourFor(n.kind).acksBeforeSaved === true)) {
+  if (t.nodes.some(acksBeforeSafe)) {
     out.push({ id: 'saved', goal: { metric: 'lostAckedWrites', max: 0 } });
   }
   if (t.nodes.some((n) => behaviourFor(n.kind).buffersForConsumers)) {
@@ -1013,6 +1121,22 @@ function varied(rng: Rng, a: Attack, atMs: number): Attack {
         rate: pickOf(rng, BREAK_ERROR_RATES),
         atMs,
         forMs,
+      };
+    case 'duplicate':
+      return {
+        kind: 'duplicate',
+        target: a.target,
+        rate: pickOf(rng, BREAK_DUP_RATES),
+        atMs,
+        forMs,
+      };
+    case 'pause':
+      // Its length is the fault itself, so it comes from its own ladder.
+      return {
+        kind: 'pause',
+        target: a.target,
+        atMs,
+        forMs: pickOf(rng, BREAK_PAUSE_MS),
       };
     default:
       return { kind: a.kind, target: a.target, atMs, forMs };
@@ -1248,6 +1372,7 @@ export function* searchBreak(
     simMs: ctx.simMs,
     notes,
     baseline,
+    triedDuplicates: targets.some((t) => t.kinds.includes('duplicate')),
   };
 }
 
@@ -1279,6 +1404,10 @@ export function gentler(a: Attack, target: Target | undefined): Attack | null {
     case 'errors': {
       const i = BREAK_ERROR_RATES.indexOf(a.rate);
       return i > 0 ? { ...a, rate: BREAK_ERROR_RATES[i - 1] } : null;
+    }
+    case 'duplicate': {
+      const i = BREAK_DUP_RATES.indexOf(a.rate);
+      return i > 0 ? { ...a, rate: BREAK_DUP_RATES[i - 1] } : null;
     }
     case 'crash':
       return target?.kinds.includes('crash-instance')

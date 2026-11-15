@@ -1,4 +1,4 @@
-import { behaviourFor } from './behaviour';
+import { acksBeforeSafe, behaviourFor } from './behaviour';
 import {
   ATTACK_KINDS,
   DEFAULT_OPTIONS,
@@ -63,14 +63,16 @@ import type { FaultEvent, Topology } from './types';
  *   or a fault-free miss carries `first`, the earliest double charge, and
  *   `followRequest(v.replay, v.first.rid)` gives that request's story.
  * - lostAckedWrites (a count), system-wide only: writes a client was told
- *   were saved, by a write-behind cache, that were lost before they reached
- *   the store behind it. Like doubleCharges it is about the data alone, and
- *   carries `first`. A write still waiting to flush when the run ends is
- *   not counted; `measured.pending` says how many there were. Every store
- *   in this model answers only once a write is done, so a crash, a failover
- *   or a restart there fails the write where its caller hears it. A queue
- *   also answers before the work is done, but what it loses is a job:
- *   lostJobs counts those.
+ *   were saved that were lost before they were safe. Two parts say saved
+ *   early: a write-behind cache, whose copy is lost before it reaches the
+ *   store behind it, and a db or replica set with `flushEveryMs` above 0,
+ *   which answers before the write is on its disk and loses it if the
+ *   whole store crashes or restarts first. Like doubleCharges it is about
+ *   the data alone, and carries `first`. A write still waiting when the
+ *   run ends is not counted; `measured.pending` says how many there were.
+ *   Every other store answers only once a write is safe, so a crash there
+ *   fails the write where its caller hears it. A queue also answers before
+ *   the work is done, but what it loses is a job: lostJobs counts those.
  * - staleReads (a count), system-wide only: reads that did not see a write
  *   their own client had already been told was saved, at a store whose
  *   reads trail its writes (a replica set's replication lag, a search
@@ -215,7 +217,8 @@ export type Verdict =
       truncated?: true;
       /**
        * For doubleCharges: nothing on the way to a part that charges retries
-       * a call, so the goal cannot break by a retry, whatever the faults.
+       * a call, and no cable was tried delivering a call twice, so no fault
+       * the search tried could break it.
        */
       nothingRetries?: true;
       simSeconds: number;
@@ -303,12 +306,9 @@ export function verifyErrors(
     errors.push(`seed must be a whole number from 0 to ${MAX_SEED}.`);
   }
   errors.push(...chargeableErrors(design, goal, opts));
-  if (
-    goal.metric === 'lostAckedWrites' &&
-    !design.nodes.some((n) => behaviourFor(n.kind).acksBeforeSaved === true)
-  ) {
+  if (goal.metric === 'lostAckedWrites' && !design.nodes.some(acksBeforeSafe)) {
     errors.push(
-      'No part here tells the caller a write is saved before it is. A write-behind cache does: it says saved, then writes to the store later. For jobs a queue accepted and then lost, use lostJobs.',
+      'No part here tells the caller a write is saved before it is. A write-behind cache does: it says saved, then writes to the store later. So does a db or replica set with flushEveryMs above 0: it answers, then writes to disk later. For jobs a queue accepted and then lost, use lostJobs.',
     );
   }
   if (
@@ -487,7 +487,9 @@ function verdictOf(design: Topology, goal: VerifyGoal, r: SearchResult): Verdict
           ? {}
           : { checked: r.baseline.runs[0].checked }),
         ...(r.baseline.runs[0].truncated === true ? { truncated: true } : {}),
-        ...(goal.metric === 'doubleCharges' && !retriesTowardCharges(design)
+        ...(goal.metric === 'doubleCharges' &&
+        !r.triedDuplicates &&
+        !retriesTowardCharges(design)
           ? { nothingRetries: true }
           : {}),
         simSeconds,

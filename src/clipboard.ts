@@ -96,7 +96,7 @@ export function isTopology(value: unknown): value is Topology {
     ]) {
       if (!Number.isFinite(cfg[key])) return false;
     }
-    for (const key of ['chargeable', 'idempotencyKeys']) {
+    for (const key of ['chargeable', 'idempotencyKeys', 'flushEveryMs', 'freshReads']) {
       if (cfg[key] !== undefined && !Number.isFinite(cfg[key])) return false;
     }
     if (ids.has(n.id)) return false;
