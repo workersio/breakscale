@@ -152,6 +152,10 @@ describe('protocol tables', () => {
       prefixRps: true,
       renditions: true,
       cpuMsCap: true,
+      keySkew: true,
+      burstSize: true,
+      herdSize: true,
+      herdSpreadMs: true,
     };
     for (const field of Object.keys(every)) expect(WIRE_FIELDS).toContain(field);
   });

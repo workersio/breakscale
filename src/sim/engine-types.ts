@@ -82,6 +82,9 @@ export interface BehaviourCtx {
    */
   roll(): number;
 
+  /** True while any client draws its keys from a skewed (Zipf) spread. */
+  keysSkewed(): boolean;
+
   /** Queued (not yet in service) request count for a node. */
   queueDepth(state: NodeStateLike): number;
   /** queueLimit floored to a non-negative integer. */

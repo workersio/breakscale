@@ -15,6 +15,16 @@ import type {
   SystemStats,
 } from '../sim/types';
 import { canCrashOneInstance } from '../sim/behaviour';
+import { hottestKeyShare, MAX_KEY_SKEW } from '../sim/keys';
+import { DEFAULT_TRAFFIC_PERIOD_S } from '../sim/types';
+import {
+  DEFAULT_BURST_SIZE,
+  DEFAULT_HERD_SIZE,
+  effectiveHerdSpreadMs,
+  MAX_BURST_SIZE,
+  MAX_HERD_SIZE,
+  MAX_HERD_SPREAD_MS,
+} from '../sim/workload';
 import { defaultConfig } from '../sim/presets';
 import { suggestionFor } from '../content/suggestions';
 import { KIND_NAME, KIND_TERM } from './nodeVisuals';
@@ -117,12 +127,30 @@ type Field =
   | 'lockMs'
   | 'prefixRps'
   | 'renditions'
-  | 'cpuMsCap';
+  | 'cpuMsCap'
+  | 'keySkew'
+  | 'traffic'
+  | 'trafficPeriodS'
+  | 'burstSize'
+  | 'herdSize'
+  | 'herdSpreadMs';
 
 const FIELDS_BY_KIND: Record<NodeKind, Field[]> = {
   // The client generates load and decides how long to wait for an answer.
   // It serves nothing, so it has no capacity, service time, or queue.
-  client: ['rps', 'timeoutMs', 'retries'],
+  // The shape fields after `traffic` show only for the shapes that read
+  // them; see shownFields.
+  client: [
+    'rps',
+    'traffic',
+    'trafficPeriodS',
+    'burstSize',
+    'herdSize',
+    'herdSpreadMs',
+    'keySkew',
+    'timeoutMs',
+    'retries',
+  ],
   // A load balancer forwards; its own service time is near-zero but its
   // connection pool and backlog are real and can saturate.
   lb: ['instances', 'capacity', 'serviceMs', 'queueLimit'],
@@ -496,6 +524,11 @@ interface SliderSpec {
   step: number;
   /** Renders the live value shown to the right of the track. */
   display: (v: number) => string;
+  /**
+   * A hint that depends on the value, for a knob whose effect is a number the
+   * student cannot see from the label. Takes the place of `hint`.
+   */
+  liveHint?: (v: number) => string;
 }
 
 interface NumberSpec {
@@ -515,10 +548,100 @@ interface ChoiceSpec {
   label: string;
   unit: string;
   hint?: FieldHint;
-  options: readonly { value: 'reject' | 'wait'; label: string }[];
+  /** Glossary id for the label. See SliderSpec.term. */
+  term?: string;
+  /** The first option is what an absent field means. */
+  options: readonly { value: string; label: string }[];
+  /** One line on the option chosen. Takes the place of `hint`. */
+  liveHint?: (v: string) => ReactNode;
 }
 
 type FieldSpec = SliderSpec | NumberSpec | ChoiceSpec;
+
+/**
+ * One line per traffic shape. Spike says half, because it is: 90% of the
+ * cycle at a tenth of the load and 10% at 4x averages 0.49x.
+ */
+const TRAFFIC_HINT: Readonly<Record<string, ReactNode>> = {
+  steady: 'The same rate the whole time.',
+  ramp: 'Climbs from nothing to the full rate over one cycle, then holds.',
+  spike: 'Quiet, then 4x for a moment. The average is about half the offered load.',
+  diurnal:
+    'A quiet night and a busy afternoon, from a quarter of the rate to twice it.',
+  bursty: (
+    <>
+      Same average, but requests come in <Term id="bursty-traffic">clumps</Term>.
+    </>
+  ),
+  herd: (
+    <>
+      Once a cycle, a <Term id="thundering-herd">herd</Term> of callers piles in on top
+      of the normal rate.
+    </>
+  ),
+};
+
+/** Which cycle the client's `trafficPeriodS` measures, per shape. */
+const PERIOD_HINT: Readonly<Record<string, string>> = {
+  ramp: 'How long the climb to the full rate takes.',
+  spike: 'Time from one spike to the next.',
+  diurnal: 'One whole simulated day.',
+  herd: 'Time from one herd to the next. The first lands one cycle in.',
+};
+
+/**
+ * The client's shape fields, each shown only for the shapes that read it. A
+ * cycle length on steady traffic, or a clump size on a herd, is a knob that
+ * does nothing, which teaches a student to stop trusting the panel.
+ */
+const SHAPE_FIELDS: Partial<Record<Field, ReadonlySet<string>>> = {
+  trafficPeriodS: new Set(['ramp', 'spike', 'diurnal', 'herd']),
+  burstSize: new Set(['bursty']),
+  herdSize: new Set(['herd']),
+  herdSpreadMs: new Set(['herd']),
+};
+
+/** This kind's fields, less the ones the node's traffic shape does not read. */
+function shownFields(kind: NodeKind, config: NodeConfig): readonly Field[] {
+  const fields = FIELDS_BY_KIND[kind];
+  if (kind !== 'client') return fields;
+  const shape = config.traffic ?? 'steady';
+  return fields.filter((f) => SHAPE_FIELDS[f]?.has(shape) ?? true);
+}
+
+/** A hint that depends on the rest of the node's config, where one applies. */
+function contextHint(field: Field, config: NodeConfig): string | undefined {
+  if (field === 'trafficPeriodS') return PERIOD_HINT[config.traffic ?? 'steady'];
+  if (field === 'herdSize') {
+    const size = config.herdSize ?? DEFAULT_HERD_SIZE;
+    if (!(config.rps > 0) || !(size > 0)) return undefined;
+    const seconds = size / config.rps;
+    const said = seconds < 10 ? seconds.toFixed(1) : formatCount(Math.round(seconds));
+    const spreadMs = effectiveHerdSpreadMs(config);
+    const when = spreadMs > 0 ? `within ${formatMs(spreadMs)}` : 'in one instant';
+    return `That is ${said} seconds of normal traffic arriving ${when}.`;
+  }
+  return undefined;
+}
+
+/**
+ * What an absent field means, for the fields no kind's defaultConfig holds.
+ * Without these the panel would show 0 for a cycle the engine runs at 60s.
+ */
+const ABSENT_FIELD: Partial<Record<Field, number>> = {
+  trafficPeriodS: DEFAULT_TRAFFIC_PERIOD_S,
+  burstSize: DEFAULT_BURST_SIZE,
+  herdSize: DEFAULT_HERD_SIZE,
+  herdSpreadMs: 0,
+};
+
+/** A choice field's value, or its first option when absent. */
+function readChoice(node: SimNode, field: Field, spec: ChoiceSpec): string {
+  const v = node.config[field];
+  return typeof v === 'string' && spec.options.some((o) => o.value === v)
+    ? v
+    : (spec.options[0]?.value ?? '');
+}
 
 const FIELD_SPECS: Record<Field, FieldSpec> = {
   rps: {
@@ -669,6 +792,77 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     min: 1,
     max: 512,
     step: 1,
+  },
+  keySkew: {
+    control: 'slider',
+    term: 'zipf',
+    label: 'Key spread',
+    unit: 'skew, 0 is even',
+    min: 0,
+    max: MAX_KEY_SKEW,
+    step: 0.1,
+    display: (v) => (v <= 0 ? 'even' : `skew ${v.toFixed(1)}`),
+    liveHint: (v) =>
+      v <= 0
+        ? 'Every one of the 64 keys is equally likely, about 1.6% of requests each.'
+        : `The hottest of the 64 keys gets ${formatPct(hottestKeyShare(v))} of requests, and a sharded store sends all of them to one partition.`,
+  },
+  traffic: {
+    control: 'choice',
+    term: 'traffic-shape',
+    label: 'Traffic shape',
+    unit: 'how the load arrives over time',
+    options: [
+      { value: 'steady', label: 'Steady' },
+      { value: 'ramp', label: 'Ramp up' },
+      { value: 'spike', label: 'Spike' },
+      { value: 'diurnal', label: 'Daily cycle' },
+      { value: 'bursty', label: 'Bursty' },
+      { value: 'herd', label: 'Thundering herd' },
+    ],
+    liveHint: (v) => TRAFFIC_HINT[v] ?? TRAFFIC_HINT.steady,
+  },
+  trafficPeriodS: {
+    control: 'number',
+    label: 'Cycle length',
+    unit: 'seconds',
+    min: 5,
+    max: 3600,
+    step: 1,
+  },
+  burstSize: {
+    control: 'slider',
+    term: 'bursty-traffic',
+    label: 'Average clump',
+    unit: 'requests arriving together',
+    min: 2,
+    max: MAX_BURST_SIZE,
+    step: 1,
+    display: (v) => `${formatCount(v)} at once`,
+    hint: 'Clumps come this many times further apart, so the average rate does not change.',
+  },
+  herdSize: {
+    control: 'number',
+    term: 'thundering-herd',
+    label: 'Callers in the herd',
+    unit: 'each cycle',
+    min: 0,
+    max: MAX_HERD_SIZE,
+    step: 10,
+  },
+  herdSpreadMs: {
+    control: 'slider',
+    term: 'jitter',
+    label: 'Spread the herd over',
+    unit: 'milliseconds',
+    min: 0,
+    max: MAX_HERD_SPREAD_MS,
+    step: 100,
+    display: (v) => (v <= 0 ? 'all at once' : formatMs(v)),
+    liveHint: (v) =>
+      v <= 0
+        ? 'Every caller fires in the same millisecond.'
+        : `Each caller first waits a random delay of up to ${formatMs(v)}, so the herd arrives spread out.`,
   },
   hotKeyFraction: {
     control: 'slider',
@@ -1048,7 +1242,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     term: 'loadshedder',
     label: 'Low-priority traffic',
     unit: 'percent of traffic',
-    hint: 'Derived from the request key, so the same caller is always the same priority.',
+    hint: 'Derived from the request key, so the same caller is always the same priority. If a client skews its keys, its busiest caller sits in one tier and this share drifts.',
     min: 0,
     max: 1,
     step: 0.01,
@@ -1184,6 +1378,12 @@ const FIELD_GROUPS: { title: string; fields: ReadonlySet<Field> }[] = [
     title: 'What it does',
     fields: new Set<Field>([
       'rps',
+      'traffic',
+      'trafficPeriodS',
+      'burstSize',
+      'herdSize',
+      'herdSpreadMs',
+      'keySkew',
       'hitRate',
       'replicaCount',
       'replicationLagMs',
@@ -1338,6 +1538,8 @@ function SliderRow({
       </span>
       {locked ? (
         <p className="ins-hint">{locked}</p>
+      ) : spec.liveHint && !mixed ? (
+        <p className="ins-hint">{spec.liveHint(value)}</p>
       ) : spec.hint ? (
         <p className="ins-hint">{spec.hint}</p>
       ) : null}
@@ -1350,6 +1552,7 @@ function NumberRow({
   value,
   mixed,
   locked,
+  hint = spec.hint,
   onChange,
 }: {
   spec: NumberSpec;
@@ -1357,6 +1560,8 @@ function NumberRow({
   mixed?: boolean;
   /** Held still by a challenge. See SliderRow. */
   locked?: string;
+  /** Replaces the spec's hint where the line depends on other fields. */
+  hint?: string;
   onChange: (v: number) => void;
 }) {
   const id = useId();
@@ -1367,9 +1572,8 @@ function NumberRow({
   return (
     <div
       className={
-        (spec.hint || locked
-          ? 'ins-field-row ins-field-row--hinted'
-          : 'ins-field-row') + (locked ? ' is-locked' : '')
+        (hint || locked ? 'ins-field-row ins-field-row--hinted' : 'ins-field-row') +
+        (locked ? ' is-locked' : '')
       }
     >
       <label className="row-k" htmlFor={id}>
@@ -1426,38 +1630,51 @@ function NumberRow({
       </span>
       {locked ? (
         <p className="ins-hint">{locked}</p>
-      ) : spec.hint ? (
-        <p className="ins-hint">{spec.hint}</p>
+      ) : hint ? (
+        <p className="ins-hint">{hint}</p>
       ) : null}
     </div>
   );
 }
 
+/** The select's value while a multi-selection disagrees. No option uses it. */
+const MIXED_CHOICE = '';
+
 function ChoiceRow({
   spec,
   value,
+  mixed,
   locked,
   onChange,
 }: {
   spec: ChoiceSpec;
-  value: 'reject' | 'wait';
+  value: string;
+  /** True when a multi-selection disagrees on this field. */
+  mixed?: boolean;
   /** Held still by a challenge. See SliderRow. */
   locked?: string;
-  onChange: (v: 'reject' | 'wait') => void;
+  onChange: (v: string) => void;
 }) {
   const id = useId();
   return (
     <div className={locked ? 'ins-field-row is-locked' : 'ins-field-row'}>
       <label className="row-k" htmlFor={id}>
-        {spec.label}
+        {spec.term ? <Term id={spec.term}>{spec.label}</Term> : spec.label}
       </label>
       <select
         id={id}
         className="ins-number"
-        value={value}
+        value={mixed ? MIXED_CHOICE : value}
+        data-mixed={mixed || undefined}
         disabled={locked !== undefined}
-        onChange={(e) => onChange(e.currentTarget.value as 'reject' | 'wait')}
+        onChange={(e) => onChange(e.currentTarget.value)}
       >
+        {/* Shown, not choosable: picking a real option is what unmixes it. */}
+        {mixed ? (
+          <option value={MIXED_CHOICE} disabled>
+            mixed
+          </option>
+        ) : null}
         {spec.options.map((option) => (
           <option key={option.value} value={option.value}>
             {option.label}
@@ -1466,6 +1683,8 @@ function ChoiceRow({
       </select>
       {locked ? (
         <p className="ins-hint">{locked}</p>
+      ) : spec.liveHint && !mixed ? (
+        <p className="ins-hint">{spec.liveHint(value)}</p>
       ) : spec.hint ? (
         <p className="ins-hint">{spec.hint}</p>
       ) : null}
@@ -2264,7 +2483,7 @@ function readField(node: SimNode, field: Field): number {
   const v = node.config[field];
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   const d = defaultConfig(node.kind)[field];
-  return typeof d === 'number' && Number.isFinite(d) ? d : 0;
+  return typeof d === 'number' && Number.isFinite(d) ? d : (ABSENT_FIELD[field] ?? 0);
 }
 
 /**
@@ -2707,6 +2926,13 @@ function ReplicaSetSection({ per, stats }: { per: number[]; stats: NodeStats }) 
 }
 
 /**
+ * Hottest-key share past which the panel says what it means. Even keys put
+ * about 1.6% on each of the 64; measured at skew 0.8 on eight partitions the
+ * top key took 14% and its partition was the one at 100%.
+ */
+const HOT_KEY_NOTE = 0.1;
+
+/**
  * Per-unit truth for the kinds that are genuinely several things.
  *
  * The headline is the SPREAD, not the mean, and for a shard that is the whole
@@ -2726,6 +2952,9 @@ function UnitsPanel({ node, stats }: { node: SimNode; stats: NodeStats }) {
     // A hot key is not "one shard is busier"; it is one shard pinned while
     // the rest idle. The gap is the signature, so it is named as one.
     const skewed = hot - cold > 0.5;
+    // Measured by the store, and present only while a client skews its keys.
+    const keyShare = stats.hottestKeyShare;
+    const keyShard = stats.hottestKeyShard;
     return (
       <Section title="Across the partitions">
         <div className="ins-stats">
@@ -2737,7 +2966,19 @@ function UnitsPanel({ node, stats }: { node: SimNode; stats: NodeStats }) {
           />
           <StatRow label="Quietest one" value={formatPct(cold)} />
           <StatRow label="Average" value={formatPct(stats.utilization)} />
+          {keyShare !== undefined && (
+            <StatRow label="Hottest key" term="zipf" value={formatPct(keyShare)} />
+          )}
         </div>
+        {keyShare !== undefined &&
+          keyShard !== undefined &&
+          keyShare >= HOT_KEY_NOTE && (
+            <p className="ins-hint">
+              One key is {formatPct(keyShare)} of the requests here, and all of them go
+              to partition {formatCount(keyShard + 1)}. More shards cannot split a
+              single key.
+            </p>
+          )}
         {skewed && (
           <p className="ins-hint is-warn">
             Badly uneven. One partition is doing most of the work while the others sit
@@ -2841,7 +3082,7 @@ function SingleInspector({
   suggestions: boolean;
   faults?: InspectorFaults;
 }) {
-  const fields = FIELDS_BY_KIND[node.kind];
+  const fields = shownFields(node.kind, node.config);
   const cfg = node.config;
 
   /** The node's name when the title field took focus; Escape restores it. */
@@ -3018,9 +3259,9 @@ function SingleInspector({
                   <ChoiceRow
                     key={field}
                     spec={spec}
-                    value={node.config.bulkheadMode ?? 'reject'}
+                    value={readChoice(node, field, spec)}
                     locked={locked ? lockNote : undefined}
-                    onChange={(v) => onChange(node.id, { bulkheadMode: v })}
+                    onChange={(v) => onChange(node.id, { [field]: v })}
                   />
                 ) : (
                   <NumberRow
@@ -3028,6 +3269,7 @@ function SingleInspector({
                     spec={spec}
                     value={value}
                     locked={locked ? lockNote : undefined}
+                    hint={contextHint(field, node.config) ?? spec.hint}
                     onChange={(v) => onChange(node.id, { [field]: v })}
                   />
                 );
@@ -3291,7 +3533,13 @@ function MultiInspector({
     for (const id of ids) onDelete(id);
   }, [ids, onDelete, onDeleteMany]);
 
-  const fields = kind ? FIELDS_BY_KIND[kind] : [];
+  /* A shape field shows only when every client in the selection runs a shape
+     that reads it, so a multi-edit never writes a knob some of them ignore. */
+  const fields = kind
+    ? FIELDS_BY_KIND[kind].filter((f) =>
+        nodes.every((n) => shownFields(kind, n.config).includes(f)),
+      )
+    : [];
   /* The same fields the single view holds still. A multi-selection that
      could move them would be the way round every lock a brief has. */
   const locked = kind ? (lockedFields?.(kind) ?? []) : [];
@@ -3375,9 +3623,14 @@ function MultiInspector({
                       <ChoiceRow
                         key={field}
                         spec={spec}
-                        value={nodes[0]!.config.bulkheadMode ?? 'reject'}
+                        value={readChoice(nodes[0]!, field, spec)}
+                        mixed={nodes.some(
+                          (n) =>
+                            readChoice(n, field, spec) !==
+                            readChoice(nodes[0]!, field, spec),
+                        )}
                         locked={note}
-                        onChange={(v) => applyAll({ bulkheadMode: v })}
+                        onChange={(v) => applyAll({ [field]: v })}
                       />
                     ) : (
                       <NumberRow
@@ -3515,6 +3768,138 @@ export interface TrafficControlProps {
    * states. The slider still shows it, held still and saying why.
    */
   locked?: boolean;
+  /** The design's 1x, as a total rate. 0 or absent shows no multiple. */
+  baselineRps?: number;
+  /** Make the current total the new 1x. */
+  onMakeBaseline?: () => void;
+  /**
+   * Measured client arrivals over the last second, while some client runs a
+   * traffic shape; null on steady traffic, where it would repeat `rps`.
+   */
+  liveRps?: number | null;
+}
+
+/** "2.0x", "12x": one decimal while the difference between steps matters. */
+function formatLoadMultiple(m: number): string {
+  return m < 9.95 ? `${m.toFixed(1)}x` : `${Math.round(m)}x`;
+}
+
+const QUICK_MULTIPLES = [1, 2, 4] as const;
+
+/**
+ * The load as a multiple of the design's 1x, with a small panel to jump to
+ * 1x, 2x or 4x, or to make the current rate the new 1x. Every example's copy
+ * says "drag past 4x"; this is what lets the control say the same thing.
+ */
+function LoadMultiple({
+  rps,
+  baselineRps,
+  locked,
+  onRpsChange,
+  onMakeBaseline,
+}: {
+  rps: number;
+  baselineRps: number;
+  locked: boolean;
+  onRpsChange: (rps: number) => void;
+  onMakeBaseline?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
+  const wrapRef = useRef<HTMLSpanElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const multiple = rps / baselineRps;
+  const said = formatLoadMultiple(multiple);
+  const atOne = Math.abs(rps - baselineRps) < 0.5;
+
+  // Closes on a press anywhere else, the way a menu does.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, [open]);
+
+  if (locked) {
+    // A brief judges at its own rate, so its 1x is not the reader's to move.
+    return <span className="num traffic-multiple is-static">{said}</span>;
+  }
+  return (
+    <span
+      ref={wrapRef}
+      className="traffic-multiple-wrap"
+      data-chrome
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && open) {
+          e.stopPropagation();
+          setOpen(false);
+          buttonRef.current?.focus();
+        }
+      }}
+    >
+      <button
+        ref={buttonRef}
+        type="button"
+        className="btn btn-sm num traffic-multiple"
+        aria-expanded={open}
+        aria-controls={panelId}
+        aria-label={`Load is ${said}, where 1x is ${formatRate(baselineRps)}`}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {said}
+      </button>
+      {open ? (
+        <div
+          id={panelId}
+          className="traffic-multiple-panel"
+          role="group"
+          aria-label="Load as a multiple"
+        >
+          <p className="traffic-multiple-text">
+            1x is <span className="num">{formatRate(baselineRps)}</span>, the rate these
+            multiples count from.
+          </p>
+          <div className="traffic-multiple-quick">
+            {QUICK_MULTIPLES.map((m) => {
+              const target = Math.round(baselineRps * m);
+              const over = target > RPS_MAX;
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  className="btn btn-sm num"
+                  aria-pressed={Math.abs(rps - target) < 0.5}
+                  disabled={over}
+                  title={over ? `Past the ${formatRate(RPS_MAX)} limit` : undefined}
+                  onClick={() => onRpsChange(Math.max(RPS_MIN, target))}
+                >
+                  {m}x
+                </button>
+              );
+            })}
+          </div>
+          {onMakeBaseline ? (
+            <button
+              type="button"
+              className="btn btn-sm traffic-multiple-reset"
+              disabled={atOne}
+              onClick={() => {
+                onMakeBaseline();
+                setOpen(false);
+                buttonRef.current?.focus();
+              }}
+            >
+              <span>
+                Make <span className="num">{formatRate(rps)}</span> the new 1x
+              </span>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </span>
+  );
 }
 
 export function TrafficControl({
@@ -3529,6 +3914,9 @@ export function TrafficControl({
   empty,
   noTrafficSource,
   locked = false,
+  baselineRps = 0,
+  onMakeBaseline,
+  liveRps = null,
 }: TrafficControlProps) {
   const sliderId = useId();
 
@@ -3584,9 +3972,29 @@ export function TrafficControl({
                     on screen only if it is the ONLY number at the hero
                     size. */}
                 <span className="num num-lg">{formatRateBare(rps)}</span>
-                <span className="label traffic-load-unit">
-                  <Term id="rps">requests / sec</Term>
-                </span>
+                {liveRps !== null ? (
+                  /* A traffic shape is on, so the slider sets the base and
+                     the shape moves the real rate around it. Says both. */
+                  <>
+                    <span className="label traffic-load-now">
+                      <Term id="traffic-shape">base</Term>, now{' '}
+                      <span className="num">{formatRate(liveRps)}</span>
+                    </span>
+                  </>
+                ) : (
+                  <span className="label traffic-load-unit">
+                    <Term id="rps">requests / sec</Term>
+                  </span>
+                )}
+                {baselineRps > 0 && rps > 0 ? (
+                  <LoadMultiple
+                    rps={rps}
+                    baselineRps={baselineRps}
+                    locked={locked}
+                    onRpsChange={onRpsChange}
+                    onMakeBaseline={onMakeBaseline}
+                  />
+                ) : null}
               </>
             )}
           </span>
