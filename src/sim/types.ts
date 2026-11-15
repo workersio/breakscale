@@ -564,6 +564,24 @@ export interface NodeConfig {
    * means no budget.
    */
   cpuMsCap?: number;
+
+  /* ---- correctness ---------------------------------------------------- */
+
+  /**
+   * 1 when every call that finishes its own work here charges money, as a
+   * payment provider does. Read only by the correctness checks; it changes
+   * nothing about how the run plays. Unset means it charges nothing.
+   */
+  chargeable?: number;
+  /**
+   * 1 when this part honours idempotency keys. Every request carries one
+   * key from its client onward, the same on every retry. A call whose key
+   * this part already finished is answered with that first answer and does
+   * no work; one whose key is still being worked on is refused, so its
+   * caller can try again. Keys are forgotten after 65,536 newer requests.
+   * Unset means every call does the work.
+   */
+  idempotencyKeys?: number;
 }
 
 export interface SimNode {

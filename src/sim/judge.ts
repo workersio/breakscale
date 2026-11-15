@@ -614,6 +614,11 @@ function measure(
       return run.lostJobs;
     case 'queueDepth':
       return run.queueDepth;
+    case 'doubleCharges':
+    case 'lostAckedWrites':
+    case 'staleReads':
+      // Read from the operation log, which the check does not keep.
+      return null;
   }
 }
 

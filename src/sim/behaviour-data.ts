@@ -125,6 +125,8 @@ const replica: ComponentBehaviour = {
   // pools. The engine's single busy/waiting pair cannot express that.
   pump: 'none',
   creditsJoinCompletion: true,
+  // The same lag startReplicaService and onReplicaDrained play.
+  readLagMs: (config) => (config.replicationLagMs > 0 ? config.replicationLagMs : 0),
 
   onDiscard(ctx: BehaviourCtx, state: NodeStateLike): void {
     // Both lines are emptied before anything is failed: failing a request

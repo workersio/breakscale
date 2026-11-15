@@ -146,9 +146,39 @@ export function isRouteGoal(goal: Goal): goal is Goal & { route: string } {
  * once a worker took them. `queueDepth` is the longest line in any queue at
  * the end of the check, in messages. None of them can be read off a single
  * snapshot, so only the check measures them.
+ *
+ * `doubleCharges` is a correctness goal: the calls that charged money more
+ * than once at a part marked `chargeable`, read from the operation log. Only
+ * "Can you break it?" and `verify` measure it; no brief uses it.
+ *
+ * `lostAckedWrites` is the other: writes a client was told were saved that
+ * never reached the store behind a write-behind cache. Unlike `lostWrites`
+ * it only counts writes the client itself heard succeed, and it does not
+ * count a write still on its way when the run ends.
+ *
+ * `staleReads` is the third: reads that did not see a write their own
+ * client had already been told was saved, at a store whose reads trail its
+ * writes (a replica set, a search index).
  */
 export type GoalMetric =
-  'p99' | 'errorRate' | 'p95' | 'lostWrites' | 'lostJobs' | 'queueDepth';
+  | 'p99'
+  | 'errorRate'
+  | 'p95'
+  | 'lostWrites'
+  | 'lostJobs'
+  | 'queueDepth'
+  | 'doubleCharges'
+  | 'lostAckedWrites'
+  | 'staleReads';
+
+/** Whether a goal is about what the system did to the data, not how it performed. */
+export function isCorrectnessGoal(goal: Goal): boolean {
+  return (
+    goal.metric === 'doubleCharges' ||
+    goal.metric === 'lostAckedWrites' ||
+    goal.metric === 'staleReads'
+  );
+}
 
 /** The metrics a snapshot can be read for, in the live view. */
 export function isLiveMetric(metric: GoalMetric): boolean {
@@ -188,6 +218,9 @@ function actualFor(
     case 'lostWrites':
     case 'lostJobs':
     case 'queueDepth':
+    case 'doubleCharges':
+    case 'lostAckedWrites':
+    case 'staleReads':
       // Filtered out by isLiveMetric before this is reached.
       return Number.NaN;
   }

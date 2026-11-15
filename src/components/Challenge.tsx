@@ -77,6 +77,9 @@ const LABEL: Record<GoalMetric, string> = {
   lostWrites: 'Saves that never reached the database',
   lostJobs: 'Accepted jobs that failed later',
   queueDepth: 'Jobs still waiting in the queue',
+  doubleCharges: 'Payments charged more than once',
+  lostAckedWrites: 'Saved writes that never reached storage',
+  staleReads: 'Reads that missed their own saved write',
 };
 
 /**
@@ -94,6 +97,9 @@ const COUNTED: ReadonlySet<GoalMetric> = new Set([
   'lostWrites',
   'lostJobs',
   'queueDepth',
+  'doubleCharges',
+  'lostAckedWrites',
+  'staleReads',
 ]);
 
 /** A reading against a goal, rounded toward failing it. See format.ts. */
@@ -104,6 +110,9 @@ function formatGoal(metric: GoalMetric, value: number | null): string {
     case 'lostWrites':
     case 'lostJobs':
     case 'queueDepth':
+    case 'doubleCharges':
+    case 'lostAckedWrites':
+    case 'staleReads':
       return formatCount(value);
     case 'p99':
     case 'p95':
@@ -142,6 +151,12 @@ function missLine(
       return `${a} accepted ${one ? 'job' : 'jobs'} failed later, ${end}`;
     case 'queueDepth':
       return `${a} ${one ? 'job was' : 'jobs were'} still waiting in the queue at the end, ${end}`;
+    case 'doubleCharges':
+      return `${a} ${one ? 'payment was' : 'payments were'} charged more than once, ${end}`;
+    case 'lostAckedWrites':
+      return `${a} ${one ? 'save' : 'saves'} the client heard succeed never reached storage, ${end}`;
+    case 'staleReads':
+      return `${a} ${one ? 'read' : 'reads'} missed a write the same client heard succeed, ${end}`;
   }
 }
 

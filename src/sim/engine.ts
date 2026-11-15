@@ -5,6 +5,7 @@ import {
 } from './behaviour';
 import type { BehaviourCtx, NodeStateLike, ReqLike } from './engine-types';
 import { MinHeap, type Timed } from './heap';
+import { OpLogRecorder, type OpLog, type OpLogOptions } from './oplog';
 import { cos, exp, pow } from './fdlibm';
 import { sanitizeFaults } from './faults';
 import { Rng } from './random';
@@ -247,6 +248,39 @@ interface Req {
   /** True when this request is a write. Classified once, inherited downstream. */
   isWrite: boolean;
   /**
+   * The logical request this call belongs to, set by the client and kept by
+   * every child call, retry and relayed copy. A counter, never drawn, so the
+   * same seed and design give the same request the same id. 0 on a stub.
+   */
+  rid: number;
+  /**
+   * A hash of the parts this call passed through to get here. A retry goes
+   * down the same path and keeps it; a second call of the same request down
+   * another path gets another. With `rid` it names one call.
+   */
+  path: number;
+  /**
+   * True when this node sent its call to one out-edge it picked (a load
+   * balancer, a region), so a retry of it is named the same however the
+   * pick fell.
+   */
+  pickedOne: boolean;
+  /**
+   * The node whose idempotency key this call holds while it runs, so its
+   * answer can settle the key. Null on every other call.
+   */
+  idemAt: NodeState | null;
+  /**
+   * On a write-behind cache's buffered copy, its number in the operation
+   * log, so the log hears whether it landed. -1 on every other call.
+   */
+  opBuf: number;
+  /**
+   * On a try of that copy's flush, the copy's number, so the store's answer
+   * reaches the log even after the cache stopped waiting. -1 otherwise.
+   */
+  opFlush: number;
+  /**
    * Extra work (ms) a behaviour asked for at this node, consumed when its
    * service starts. Stretched by a 'slow' fault like the drawn time.
    */
@@ -263,6 +297,64 @@ interface Req {
    * behaviour can release its own slot. Null for the ordinary path.
    */
   onDrained: ((ctx: BehaviourCtx, state: NodeStateLike, req: ReqLike) => void) | null;
+}
+
+/* ------------------------------------------------------------------ *
+ * Idempotency keys
+ * ------------------------------------------------------------------ */
+
+/** Requests a node remembers keys for. A power of two. */
+const IDEMPOTENCY_KEYS = 65536;
+const KEY_NEW = 0;
+const KEY_RUNNING = 1;
+const KEY_DONE = 2;
+
+/**
+ * The keys of the calls a node that honours idempotency keys has taken on.
+ * The key is the call's request id and path, so every retry of a call
+ * carries the same one. Indexed by request id, which is a counter, so a key
+ * is forgotten exactly when a request 65,536 newer takes its place. Two
+ * calls of one request down different paths fit side by side; a third is
+ * not remembered. Fixed typed arrays, so nothing allocates per call.
+ */
+class IdempotencyKeys {
+  private rid = new Int32Array(IDEMPOTENCY_KEYS);
+  private pathA = new Int32Array(IDEMPOTENCY_KEYS);
+  private pathB = new Int32Array(IDEMPOTENCY_KEYS);
+  private stateA = new Uint8Array(IDEMPOTENCY_KEYS);
+  private stateB = new Uint8Array(IDEMPOTENCY_KEYS);
+
+  /** KEY_RUNNING or KEY_DONE for a call already taken on, else KEY_NEW, and it is now taken. */
+  claim(rid: number, path: number): number {
+    const i = rid & (IDEMPOTENCY_KEYS - 1);
+    if (this.rid[i] !== rid) {
+      this.rid[i] = rid;
+      this.pathA[i] = path;
+      this.stateA[i] = KEY_RUNNING;
+      this.stateB[i] = KEY_NEW;
+      return KEY_NEW;
+    }
+    if (this.stateA[i] !== KEY_NEW && this.pathA[i] === path) return this.stateA[i];
+    if (this.stateB[i] !== KEY_NEW && this.pathB[i] === path) return this.stateB[i];
+    if (this.stateA[i] === KEY_NEW) {
+      this.pathA[i] = path;
+      this.stateA[i] = KEY_RUNNING;
+    } else if (this.stateB[i] === KEY_NEW) {
+      this.pathB[i] = path;
+      this.stateB[i] = KEY_RUNNING;
+    }
+    return KEY_NEW;
+  }
+
+  /** The call answered: keep a success to answer repeats with, forget a failure. */
+  settle(rid: number, path: number, ok: boolean): void {
+    const i = rid & (IDEMPOTENCY_KEYS - 1);
+    if (this.rid[i] !== rid) return;
+    const to = ok ? KEY_DONE : KEY_NEW;
+    if (this.stateA[i] === KEY_RUNNING && this.pathA[i] === path) this.stateA[i] = to;
+    else if (this.stateB[i] === KEY_RUNNING && this.pathB[i] === path)
+      this.stateB[i] = to;
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -727,6 +819,11 @@ interface NodeState {
 
   /** This client's route figures, or null for a kind that sends no load. */
   route: RouteState | null;
+
+  /** A number for this state, mixed into the `path` of calls made to it. */
+  num: number;
+  /** The keys of calls this node has seen, or null unless it keeps idempotency keys. */
+  dedupe: IdempotencyKeys | null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -772,6 +869,12 @@ export class Engine implements BehaviourCtx {
   private tally: Tally | null = null;
   /** The last tally stopped, kept for readTally() until the next starts. */
   private tallyStopped: Tally | null = null;
+  /** The operation log, or null, tested the same way the tally is. */
+  private opLog: OpLogRecorder | null = null;
+  /** The last request id handed out. */
+  private ridSeq = 0;
+  /** The last NodeState number handed out. */
+  private nodeNumSeq = 0;
   private failures: FailureCounts = {
     error: 0,
     shed: 0,
@@ -1033,6 +1136,7 @@ export class Engine implements BehaviourCtx {
     const fault = this.faults.get(id);
     const wasDown = fault !== undefined && this.downBy(fault, state);
     Object.assign(state.config, patch);
+    syncDedupe(state);
     this.refitInstanceCrash(state, wasDown);
     // A capacity increase may free up slots for waiting work immediately.
     this.pumpQueue(state);
@@ -1315,6 +1419,25 @@ export class Engine implements BehaviourCtx {
         ]),
       ),
     };
+  }
+
+  /* ---------------- operation log ---------------- *
+   *
+   * What each request did, for the correctness checks in `oplog.ts`. Off
+   * unless asked for, and like the tally it changes nothing about the run.
+   * ---------------------------------------- */
+
+  /**
+   * Start an operation log, discarding any earlier one. It covers requests
+   * sent from now on; reset() ends it.
+   */
+  startOpLog(opts: OpLogOptions = {}): void {
+    this.opLog = new OpLogRecorder(opts, this.ridSeq + 1);
+  }
+
+  /** What the log has recorded so far, as a copy the caller owns, or null. */
+  readOpLog(): OpLog | null {
+    return this.opLog?.read() ?? null;
   }
 
   private appendRecorded(entry: FaultEvent): void {
@@ -1810,6 +1933,9 @@ export class Engine implements BehaviourCtx {
     // A tally is a window of one run. The run it measured is gone.
     this.tally = null;
     this.tallyStopped = null;
+    this.opLog = null;
+    this.ridSeq = 0;
+    this.nodeNumSeq = 0;
     this.failures = {
       error: 0,
       shed: 0,
@@ -1901,11 +2027,13 @@ export class Engine implements BehaviourCtx {
         if (field !== undefined && liveScale !== undefined) {
           state.config[field] = liveScale;
         }
+        syncDedupe(state);
         state.out = [];
         state.ctrl = [];
         state.sources = [];
       } else {
         state = createNodeState(node);
+        state.num = ++this.nodeNumSeq;
         state.arrivalGeneration = this.nextArrivalGeneration++;
         if (state.behaviour.generatesLoad) newClientIds.push(node.id);
       }
@@ -2170,6 +2298,10 @@ export class Engine implements BehaviourCtx {
     // Draw this request's key. Every downstream call inherits it, so the
     // whole chain agrees on which partition/record is being touched.
     root.key = Math.floor(this.rng.next() * KEYSPACE);
+    root.rid = ++this.ridSeq;
+    root.path = 0;
+    const log = this.opLog;
+    if (log !== null) log.invoke(this.now, root.rid, state.id, root.key);
 
     // Trace one request at a time, and only once the previous one has been
     // published. Sampling instead of tracing everything keeps the allocation
@@ -2240,6 +2372,7 @@ export class Engine implements BehaviourCtx {
         return;
       }
       req.pending = 1;
+      req.pickedOne = true;
       this.sendChild(state, req, edge, 0);
       return;
     }
@@ -2345,6 +2478,18 @@ export class Engine implements BehaviourCtx {
     if (this.cutEdges.size > 0 && this.cutEdges.has(edge.id)) {
       parentState.errors.add(this.now, 1);
       parentState.totalFailed++;
+      const log = this.opLog;
+      if (log !== null) {
+        log.lost(
+          this.now,
+          parent.rid,
+          parentState.id,
+          target.id,
+          edge.id,
+          attempt,
+          'partitioned',
+        );
+      }
       const stub = this.acquireReq();
       stub.attempt = attempt;
       stub.retryTarget = edge.id;
@@ -2362,6 +2507,18 @@ export class Engine implements BehaviourCtx {
     if (loss !== undefined && loss > 0 && this.rng.next() < loss) {
       parentState.errors.add(this.now, 1);
       parentState.totalFailed++;
+      const log = this.opLog;
+      if (log !== null) {
+        log.lost(
+          this.now,
+          parent.rid,
+          parentState.id,
+          target.id,
+          edge.id,
+          attempt,
+          'packet-loss',
+        );
+      }
       const stub = this.acquireReq();
       stub.attempt = attempt;
       stub.retryTarget = edge.id;
@@ -2383,6 +2540,22 @@ export class Engine implements BehaviourCtx {
     child.detached = parent.detached;
     child.key = parent.key;
     child.isWrite = parent.isWrite;
+    child.rid = parent.rid;
+    // A call through a part that picks one way on is named by that part,
+    // not by the way it picked: a retry the balancer sends to another
+    // backend is still the same call. Every other call is named by where
+    // it goes, which tells apart a request that calls Pay down two paths.
+    child.path = parent.pickedOne
+      ? mixPath(parent.path, ~parentState.num)
+      : mixPath(parent.path, target.num);
+    const log = this.opLog;
+    if (log !== null) {
+      log.send(this.now, child.rid, parentState.id, target.id, edge.id, attempt);
+      if (parent.opBuf >= 0) {
+        child.opFlush = parent.opBuf;
+        log.flushSent(parent.opBuf, child.rid);
+      }
+    }
 
     const counter = this.edgeFlow.get(edge.id);
     if (counter) counter.add(this.now, 1);
@@ -2606,6 +2779,8 @@ export class Engine implements BehaviourCtx {
     msg.enterMs = this.now;
     msg.hop = req.hop;
     msg.detached = true;
+    msg.rid = req.rid;
+    msg.path = req.path;
     // The caller hears yes now, so a job that fails later fails where no
     // client sees it. The tally counts those for a check to see.
     const tally = this.tally;
@@ -2663,13 +2838,19 @@ export class Engine implements BehaviourCtx {
     msg.detached = true;
     msg.key = req.key;
     msg.isWrite = req.isWrite;
+    msg.rid = req.rid;
+    msg.path = req.path;
     // A write-behind cache's ack is a promise the write will land. The tally
     // keeps count of the promises so a check can see the ones that are
     // broken behind it, which no client ever hears about.
-    const tally = this.tally;
-    if (tally !== null && state.kind === 'writebehind') {
-      tally.writesAcked++;
-      msg.ackedIn = tally;
+    if (state.behaviour.acksBeforeSaved === true) {
+      const tally = this.tally;
+      if (tally !== null) {
+        tally.writesAcked++;
+        msg.ackedIn = tally;
+      }
+      const log = this.opLog;
+      if (log !== null) msg.opBuf = log.buffer(this.now, req.rid, req.path, state.id);
     }
     // The flush delay is the time a write sits dirty, not work, so it goes
     // in as waiting and a 'slow' fault leaves it alone.
@@ -3026,6 +3207,53 @@ export class Engine implements BehaviourCtx {
       return;
     }
 
+    // The node's own work takes effect here, unless it has done this call
+    // already. A call it finished is answered from that first answer, with
+    // no work and no downstream calls; one still running is refused, as a
+    // payment API refuses a second request with a key it is still working
+    // on, and the caller can try again.
+    const log = this.opLog;
+    const keys = state.dedupe;
+    if (keys !== null) {
+      const seen = keys.claim(req.rid, req.path);
+      if (seen !== KEY_NEW) {
+        if (log !== null) {
+          log.dedupe(this.now, req.rid, state.id, req.attempt, seen === KEY_RUNNING);
+        }
+        if (seen === KEY_DONE) {
+          this.completeNode(state, req, req.ownMs);
+        } else {
+          state.errors.add(this.now, 1);
+          state.totalFailed++;
+          this.resolve(req, false, 'error', req.ownMs);
+        }
+        return;
+      }
+      req.idemAt = state;
+    }
+    if (log !== null) {
+      log.apply(
+        this.now,
+        req.rid,
+        req.path,
+        state.id,
+        req.attempt,
+        state.config.chargeable === 1,
+      );
+      // A store whose reads trail its writes: a read sees what was visible
+      // when its service started, and a write shows once the lag has passed.
+      const lag = state.behaviour.readLagMs;
+      if (lag !== undefined) {
+        log.access(
+          req.isWrite ? this.now + lag(state.config) : req.enterMs,
+          req.rid,
+          state.id,
+          req.key,
+          req.isWrite,
+        );
+      }
+    }
+
     const hook = state.behaviour.onServiceComplete;
     if (hook && hook(this, state, req) === 'complete') {
       this.completeNode(state, req, req.ownMs);
@@ -3083,6 +3311,11 @@ export class Engine implements BehaviourCtx {
       // here as well is what made a node fail more often than the system did.
     }
 
+    const log = this.opLog;
+    if (log !== null && parent !== null) {
+      log.timeout(this.now, call.rid, parent.nodeId, call.nodeId, call.attempt);
+    }
+
     // Detach the call from its parent so its eventual completion is discarded,
     // then report the timeout upward (which may trigger a retry).
     call.parent = null;
@@ -3115,6 +3348,29 @@ export class Engine implements BehaviourCtx {
     // already released at service end and `heldAt` is null.
     const held = req.heldAt;
     if (held !== null) this.releaseHeld(held, req);
+
+    // A call holding an idempotency key settles it: a success is remembered
+    // and answers any repeat, a failure lets the next try do the work.
+    const idem = req.idemAt;
+    if (idem !== null) {
+      req.idemAt = null;
+      idem.dedupe?.settle(req.rid, req.path, ok);
+    }
+    const log = this.opLog;
+    if (log !== null && req.rid > 0) {
+      const heard =
+        req.parent !== null
+          ? 'caller'
+          : req.detached || req.abandoned
+            ? 'nobody'
+            : 'client';
+      log.answer(this.now, req.rid, req.nodeId, ok, reason, heard);
+      if (req.opFlush >= 0) {
+        log.flushEnded(req.opFlush, this.now, req.rid, req.nodeId, ok, reason);
+      }
+      if (req.opBuf >= 0)
+        log.settle(req.opBuf, this.now, req.rid, req.nodeId, ok, reason);
+    }
 
     // Recorded here rather than at each completion site: resolve() is the one
     // funnel every request passes through however it ends, so a hop cannot be
@@ -3267,6 +3523,9 @@ export class Engine implements BehaviourCtx {
           const delay = backoff * (0.5 + this.rng.next());
           parent.retryTarget = edge.id;
           parent.retryAttempt = attempt;
+          const log = this.opLog;
+          if (log !== null)
+            log.retry(this.now, parent.rid, parentState.id, edge.to, attempt);
           this.push(this.now + delay, EV_RETRY, parentState.id, parent, parent.token);
           return;
         }
@@ -3694,6 +3953,11 @@ export class Engine implements BehaviourCtx {
     msg.hop = 0;
     msg.detached = true;
     msg.key = ((Math.floor(key) % KEYSPACE) + KEYSPACE) % KEYSPACE;
+    // A message of its own, so a request of its own.
+    msg.rid = ++this.ridSeq;
+    msg.path = 0;
+    const log = this.opLog;
+    if (log !== null) log.emit(msg.rid);
     msg.pending = 1;
     this.sendChild(state, msg, edge, 0);
     return true;
@@ -4031,6 +4295,12 @@ export class Engine implements BehaviourCtx {
       pooled.resolved = false;
       pooled.key = 0;
       pooled.isWrite = false;
+      pooled.rid = 0;
+      pooled.path = 0;
+      pooled.pickedOne = false;
+      pooled.idemAt = null;
+      pooled.opBuf = -1;
+      pooled.opFlush = -1;
       pooled.extraServiceMs = 0;
       pooled.extraWaitMs = 0;
       pooled.onDrained = null;
@@ -4069,6 +4339,12 @@ export class Engine implements BehaviourCtx {
       resolved: false,
       key: 0,
       isWrite: false,
+      rid: 0,
+      path: 0,
+      pickedOne: false,
+      idemAt: null,
+      opBuf: -1,
+      opFlush: -1,
       extraServiceMs: 0,
       extraWaitMs: 0,
       onDrained: null,
@@ -4194,7 +4470,22 @@ function createNodeState(node: SimNode): NodeState {
     custom: null,
     ownOccupancy: null,
     route: behaviourFor(node.kind).generatesLoad ? createRouteState() : null,
+    num: 0,
+    dedupe: node.config.idempotencyKeys === 1 ? new IdempotencyKeys() : null,
   };
+}
+
+/** Give a node the key table its `idempotencyKeys` setting asks for, or take it away. */
+function syncDedupe(state: NodeState): void {
+  const on = state.config.idempotencyKeys === 1;
+  if (on && state.dedupe === null) state.dedupe = new IdempotencyKeys();
+  else if (!on) state.dedupe = null;
+}
+
+/** The path of a call to the node numbered `num`, made by a call on `path`. */
+function mixPath(path: number, num: number): number {
+  const h = Math.imul(path ^ num, 0x9e3779b1);
+  return h ^ (h >>> 15);
 }
 
 /**

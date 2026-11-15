@@ -238,6 +238,25 @@ that breaks it as small as it can, and returns a link that replays the
 run. It only slows a part every request passes through, since losing one
 breaks any goal; \`includeSinglePoints: true\` crashes and cuts those too.
 
+Three goals are about the data rather than speed, and a run where nothing
+gets through does not break them:
+
+- \`{ "metric": "doubleCharges", "max": 0 }\` with \`"chargeable": ["pay"]\`:
+  every payment is charged at most once. A caller that times out and
+  retries while the first try is still running is the usual way to break
+  it. Setting \`idempotencyKeys: 1\` on the paying part fixes it.
+- \`{ "metric": "lostAckedWrites", "max": 0 }\`: no write the client was
+  told was saved is lost. Only a write-behind cache says saved before it
+  saves, so the design needs one. A job a queue accepted and then lost is
+  counted by \`lostJobs\` instead.
+- \`{ "metric": "staleReads", "max": 0 }\`: read your writes. Once a client
+  is told a write was saved, its later reads of that record show it. A
+  replica set with replication lag, or a search index with a refresh
+  delay, breaks it, usually with no faults at all.
+
+For these the answer names the first request that broke the rule and
+tells its story: each call, timeout, retry and charge, with its time.
+
 ## Saving to a file
 
 A \`.breakscale\` file can be opened in the Breakscale app and in its VS

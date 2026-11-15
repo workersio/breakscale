@@ -1,7 +1,7 @@
 // behaviour before judge: judge imports behaviour-control through behaviour,
 // in the order its own header explains.
-import { behaviourFor, canCrashOneInstance } from './behaviour';
-import { isRouteGoal } from './challenge';
+import { behaviourFor, canCrashOneInstance, takesCorrectness } from './behaviour';
+import { isCorrectnessGoal, isRouteGoal } from './challenge';
 import type { Goal } from './challenge';
 import { Engine } from './engine';
 import {
@@ -12,6 +12,8 @@ import {
   hash53,
   nearestRank,
 } from './judge';
+import { checkAtMostOnce, checkLostAckedWrites, checkReadYourWrites } from './oplog';
+import type { OpLog, Violation } from './oplog';
 import { Rng } from './random';
 import { DEFAULT_SEED } from './seed';
 import type { FailureReason, FaultEvent, RunTally, Topology } from './types';
@@ -80,6 +82,13 @@ export const SHRINK_CAP = 80;
 export const MAX_REMEMBERED = 5;
 export const DEFAULT_BUDGET = 500;
 export const HARDER_BUDGET = 1000;
+/**
+ * Ms a correctness goal's run keeps playing after the window, so a try its
+ * caller gave up on, or a retry, has finished before the calls are counted.
+ * Longer than SETTLE_MS: after a slow fault a request can still be waiting
+ * out its retries.
+ */
+export const CORRECTNESS_SETTLE_MS = 5000;
 /** Draws in a row that only found schedules already tried, before a phase gives up. */
 const MAX_REPEATS = 200;
 
@@ -143,6 +152,19 @@ export interface SeedRun {
   /** The goal's figure, or null when nothing it reads settled. */
   actual: number | null;
   outcome: 'passed' | 'goal-missed' | 'nothing-completed' | 'falling-behind';
+  /**
+   * For a correctness goal: the earliest calls that broke it, at most 50,
+   * and how many requests the check read. Absent for every other goal.
+   */
+  violations?: Violation[];
+  checked?: number;
+  /** For lostAckedWrites: acknowledged writes still on their way when the run ended. */
+  pending?: number;
+  /**
+   * For a correctness goal: the run sent more requests than the operation
+   * log keeps, so the ones after its cap were not checked.
+   */
+  truncated?: boolean;
 }
 
 /** A schedule's result: its runs, and whether they count as a break. */
@@ -339,6 +361,7 @@ function settles(goal: Goal): boolean {
 
 /** Simulated ms one run plays for this goal. */
 export function runLengthMs(goal: Goal): number {
+  if (isCorrectnessGoal(goal)) return BREAK_END_MS + CORRECTNESS_SETTLE_MS;
   return BREAK_END_MS + (settles(goal) ? SETTLE_MS : 0);
 }
 
@@ -358,19 +381,47 @@ export function* playSeed(
   seed: number,
 ): Generator<void, SeedRun, void> {
   const engine = new Engine(replayOf(design, attacks, seed), seed);
+  // From the start: a request sent before the window can still be retried
+  // into it, and the log only knows requests sent while it runs.
+  if (isCorrectnessGoal(goal)) engine.startOpLog();
   yield* stepTo(engine, BREAK_WARMUP_MS);
   engine.startTally();
   yield* stepTo(engine, BREAK_END_MS);
   engine.stopTally();
-  if (settles(goal)) yield* stepTo(engine, BREAK_END_MS + SETTLE_MS);
+  yield* stepTo(engine, runLengthMs(goal));
   const tally = engine.readTally();
   // Started above, and nothing here resets the engine.
   if (tally === null) throw new Error('tally missing after a run');
-  return measureSeed(goal, tally, seed);
+  return measureSeed(goal, tally, seed, engine.readOpLog());
 }
 
-/** A goal's figure over a stopped tally, as `playSeed` measures it. */
-export function measureSeed(goal: Goal, tally: RunTally, seed: number): SeedRun {
+/**
+ * Play a replay the way `playSeed` plays a run, with an operation log
+ * following the given requests, and return the log. The same replay gives
+ * the same log, so a request id from a verdict finds the same request.
+ */
+export function replayLog(replay: Topology, follow: readonly number[] | 'all'): OpLog {
+  const seed = replay.seed ?? DEFAULT_SEED;
+  const engine = new Engine(replay, seed);
+  engine.startOpLog({ follow });
+  const it = stepTo(engine, BREAK_END_MS + CORRECTNESS_SETTLE_MS);
+  while (!it.next().done);
+  // Started above, and nothing here resets the engine.
+  return engine.readOpLog() as OpLog;
+}
+
+/**
+ * A goal's figure over a stopped tally, as `playSeed` measures it. A
+ * correctness goal reads the operation log instead, and is about the data
+ * only: a run where nothing got through charged nobody twice, so it passes
+ * that goal, and a backlog is not a break of it either.
+ */
+export function measureSeed(
+  goal: Goal,
+  tally: RunTally,
+  seed: number,
+  log: OpLog | null = null,
+): SeedRun {
   const route = isRouteGoal(goal) ? tally.byRoute[goal.route] : undefined;
   const part = isRouteGoal(goal)
     ? (route ?? { arrived: 0, completed: 0, failed: 0, latencies: new Float64Array(0) })
@@ -398,6 +449,32 @@ export function measureSeed(goal: Goal, tally: RunTally, seed: number): SeedRun 
     case 'queueDepth':
       actual = null;
       break;
+    case 'doubleCharges':
+    case 'lostAckedWrites':
+    case 'staleReads': {
+      const found =
+        log === null
+          ? null
+          : goal.metric === 'doubleCharges'
+            ? checkAtMostOnce(log, BREAK_WARMUP_MS, BREAK_END_MS)
+            : goal.metric === 'lostAckedWrites'
+              ? checkLostAckedWrites(log, BREAK_WARMUP_MS, BREAK_END_MS)
+              : checkReadYourWrites(log, BREAK_WARMUP_MS, BREAK_END_MS);
+      return {
+        seed,
+        arrived: part.arrived,
+        completed: part.completed,
+        failed: part.failed,
+        failuresByReason: tally.failuresByReason,
+        keptUp,
+        actual: found?.count ?? null,
+        outcome: found !== null && found.count <= goal.max ? 'passed' : 'goal-missed',
+        violations: found?.violations ?? [],
+        checked: found?.checked ?? 0,
+        ...(found !== null && 'pending' in found ? { pending: found.pending } : {}),
+        ...(found?.truncated === true ? { truncated: true } : {}),
+      };
+    }
   }
   // The check's own order: nothing through, then a backlog, then the goal.
   const outcome: SeedRun['outcome'] =
@@ -432,16 +509,30 @@ export function* playBaselines(
   goals: readonly Goal[],
 ): Generator<void, Baseline[], void> {
   const runs: SeedRun[][] = goals.map(() => []);
+  const correctness = goals.some(isCorrectnessGoal);
   for (const seed of breakSeeds(design)) {
     const engine = new Engine(replayOf(design, [], seed), seed);
+    if (correctness) engine.startOpLog();
     yield* stepTo(engine, BREAK_WARMUP_MS);
     engine.startTally();
     yield* stepTo(engine, BREAK_END_MS);
     engine.stopTally();
     yield* stepTo(engine, BREAK_END_MS + SETTLE_MS);
+    // Every goal is read where its own run stops: the others at the
+    // settle time, a correctness goal after its longer one.
     const tally = engine.readTally();
     if (tally === null) throw new Error('tally missing after a run');
-    goals.forEach((g, i) => runs[i].push(measureSeed(g, tally, seed)));
+    goals.forEach((g, i) => {
+      if (!isCorrectnessGoal(g)) runs[i].push(measureSeed(g, tally, seed));
+    });
+    if (!correctness) continue;
+    yield* stepTo(engine, BREAK_END_MS + CORRECTNESS_SETTLE_MS);
+    const late = engine.readTally();
+    if (late === null) throw new Error('tally missing after a run');
+    const log = engine.readOpLog();
+    goals.forEach((g, i) => {
+      if (isCorrectnessGoal(g)) runs[i].push(measureSeed(g, late, seed, log));
+    });
   }
   return goals.map((g, i) => worstOf(runs[i], g));
 }
@@ -454,7 +545,11 @@ function worstOf(runs: SeedRun[], goal: Goal): Baseline {
 
 /** Whether the goal counts whole things, where any one over the line is a miss. */
 function counted(goal: Goal): boolean {
-  return goal.metric === 'lostWrites' || goal.metric === 'lostJobs';
+  return (
+    goal.metric === 'lostWrites' ||
+    goal.metric === 'lostJobs' ||
+    isCorrectnessGoal(goal)
+  );
 }
 
 /**
@@ -477,6 +572,9 @@ function backlogOf(run: SeedRun): number {
 
 /** How close a run came: 1 or more at the line `brokeOn` draws. */
 export function scoreOf(run: SeedRun, goal: Goal): number {
+  // Correctness ignores availability, so a backlog is not close to breaking it.
+  if (isCorrectnessGoal(goal))
+    return run.actual === null ? 0 : run.actual / (goal.max + 1);
   if (run.outcome === 'nothing-completed' || run.actual === null) return 1;
   const backlog = backlogOf(run);
   const line = counted(goal) ? goal.max + 1 : goal.max * (1 + BREAK_MARGIN);
@@ -573,6 +671,36 @@ export interface Target {
   id: string;
   type: 'node' | 'edge';
   kinds: AttackKind[];
+}
+
+/**
+ * Whether anything on the way to a part marked `chargeable: 1` sends a call
+ * again: a part with retries on an edge that leads there, or a retry queue
+ * that redelivers. When nothing does, no call reaches a charge twice, so a
+ * double charge cannot happen whatever the faults.
+ */
+export function retriesTowardCharges(t: Topology): boolean {
+  const leads = new Set(
+    t.nodes.filter((n) => n.config.chargeable === 1).map((n) => n.id),
+  );
+  // Grow the set of parts that lead to a charge, walking edges backwards.
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const e of t.edges) {
+      if (leads.has(e.to) && !leads.has(e.from)) {
+        leads.add(e.from);
+        grew = true;
+      }
+    }
+  }
+  const byId = new Map(t.nodes.map((n) => [n.id, n]));
+  return t.edges.some((e) => {
+    if (!leads.has(e.to)) return false;
+    const from = byId.get(e.from);
+    return (
+      from !== undefined && (from.config.retries > 0 || from.kind === 'retryqueue')
+    );
+  });
 }
 
 /** The single points a goal is about: its client's, or anyone's. */
@@ -716,6 +844,8 @@ function niceAtLeast(steps: readonly number[], x: number): number {
  * above twice the worst fault-free run.
  */
 export function defaultMax(goal: Goal, worst: number | null): number {
+  // A correctness goal says what must never happen; it is not loosened.
+  if (isCorrectnessGoal(goal)) return goal.max;
   const twice = worst === null ? 0 : worst * 2;
   switch (goal.metric) {
     case 'errorRate':
@@ -746,11 +876,19 @@ export function breakGoals(t: Topology): GoalTemplate[] {
       out.push({ id: `fast:${c}`, goal: { metric: 'p99', max: 300, route: c } });
     }
   }
-  if (t.nodes.some((n) => n.kind === 'writebehind')) {
-    out.push({ id: 'writes', goal: { metric: 'lostWrites', max: 0 } });
+  if (t.nodes.some((n) => behaviourFor(n.kind).acksBeforeSaved === true)) {
+    out.push({ id: 'saved', goal: { metric: 'lostAckedWrites', max: 0 } });
   }
   if (t.nodes.some((n) => behaviourFor(n.kind).buffersForConsumers)) {
     out.push({ id: 'jobs', goal: { metric: 'lostJobs', max: 0 } });
+  }
+  if (t.nodes.some((n) => behaviourFor(n.kind).readLagMs !== undefined)) {
+    out.push({ id: 'fresh', goal: { metric: 'staleReads', max: 0 } });
+  }
+  // Offered on any design: the panel asks which part charges the card when
+  // nothing is marked yet.
+  if (t.nodes.some((n) => takesCorrectness(n.kind))) {
+    out.push({ id: 'once', goal: { metric: 'doubleCharges', max: 0 } });
   }
   return out;
 }

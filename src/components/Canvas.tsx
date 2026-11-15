@@ -136,6 +136,8 @@ const NODE_R = 6;
 const SPOT_PAD = 8;
 const SPOT_TAG_W = 48;
 const SPOT_TAG_H = 22;
+/** Room the violation label takes above its ring, in world px. */
+const VIOLATION_LABEL_H = 22;
 /**
  * Gap between the node's outline and the selection ring drawn around it.
  *
@@ -524,6 +526,12 @@ export interface CanvasProps {
    * faults of a break it found, drawn as numbered badges.
    */
   breakMarks?: ReadonlyMap<string, number>;
+  /**
+   * During a replay of a correctness break, the part where the checked
+   * request went wrong, by node id, with the words for it: "Charged twice:
+   * request 1019". Drawn as a solid ring and a label.
+   */
+  violationMarks?: ReadonlyMap<string, string>;
   /** The starting points an empty canvas offers. Omitted, it offers none. */
   emptyActions?: EmptyCanvasProps['actions'];
   /**
@@ -2739,6 +2747,8 @@ interface NodeViewProps {
   entering: boolean;
   /** See `CanvasProps.breakMarks`. Undefined when the node is not a target. */
   breakMark?: number;
+  /** See `CanvasProps.violationMarks`. */
+  violationMark?: string;
 }
 
 /**
@@ -2773,6 +2783,7 @@ export const NodeView = memo(function NodeView({
   onNudge,
   entering,
   breakMark,
+  violationMark,
 }: NodeViewProps) {
   const readout = stats
     ? readoutFor(node.kind, stats, node.config, backlog, route)
@@ -2954,6 +2965,7 @@ export const NodeView = memo(function NodeView({
           : breakMark > 0
             ? `fault ${breakMark} of the break`
             : 'being tested for a break',
+        violationMark ?? null,
       ]
         .filter(Boolean)
         .join(', ')}
@@ -3027,6 +3039,22 @@ export const NodeView = memo(function NodeView({
       )}
       {breakMark !== undefined && breakMark > 0 && (
         <BreakBadge x={0} y={0} n={breakMark} />
+      )}
+      {violationMark !== undefined && (
+        <g className="cv-violation" aria-hidden="true">
+          <rect
+            className="cv-violation-ring"
+            x={-RING_GAP * 3}
+            y={-RING_GAP * 3}
+            width={NODE_W + RING_GAP * 6}
+            height={NODE_H + RING_GAP * 6}
+            rx={NODE_R + RING_GAP * 3}
+            ry={NODE_R + RING_GAP * 3}
+          />
+          <text className="cv-violation-text" x={0} y={-RING_GAP * 3 - 6}>
+            {violationMark}
+          </text>
+        </g>
       )}
 
       {/* No kind rule along the top edge. It used to sit at y=0, but the body
@@ -3561,6 +3589,7 @@ export default function Canvas({
   fitSignal = 0,
   visibleRef,
   breakMarks,
+  violationMarks,
   emptyActions,
   fitTight = false,
   spotlightId = null,
@@ -5875,6 +5904,37 @@ export default function Canvas({
 
   const spotNode = spotlightId ? (nodeById.get(spotlightId) ?? null) : null;
 
+  /* A correctness mark is the moment a replay is about. When one appears,
+     pan its part into the uncovered area if it is off screen or under a
+     panel, keeping the zoom. Keyed on the marked part, so the camera moves
+     once per mark and never fights a pan the student makes afterwards. */
+  const markedId = violationMarks?.keys().next().value ?? null;
+  useEffect(() => {
+    if (markedId === null) return;
+    const rects = visibleRect();
+    const n = topoRef.current.nodes.find((x) => x.id === markedId);
+    if (!rects || !n) return;
+    const { surface, view } = rects;
+    const v = viewRef.current;
+    // The ring and the label above it, in screen px.
+    const pad = RING_GAP * 3;
+    const left = surface.left + (n.x - pad) * v.k + v.x;
+    const right = surface.left + (n.x + NODE_W + pad) * v.k + v.x;
+    const top = surface.top + (n.y - pad - VIOLATION_LABEL_H) * v.k + v.y;
+    const bottom = surface.top + (n.y + NODE_H + pad) * v.k + v.y;
+    if (
+      left >= view.left &&
+      right <= view.right &&
+      top >= view.top &&
+      bottom <= view.bottom
+    ) {
+      return;
+    }
+    const dx = (view.left + view.right) / 2 - (left + right) / 2;
+    const dy = (view.top + view.bottom) / 2 - (top + bottom) / 2;
+    setView({ k: v.k, x: v.x + dx, y: v.y + dy });
+  }, [markedId, visibleRect]);
+
   /* Pan a spotlit node into view when it is off screen or under a panel,
      keeping the zoom, then pan the diagram out from under the card marked
      [data-titles-clear] so it covers no box's title. Keyed on the id and
@@ -6367,6 +6427,7 @@ export default function Canvas({
                   onNudge={onNudge}
                   entering={enteredIdRef.current === n.id}
                   breakMark={breakMarks?.get(n.id)}
+                  violationMark={violationMarks?.get(n.id)}
                 />
               ))}
             </g>

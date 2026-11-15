@@ -298,6 +298,20 @@
   gap: var(--sp-1);
 }
 
+.ins-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 32px;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+
+.ins-toggle input {
+  flex: none;
+  margin: 0;
+}
+
 .ins-hint {
   /* One line of plain English under a knob whose name is ambiguous next to
      its neighbour (instances vs capacity, shardCount vs shardCapacity).

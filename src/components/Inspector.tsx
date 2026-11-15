@@ -14,7 +14,7 @@ import type {
   SimNode,
   SystemStats,
 } from '../sim/types';
-import { canCrashOneInstance } from '../sim/behaviour';
+import { canCrashOneInstance, takesCorrectness } from '../sim/behaviour';
 import { defaultConfig } from '../sim/presets';
 import { suggestionFor } from '../content/suggestions';
 import { KIND_NAME, KIND_TERM } from './nodeVisuals';
@@ -1520,6 +1520,44 @@ function formatMultiple(v: number): string {
   if (v < 0.1) return '<0.1x';
   if (v < 10) return `${v.toFixed(1).replace(/\.0$/, '')}x`;
   return `${formatCount(v)}x`;
+}
+
+/**
+ * An on or off setting. Off removes the field rather than writing 0, so a
+ * design that never turned it on shares and saves exactly as before.
+ */
+function ToggleRow({
+  label,
+  hint,
+  checked,
+  locked,
+  onChange,
+}: {
+  label: ReactNode;
+  hint: string;
+  checked: boolean;
+  /** Held still by a challenge. See SliderRow. */
+  locked?: string;
+  onChange: (on: boolean) => void;
+}) {
+  const hintId = useId();
+  return (
+    <div className={locked ? 'ins-field-row is-locked' : 'ins-field-row'}>
+      <label className="ins-toggle">
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={locked !== undefined}
+          aria-describedby={hintId}
+          onChange={(e) => onChange(e.currentTarget.checked)}
+        />
+        <span>{label}</span>
+      </label>
+      <p id={hintId} className="ins-hint">
+        {locked ?? hint}
+      </p>
+    </div>
+  );
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -3035,6 +3073,36 @@ function SingleInspector({
             </div>
           </Section>
         ))}
+
+        {takesCorrectness(node.kind) && (
+          <Section title="Correctness">
+            <div className="ins-fields">
+              <ToggleRow
+                label="Each finished call charges money"
+                hint="Only the correctness checks in Can you break it? read this. It changes nothing about how the run plays."
+                checked={node.config.chargeable === 1}
+                locked={lockedFields?.includes('chargeable') ? lockNote : undefined}
+                onChange={(on) => onChange(node.id, { chargeable: on ? 1 : undefined })}
+              />
+              <ToggleRow
+                label={
+                  <>
+                    Ignore repeats with an{' '}
+                    <Term id="idempotency-key">idempotency key</Term>
+                  </>
+                }
+                hint="Every request carries a key, the same on each retry. A key whose call succeeded here gets that answer again instead of doing the work twice. One still being worked on is refused, so the caller tries again, and one whose call failed is forgotten, so a retry does the work. Turn this on where the card is charged. On a part in front of it, a call that charged and then failed on the way back is forgotten, and the retry charges again. Keys are forgotten after 65,536 newer requests."
+                checked={node.config.idempotencyKeys === 1}
+                locked={
+                  lockedFields?.includes('idempotencyKeys') ? lockNote : undefined
+                }
+                onChange={(on) =>
+                  onChange(node.id, { idempotencyKeys: on ? 1 : undefined })
+                }
+              />
+            </div>
+          </Section>
+        )}
 
         {showCeiling && (
           <Section title="What that works out to">
