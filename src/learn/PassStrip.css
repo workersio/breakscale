@@ -1,0 +1,19 @@
+/* The task card's slot (TaskCard.css), one line high: the words, then the
+   button, wrapping under them when the name is long. */
+.pass-strip {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+}
+
+.pass-strip-text {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  font-weight: var(--fw-med);
+  color: var(--ok);
+  text-wrap: pretty;
+}

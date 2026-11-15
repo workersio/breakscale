@@ -100,6 +100,8 @@ export function IncidentPanel({
     onWatch();
   };
 
+  const watched = caption !== null;
+
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     if (e.key !== 'Escape') return;
     e.stopPropagation();
@@ -191,11 +193,21 @@ export function IncidentPanel({
             {incident.source.title}
           </a>
         </p>
+        {/* Watching comes first: the brief makes sense once the outage has
+            been seen. After that, fixing it is the thing to press. */}
         <div className="chal-foot">
-          <button type="button" className="btn btn-sm" onClick={watch}>
-            {caption !== null ? 'Watch again' : 'Watch it happen'}
+          <button
+            type="button"
+            className={`btn btn-sm${watched ? '' : ' btn-primary'}`}
+            onClick={watch}
+          >
+            {watched ? 'Watch again' : 'Watch it happen'}
           </button>
-          <button type="button" className="btn btn-sm btn-primary" onClick={onFix}>
+          <button
+            type="button"
+            className={`btn btn-sm${watched ? ' btn-primary' : ''}`}
+            onClick={onFix}
+          >
             Fix it
           </button>
         </div>

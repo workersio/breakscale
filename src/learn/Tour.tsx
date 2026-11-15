@@ -23,6 +23,8 @@ interface TourProps {
   onSetLoad: (rps: number) => void;
   onSelect: (nodeId: string) => void;
   onOpenPath: () => void;
+  /** The tour is put away from its own card, so focus can go on to what follows. */
+  onHandOff: () => void;
 }
 
 /** How long a line may take to clear after a fix before "try more" is fair. */
@@ -65,8 +67,13 @@ export function Tour({
   onSetLoad,
   onSelect,
   onOpenPath,
+  onHandOff,
 }: TourProps) {
   const { stage } = tour;
+  const finish = () => {
+    tour.end();
+    onHandOff();
+  };
   const cardRef = useRef<HTMLElement | null>(null);
   const ringRef = useRef<Element | null>(null);
 
@@ -235,7 +242,7 @@ export function Tour({
           >
             Open the learning path
           </button>
-          <button type="button" className="btn btn-sm" onClick={tour.end}>
+          <button type="button" className="btn btn-sm" onClick={finish}>
             Done
           </button>
         </>
@@ -258,7 +265,7 @@ export function Tour({
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
             e.stopPropagation();
-            tour.end();
+            finish();
           }
         }}
       >
@@ -285,7 +292,7 @@ export function Tour({
               type="button"
               className="btn btn-sm btn-ghost"
               title="Skip the tour (Esc)"
-              onClick={tour.end}
+              onClick={finish}
             >
               Skip tour
             </button>

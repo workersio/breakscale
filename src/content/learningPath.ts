@@ -6,18 +6,22 @@
    difficulty; neither says what to open first, or what a challenge builds
    on. Here each track pairs the examples that show an idea with the
    challenges that make the student use it, so a brief arrives after the
-   system it is set in.
+   system it is set in. The real outages come last, once the student has
+   met every idea they turn on.
 
    Each id appears exactly once across the path. learningPath.test.ts holds
-   that against PRESETS and CHALLENGES, so a new example or brief fails the
-   suite until it is given a place here.
+   that against PRESETS, CHALLENGES and INCIDENTS, so a new example, brief
+   or outage fails the suite until it is given a place here.
    ========================================================================== */
 
-export type StepKind = 'example' | 'challenge';
+export type StepKind = 'example' | 'challenge' | 'incident';
 
 export interface PathStep {
   readonly kind: StepKind;
-  /** A preset id for an example, a challenge id for a challenge. */
+  /**
+   * A preset id for an example, a challenge id for a challenge, an incident
+   * id for a real outage. An outage is done when its brief is passed.
+   */
   readonly id: string;
   /** What the student will learn, in one line. */
   readonly learn: string;
@@ -33,6 +37,7 @@ export interface PathTrack {
 
 const ex = (id: string, learn: string): PathStep => ({ kind: 'example', id, learn });
 const ch = (id: string, learn: string): PathStep => ({ kind: 'challenge', id, learn });
+const inc = (id: string, learn: string): PathStep => ({ kind: 'incident', id, learn });
 
 export const LEARNING_PATH: readonly PathTrack[] = [
   {
@@ -133,6 +138,22 @@ export const LEARNING_PATH: readonly PathTrack[] = [
       ex('spotify', 'Watch a batch job make the slowest requests rise and fall.'),
       ex('twitter', 'See one celebrity post turn into a flood of writes.'),
       ex('stripe', 'See why a payment system refuses work rather than charge twice.'),
+    ],
+  },
+  {
+    id: 'outages',
+    title: 'Real outages',
+    about: 'Three real outages, rebuilt small. Watch each one, then fix it.',
+    steps: [
+      inc(
+        'incident-s3-2017',
+        'See a status page go down with the thing it reports on.',
+      ),
+      inc(
+        'incident-cloudflare-2019',
+        'Roll a change out in stages, so a bad one hits only part.',
+      ),
+      inc('incident-aws-2021', 'See retries that never back off keep a network down.'),
     ],
   },
 ];

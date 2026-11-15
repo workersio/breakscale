@@ -112,7 +112,16 @@ import { FindProblem } from './learn/FindProblem';
 import { currentFinding, spotlightOf, type Finding } from './learn/finding';
 import { WhatHappened } from './learn/WhatHappened';
 import { LearningPath } from './learn/LearningPath';
-import { usePathProgress } from './learn/pathProgress';
+import {
+  stepAfter,
+  stepName,
+  stepOfBrief,
+  usePathProgress,
+} from './learn/pathProgress';
+import type { PathStep } from './content/learningPath';
+import { PassStrip } from './learn/PassStrip';
+import { useExampleTask } from './learn/useExampleTask';
+import { TaskCard } from './learn/TaskCard';
 import { Tour } from './learn/Tour';
 import { useTour } from './learn/useTour';
 import { togglePreference, usePreference } from './content/preferences';
@@ -242,6 +251,25 @@ function subscribePhone(onChange: () => void): () => void {
   const mq = window.matchMedia(PHONE_QUERY);
   mq.addEventListener('change', onChange);
   return () => mq.removeEventListener('change', onChange);
+}
+
+/**
+ * Too narrow for the components rail, a brief or task card and a diagram
+ * between them. Measured at 820px: the canvas left between the rail and a
+ * brief was about 220px, and the part the brief was about sat under it.
+ */
+const CROWDED_QUERY = '(max-width: 1100px)';
+
+function subscribeCrowded(onChange: () => void): () => void {
+  if (typeof window === 'undefined' || !window.matchMedia) return () => {};
+  const mq = window.matchMedia(CROWDED_QUERY);
+  mq.addEventListener('change', onChange);
+  return () => mq.removeEventListener('change', onChange);
+}
+
+function isCrowded(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  return window.matchMedia(CROWDED_QUERY).matches;
 }
 
 function isPhone(): boolean {
@@ -834,6 +862,11 @@ export default function App() {
   const [topology, setTopology] = useState<Topology>(initial.topology);
   const [rps, setRps] = useState<number>(initial.rps);
   const [presetId, setPresetId] = useState<string | null>(initial.presetId);
+  /** Counts example loads, so opening the same one again restarts its task. */
+  const [exampleRun, setExampleRun] = useState(0);
+  /** The task card takes focus as it next shows: see TaskCard's takeFocus. */
+  const [taskFocus, setTaskFocus] = useState(false);
+  const handleTaskFocusTaken = useCallback(() => setTaskFocus(false), []);
   /**
    * Canvas selection. Node ids and edge ids share this one set; an edge id is
    * `from->to`, which can never collide with a node id, so the namespace is
@@ -2643,6 +2676,7 @@ export default function App() {
         preset.id,
         'example load',
       );
+      setExampleRun((n) => n + 1);
       if (left) {
         toastSeq.current += 1;
         setToast({ text: `Opened ${preset.name} ${IN_PLACE}`, id: toastSeq.current });
@@ -2841,12 +2875,21 @@ export default function App() {
     tourSubject,
   );
   // A brief's canvas carries its example's id; that is not the example run.
-  // A finished tour broke and fixed the first example, so it counts too.
-  const explored = usePathProgress(
+  const exampleTask = useExampleTask(
     challengeId ? null : presetId,
+    exampleRun,
     topology,
     snapshot,
-    tour.open && tour.stage.kind === 'fixed' ? PRESETS[0]!.id : null,
+  );
+  const taskView = exampleTask.view;
+  // An example is done when its task is. A finished tour broke and fixed
+  // the first example, so it counts too.
+  const explored = usePathProgress(
+    tour.open && tour.stage.kind === 'fixed'
+      ? PRESETS[0]!.id
+      : taskView.kind === 'live' && taskView.done
+        ? taskView.task.presetId
+        : null,
   );
 
   /* ---------------- design files ----------------
@@ -3108,6 +3151,56 @@ export default function App() {
      on purpose, and that is not a reason to lose it. An incident's panel
      takes the same room. */
   const tourShown = tour.open && !breakShown && !incident;
+  /* The task card takes the tour's corner, so it waits for the tour, and
+     for the panels that take the same column. */
+  const taskShown =
+    taskView.kind !== 'none' && !challenge && !tour.open && !breakShown && !incident;
+  const taskOpen = taskShown && !taskView.hidden && !(phone && inspectorVisible);
+  /* A brief, an outage or a task card takes a corner of the canvas as it
+     opens, so the diagram is framed again in what is left. Loading a design
+     frames it already; this is for the card that comes after, as the task
+     card does once the first-visit tour is skipped, when it covered the
+     very part its steps were about.
+
+     On a narrow window it also closes the components rail, so the diagram
+     has the room between them. Once, as each one opens: a rail opened again
+     after that is the student's choice. A phone's rail is a sheet that is
+     already shut.
+
+     A task is keyed by its load, and the last guide framed is remembered
+     across none: a delete hides the task card and undo brings the same one
+     back, and add, delete and undo never move the camera. */
+  const crowded = useSyncExternalStore(subscribeCrowded, isCrowded, isPhoneServer);
+  const guide = challenge
+    ? `brief:${challenge.id}`
+    : incident
+      ? `outage:${incident.id}`
+      : taskShown
+        ? `task:${taskView.task.presetId}:${exampleRun}`
+        : null;
+  const [lastGuide, setLastGuide] = useState<string | null>(null);
+  if (guide !== null && lastGuide !== guide) {
+    setLastGuide(guide);
+    if (crowded && !phone && layout.library) {
+      setLayout((l) => ({ ...l, library: false }));
+    }
+    setFitNonce((n) => n + 1);
+    // A brief or a story has the reader's attention now, not a task.
+    if (!guide.startsWith('task:') && taskFocus) setTaskFocus(false);
+  }
+  /** The part the current step is about, ringed while the card is open. */
+  const taskRing =
+    taskView.kind === 'live' && !taskView.done
+      ? (taskView.task.steps[taskView.progress.step]?.ring ?? null)
+      : null;
+  /* A finished tour has just done the first example's task with the student,
+     so its card starts folded rather than asking for it all again. */
+  const tourFixed = tour.open && tour.stage.kind === 'fixed';
+  const [lastTourFixed, setLastTourFixed] = useState(tourFixed);
+  if (lastTourFixed !== tourFixed) {
+    setLastTourFixed(tourFixed);
+    if (tourFixed) exampleTask.setHidden(PRESETS[0]!.id, true);
+  }
   const breakSearch = useBreakSearch(breakShown, topology);
   const breakView = breakSearch.view;
 
@@ -3403,6 +3496,55 @@ export default function App() {
     setIncidentScene(null);
     handleStartChallenge(incident.brief.id);
   }, [incident, handleStartChallenge]);
+
+  /* An outage's story cannot open inside a brief, so from the path it goes
+     back to the reader's design first, as opening an example does. */
+  const handleOpenPathIncident = useCallback(
+    (id: string) => {
+      if (challengeLiveRef.current !== null) handleLeaveChallenge();
+      handleOpenIncident(id);
+    },
+    [handleLeaveChallenge, handleOpenIncident],
+  );
+  /* An example from the path puts away an outage's story, which would
+     otherwise stay over it, and hands focus to its task card, since the
+     dialog or brief that was pressed is gone. */
+  const handlePathExample = useCallback(
+    (preset: Preset) => {
+      setIncidentId(null);
+      setIncidentScene(null);
+      setTaskFocus(true);
+      handleLoadPreset(preset);
+    },
+    [handleLoadPreset],
+  );
+  /** Open a step of the learning path through the handler its own picker uses. */
+  const openPathStep = useCallback(
+    (step: PathStep) => {
+      if (step.kind === 'challenge') handleStartChallenge(step.id);
+      else if (step.kind === 'incident') handleOpenPathIncident(step.id);
+      else {
+        const preset = PRESETS.find((p) => p.id === step.id);
+        if (preset) handlePathExample(preset);
+      }
+    },
+    [handleStartChallenge, handleOpenPathIncident, handlePathExample],
+  );
+  /* "Next" after an example's task: the step after it on the path. */
+  const taskAfter =
+    taskView.kind === 'none' ? null : stepAfter(taskView.task.presetId, 'example');
+  const taskNext = taskAfter
+    ? { name: stepName(taskAfter), open: () => openPathStep(taskAfter) }
+    : null;
+  /* A brief on the path goes on along the path, an outage's brief too. One
+     that is not on it keeps the picker's order. */
+  const briefStep = challenge ? stepOfBrief(challenge.id) : null;
+  const briefAfter = briefStep ? stepAfter(briefStep.id, briefStep.kind) : null;
+  const handleBriefNext = useCallback(() => {
+    if (briefAfter) openPathStep(briefAfter);
+  }, [briefAfter, openPathStep]);
+  const challengePassed =
+    check?.view.status === 'verdict' && check.view.verdict.status === 'passed';
 
   const handleCloseIncident = useCallback(() => {
     setIncidentId(null);
@@ -4052,7 +4194,8 @@ export default function App() {
           (layout.library ? ' has-library' : '') +
           (inspectorVisible ? ' has-inspector' : '') +
           (metricsVisible ? ' has-metrics' : '') +
-          (challenge || breakShown || incident ? ' has-challenge' : '')
+          (challenge || breakShown || incident ? ' has-challenge' : '') +
+          (taskOpen ? ' has-task' : '')
         }
         /* The three panel sizes, written here because .app-body is where the
            slots and the strip's insets all read them from. A drag rewrites
@@ -4165,7 +4308,9 @@ export default function App() {
               emptyActions={emptyActions}
               fitTight={challenge !== undefined}
               spotlightId={
-                (tourShown ? tour.spotlight : null) ?? spotlightOf(shownFinding)
+                (tourShown ? tour.spotlight : null) ??
+                spotlightOf(shownFinding) ??
+                (taskOpen ? taskRing : null)
               }
               spotlightKey={shownFinding?.atMs ?? null}
             />
@@ -4194,6 +4339,41 @@ export default function App() {
                 onSetLoad={handleRpsChange}
                 onSelect={(id) => setSelectedIds(new Set([id]))}
                 onOpenPath={() => setPathOpen(true)}
+                onHandOff={() => setTaskFocus(true)}
+              />
+            ) : null}
+            {taskShown ? (
+              <TaskCard
+                view={taskView}
+                exampleName={
+                  PRESETS.find((p) => p.id === taskView.task.presetId)?.name ?? ''
+                }
+                topology={topology}
+                snapshot={snapshot}
+                selectedId={tourSubject}
+                squeezed={phone && inspectorVisible}
+                next={taskNext}
+                onSetLoad={handleRpsChange}
+                onSelect={(id) => setSelectedIds(new Set([id]))}
+                onHide={(hide) => {
+                  exampleTask.setHidden(taskView.task.presetId, hide);
+                  // On a phone the settings sheet is what folded it, so
+                  // showing the task again puts that sheet away.
+                  if (!hide && phone && inspectorVisible) setSelectedIds(new Set());
+                }}
+                onReload={() => {
+                  const p = PRESETS.find((x) => x.id === taskView.task.presetId);
+                  if (p) handleLoadPreset(p);
+                }}
+                onOpenPath={() => setPathOpen(true)}
+                takeFocus={taskFocus}
+                onFocusTaken={handleTaskFocusTaken}
+              />
+            ) : null}
+            {challenge && challengePassed && phone && inspectorVisible ? (
+              <PassStrip
+                name={challenge.name}
+                onShow={() => setSelectedIds(new Set<string>())}
               />
             ) : null}
             {challenge && check ? (
@@ -4208,7 +4388,16 @@ export default function App() {
                 onCheckAgain={check.checkAgain}
                 onWatch={handleWatchRun}
                 onStartOver={check.key !== freshKey ? handleStartOver : null}
-                onNext={next ? handleNextChallenge : null}
+                onNext={
+                  briefAfter ? handleBriefNext : next ? handleNextChallenge : null
+                }
+                nextLabel={
+                  briefAfter
+                    ? `Next: ${stepName(briefAfter)}`
+                    : next
+                      ? `Next challenge: ${next.name}`
+                      : undefined
+                }
                 onLeave={handleLeaveChallenge}
                 focusSignal={panelFocus}
                 nameOf={nameOf}
@@ -4514,13 +4703,15 @@ export default function App() {
         open={pathOpen}
         onClose={() => setPathOpen(false)}
         presets={PRESETS}
-        challenges={CHALLENGES}
+        challenges={ALL_BRIEFS}
         explored={explored}
         badgeOf={badgeOf}
         activePresetId={presetId}
         activeChallengeId={challengeId}
-        onLoadExample={handleLoadPreset}
+        activeIncidentId={incident ? incident.id : null}
+        onLoadExample={handlePathExample}
         onStartChallenge={handleStartChallenge}
+        onOpenIncident={handleOpenPathIncident}
       />
     </div>
   );
