@@ -152,12 +152,22 @@
   white-space: nowrap;
 }
 
-/* The control a step points at. An outline, so it draws outside the
-   element's own border and moves nothing. */
+/* The control a step points at: a soft tinted plate with a hairline edge,
+   drawn with shadows so it sits outside the field and moves nothing. A
+   plate rather than a hard ring, so a focused input inside it keeps the
+   only strong outline on screen. */
 [data-tour-ring] {
-  outline: 2px solid var(--accent);
-  outline-offset: 4px;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  box-shadow:
+    0 0 0 var(--sp-2) var(--accent-soft),
+    0 0 0 calc(var(--sp-2) + 1px) var(--accent);
+}
+
+/* Inside the plate the stepper's own halo would draw a second ring a few
+   pixels in; its accent border is enough to show focus there. */
+[data-tour-ring] .ins-stepper:focus-within {
+  box-shadow: none;
 }
 
 /* The tour already says what is happening, step by step, so "What just

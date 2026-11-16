@@ -566,6 +566,7 @@ select.ins-number {
 .ins-unit {
   flex: 1 1 auto;
   min-width: 0;
+  text-wrap: balance;
   text-transform: none;
   letter-spacing: 0;
   font-size: var(--fs-sm);
