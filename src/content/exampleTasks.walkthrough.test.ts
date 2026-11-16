@@ -349,13 +349,11 @@ describe.each(EXAMPLE_TASKS.map((t) => [t.presetId, t] as const))(
       },
     );
 
-    it.each(SEEDS)(
-      'still finishes with the load settled a little under the ask, seed %i',
-      SLOW,
-      (seed) => {
-        const ticks = play(task, seed, true);
-        expect(ticks.length, stepsTicked(task, ticks)).toBe(task.steps.length);
-      },
-    );
+    // One seed: the seeds above already vary the run, and this one is about
+    // where the slider landed.
+    it('still finishes with the load settled a little under the ask', SLOW, () => {
+      const ticks = play(task, 1, true);
+      expect(ticks.length, stepsTicked(task, ticks)).toBe(task.steps.length);
+    });
   },
 );
