@@ -51,6 +51,14 @@ async function bootExample(
     route.request().url().startsWith(BASE) ? route.continue() : route.abort(),
   );
 
+  // Boot as a returning visitor: the first-visit tour done and each example's
+  // task card folded, so the shots hold the layout and not the teaching
+  // cards on top of it, whose copy is not what this suite checks.
+  await page.addInitScript((ids) => {
+    localStorage.setItem('breakscale.tour.v1', '1');
+    localStorage.setItem('breakscale.task.v1', JSON.stringify({ hidden: ids }));
+  }, Object.keys(EXAMPLES));
+
   await page.goto(`/?preset=${id}&theme=${theme}&paused=1&warmup=3000`, {
     waitUntil: 'domcontentloaded',
   });
