@@ -5,6 +5,7 @@ import { usePresence } from './presence';
 import { hasStore } from '../share/store';
 import './Share.css';
 import { CloseButton } from './CloseButton';
+import { trapTab } from './trapTab';
 
 /* ==========================================================================
    The share dialog.
@@ -163,6 +164,24 @@ export function Share({ open, onClose, onBuild, replayable = false, onExport }: 
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
 
+  /* Focus goes to the first copy button, the thing the reader opened this
+     for, and back to whatever opened it on close. The dialog is modal, and
+     with focus left on the bar a keyboard user tabbed on through the page
+     behind it and never reached the link. */
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const opener =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const card = cardRef.current;
+    (card?.querySelector<HTMLElement>('.sh-copy') ?? card)?.focus();
+    return () => {
+      const active = document.activeElement;
+      const inside = card?.contains(active as Node) ?? false;
+      if (inside || active === document.body || active === null) opener?.focus();
+    };
+  }, [open]);
+
   if (!presence.mounted) return null;
 
   const setLink = (kind: ShareKind, next: LinkState) =>
@@ -210,10 +229,13 @@ export function Share({ open, onClose, onBuild, replayable = false, onExport }: 
     <div className={'sh-root' + (presence.closing ? ' is-closing' : '')}>
       <div className="sh-scrim" onPointerDown={onClose} />
       <div
+        ref={cardRef}
         className={'sh-card' + (options.length > 1 ? ' is-wide' : '')}
         role="dialog"
         aria-modal="true"
         aria-labelledby="sh-title"
+        tabIndex={-1}
+        onKeyDown={(e) => trapTab(e, cardRef.current)}
       >
         <div className="sh-head">
           <h2 id="sh-title" className="sh-title">

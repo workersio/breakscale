@@ -290,6 +290,14 @@ export function BreakPanel({
     };
   }, []);
 
+  /* The panel only ever opens because the reader asked, from the bar, the
+     menu or F, so focus comes to its heading: from F on the diagram it used
+     to stay on a box, and nothing said the panel had opened. Escape takes
+     focus back to the bar's button. */
+  useEffect(() => {
+    headingRef.current?.focus({ preventScroll: true });
+  }, []);
+
   /* Focus goes to a verdict's heading as it lands, so a screen reader is
      where the answer is. Keyed on the result object, which is new per run. */
   const result = view.status === 'done' ? view.result : null;

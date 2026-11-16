@@ -12,6 +12,7 @@ import { resolveSystemTheme } from '../theme/applyTheme';
 import { VENDORS } from '../content/vendors';
 import './Settings.css';
 import { CloseButton } from './CloseButton';
+import { trapTab } from './trapTab';
 
 /* ==========================================================================
    Settings.
@@ -189,18 +190,20 @@ export function Settings({
             e.preventDefault();
             e.stopPropagation();
             onClose();
+            return;
           }
+          trapTab(e, cardRef.current);
         }}
         onAnimationEnd={(e) => {
           if (closing && e.target === e.currentTarget) unmount();
         }}
       >
-        <header className="st-head">
+        <div className="st-head">
           <h2 id="st-title" className="st-title">
             Settings
           </h2>
           <CloseButton onClick={onClose} />
-        </header>
+        </div>
 
         <div className="st-body">
           <section className="st-group">

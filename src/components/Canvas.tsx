@@ -4595,6 +4595,18 @@ export default function Canvas({
      useKeyboardConnect). */
   const clearTool = useCallback(() => setTool(null), []);
   const beginKeyLinkRef = useRef<((id: string) => void) | null>(null);
+  /* What a link made from the keyboard says once it is made. The hint that
+     guided it goes as the link lands, and it went in silence. */
+  const [keyLinkSaid, setKeyLinkSaid] = useState('');
+  const onKeyConnect = useCallback(
+    (from: string, to: string) => {
+      onConnect(from, to);
+      const name = (id: string) =>
+        topoRef.current.nodes.find((n) => n.id === id)?.label ?? id;
+      setKeyLinkSaid(`Connected ${name(from)} to ${name(to)}.`);
+    },
+    [onConnect],
+  );
   const keyLink = useKeyboardConnect({
     hostRef,
     topoRef,
@@ -4606,7 +4618,7 @@ export default function Canvas({
     pendingLink,
     setPendingLink,
     canLink,
-    onConnect,
+    onConnect: onKeyConnect,
     clearTool,
     isTypingTarget,
     nodeW: NODE_W,
@@ -6477,6 +6489,31 @@ export default function Canvas({
     },
     [hitTest, toWorld, cancelGesture, openHeldMenu],
   );
+  /**
+   * The menu key and Shift+F10 on a focused part. Chrome on Windows turns
+   * them into the contextmenu event above, but a Mac sends nothing for
+   * either, and there the menu was a mouse's alone. Opened here instead,
+   * and stamped, so a contextmenu event that does follow is ignored.
+   */
+  const onHostKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key !== 'ContextMenu' && !(e.key === 'F10' && e.shiftKey)) return;
+      const open = onContextMenuRef.current;
+      const surface = surfaceRef.current;
+      const el = e.target as Element | null;
+      if (!open || !surface || !el || !surface.contains(el)) return;
+      if (el.closest?.('button, input, select, textarea, a, [data-chrome]')) return;
+      const target = menuTargetOf(hitTest(el));
+      if (!target) return;
+      e.preventDefault();
+      menuAtRef.current = performance.now();
+      const r = el.getBoundingClientRect();
+      const x = r.left + r.width / 2;
+      const y = r.bottom;
+      open({ target, x, y, world: toWorld(x, y), via: 'keyboard' });
+    },
+    [hitTest, toWorld],
+  );
   const onFitClippedRef = useRef(onFitClipped);
   useEffect(() => {
     onFitClippedRef.current = onFitClipped;
@@ -7307,6 +7344,7 @@ export default function Canvas({
         dotMode === 'moving' ? ' has-dots' : ''
       }`}
       onContextMenu={onHostContextMenu}
+      onKeyDown={onHostKeyDown}
     >
       {/*
         The interaction surface. Everything the pointer router cares about
@@ -7673,6 +7711,10 @@ export default function Canvas({
           </span>
         </div>
       )}
+
+      <p className="sr-only" role="status">
+        {keyLink ? '' : keyLinkSaid}
+      </p>
 
       {/* Live instruction while a click-to-link is armed. A student who
           clicked a port has no other way to learn what happens next. */}

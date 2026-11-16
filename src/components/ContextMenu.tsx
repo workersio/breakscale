@@ -77,9 +77,6 @@ export function ContextMenu({
         ? document.activeElement
         : null;
     const el = ref.current;
-    el?.querySelector<HTMLButtonElement>(
-      '[role="menuitem"]:not([aria-disabled="true"])',
-    )?.focus({ preventScroll: true });
     return () => {
       const active = document.activeElement;
       if (!active || active === document.body || el?.contains(active)) {
@@ -87,6 +84,19 @@ export function ContextMenu({
       }
     };
   }, []);
+
+  /* The row is focused once the menu is placed: until then it is hidden,
+     and focus() on a hidden row does nothing, which left the menu key's
+     menu open with focus still on the part behind it. */
+  const placed = pos !== null;
+  useEffect(() => {
+    if (!placed) return;
+    ref.current
+      ?.querySelector<HTMLButtonElement>(
+        '[role="menuitem"]:not([aria-disabled="true"])',
+      )
+      ?.focus({ preventScroll: true });
+  }, [placed]);
 
   /* A press anywhere else, a wheel, a resize or leaving the window closes
      it. Pointerdown, not click, so the menu is gone before whatever was

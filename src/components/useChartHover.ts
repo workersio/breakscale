@@ -15,6 +15,8 @@ export interface ChartHover {
   index: number;
   /** Props for the plot box. */
   plotProps: {
+    /** A named group, so the aria-label the plot carries is read out. */
+    role: 'group';
     tabIndex: 0;
     onPointerDown: (e: PointerEvent<HTMLDivElement>) => void;
     onPointerMove: (e: PointerEvent<HTMLDivElement>) => void;
@@ -115,6 +117,7 @@ export function useChartHover<T extends { t: number }>(
 
   const plotProps = useMemo(
     () => ({
+      role: 'group' as const,
       tabIndex: 0 as const,
       onPointerDown,
       onPointerMove,

@@ -4909,13 +4909,13 @@ export default function App() {
           {/*
             Says the work is safe.
 
-            role=status, so it is announced rather than only drawn: someone
-            who cannot see the dot has the same reason to worry about closing
-            the tab as someone who can.
+            Text, so a screen reader finds it in the bar. Not a live region:
+            every edit flips it to Saving and back, and announced, that pair
+            talked over each step of the load slider and each nudge of a
+            part. Someone who cannot see the dot reads it when they wonder.
           */}
           <p
             className={`app-saved is-${saveState}`}
-            role="status"
             title={
               saveState === 'saved'
                 ? 'Your work is saved in this browser'
@@ -5033,7 +5033,7 @@ export default function App() {
             rel="noreferrer noopener"
             aria-label={
               starCount !== null
-                ? `Source on GitHub, ${starCount} stars`
+                ? `Source on GitHub, ${formatStars(starCount)} stars`
                 : 'Source on GitHub'
             }
             title="Source on GitHub"

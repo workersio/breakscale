@@ -10,6 +10,7 @@ import { badgeById, briefIdOf, nextStep, stepName, stepStatus } from './pathProg
 import '../components/Examples.css';
 import './LearningPath.css';
 import { CloseButton } from '../components/CloseButton';
+import { trapTab } from '../components/trapTab';
 
 /* ==========================================================================
    The learning path dialog.
@@ -204,13 +205,15 @@ export function LearningPath({
             e.preventDefault();
             e.stopPropagation();
             onClose();
+            return;
           }
+          trapTab(e, cardRef.current);
         }}
         onAnimationEnd={(e) => {
           if (closing && e.target === e.currentTarget) unmount();
         }}
       >
-        <header className="ex-head">
+        <div className="ex-head">
           <div>
             <h2 id="lp-title" className="ex-title">
               Learning path
@@ -227,7 +230,7 @@ export function LearningPath({
             </p>
           </div>
           <CloseButton onClick={onClose} />
-        </header>
+        </div>
 
         <div className="lp-body">
           {next ? (

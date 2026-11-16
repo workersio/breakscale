@@ -7,6 +7,7 @@ import { usePresence } from './presence';
 import './Examples.css';
 import './Challenge.css';
 import { CloseButton } from './CloseButton';
+import { trapTab } from './trapTab';
 
 /* ==========================================================================
    The challenge picker.
@@ -84,13 +85,15 @@ export function Challenges({
             e.preventDefault();
             e.stopPropagation();
             onClose();
+            return;
           }
+          trapTab(e, cardRef.current);
         }}
         onAnimationEnd={(e) => {
           if (closing && e.target === e.currentTarget) unmount();
         }}
       >
-        <header className="ex-head">
+        <div className="ex-head">
           <div>
             <h2 id="chal-title" className="ex-title">
               Challenges
@@ -100,7 +103,7 @@ export function Challenges({
             </p>
           </div>
           <CloseButton onClick={onClose} />
-        </header>
+        </div>
 
         <div className="chal-picker">
           {groups.map(([tier, list]) => (

@@ -351,7 +351,7 @@ export function Glossary({ open, onClose, focusId }: GlossaryProps) {
           if (closing && e.target === e.currentTarget) unmount();
         }}
       >
-        <header className="gl-head">
+        <div className="gl-head">
           <div className="gl-head-row">
             <h2 id="gl-title" className="gl-title">
               Glossary
@@ -434,7 +434,7 @@ export function Glossary({ open, onClose, focusId }: GlossaryProps) {
               ? `${shown} of ${total} ${shown === 1 ? 'term' : 'terms'}`
               : `${total} terms`}
           </p>
-        </header>
+        </div>
 
         <div ref={listRef} className="gl-list scroll">
           {shown === 0 ? (

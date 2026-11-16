@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { SimSnapshot, Topology } from '../sim/types';
 import { toneClass } from '../components/format';
 import { MIN_RATE } from './bottleneck';
@@ -82,13 +82,22 @@ export function Tour({
      was in the card (a pressed button that has now gone). Never taken from
      the slider or a field the student is using. */
   const step = stepNumber(stage);
+  /* A step the student reached from the inspector leaves focus there, so
+     the card's new heading is said instead of being moved to. */
+  const [said, setSaid] = useState('');
+  const titleRef = useRef('');
+  const firstStep = useRef(true);
   useEffect(() => {
     const card = cardRef.current;
     if (!card) return;
     const active = document.activeElement;
     if (active === null || active === document.body || card.contains(active)) {
       card.focus({ preventScroll: true });
+      setSaid('');
+    } else if (!firstStep.current) {
+      setSaid(`Tour step ${step} of ${STEP_COUNT}: ${titleRef.current}`);
     }
+    firstStep.current = false;
   }, [step]);
 
   /* The ring on the control this step is about. Rerun on every render, since
@@ -252,6 +261,10 @@ export function Tour({
     }
   }
 
+  useLayoutEffect(() => {
+    titleRef.current = title;
+  });
+
   return (
     <div className="tour" data-chrome="tour">
       <section
@@ -299,6 +312,9 @@ export function Tour({
             </button>
           )}
         </header>
+        <p className="sr-only" role="status">
+          {said}
+        </p>
         <h2 id="tour-title" className="card-float-title">
           {title}
         </h2>

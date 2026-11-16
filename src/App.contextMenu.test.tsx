@@ -247,6 +247,22 @@ describe('opening the menu', () => {
     expect(node('mine-db')).not.toBeNull();
   });
 
+  it('opens from Shift+F10 and the menu key, which a Mac sends no contextmenu for', () => {
+    mount();
+    act(() => node('mine-svc').focus());
+    key('F10', { shiftKey: true });
+    expect(menu()?.getAttribute('data-via')).toBe('keyboard');
+    expect(document.activeElement?.textContent).toBe('Inspect');
+    // Where the browser does follow with its own event, it is the same menu.
+    const first = menu();
+    rightClick(node('mine-svc'), { x: 0, y: 0 });
+    expect(menu()).toBe(first);
+    key('Escape');
+    expect(document.activeElement).toBe(node('mine-svc'));
+    key('ContextMenu');
+    expect(menu()).not.toBeNull();
+  });
+
   it('does not open twice when Android also sends its own contextmenu', () => {
     mount();
     hold(node('mine-db'), { x: 60, y: 60 }, false);

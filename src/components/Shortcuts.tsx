@@ -190,27 +190,33 @@ export function Shortcuts({ open, onClose }: ShortcutsProps) {
             onClose();
             return;
           }
-          /* Focus trap. The dialog holds exactly one focusable control, so
-             the trap is simply "Tab goes to it, and from it back". */
+          /* Focus trap over the two stops: the close button and the list,
+             which takes focus so the arrow keys and Page Down scroll it. */
           if (e.key === 'Tab') {
             e.preventDefault();
-            const btn = cardRef.current?.querySelector<HTMLElement>('button');
-            if (document.activeElement === btn) cardRef.current?.focus();
-            else btn?.focus();
+            const stops = [
+              cardRef.current?.querySelector<HTMLElement>('button'),
+              cardRef.current?.querySelector<HTMLElement>('.sc-body'),
+            ].filter((el): el is HTMLElement => el != null);
+            const at = stops.indexOf(document.activeElement as HTMLElement);
+            const n = stops.length;
+            const next =
+              at < 0 ? (e.shiftKey ? n - 1 : 0) : (at + (e.shiftKey ? n - 1 : 1)) % n;
+            stops[next]?.focus();
           }
         }}
         onAnimationEnd={(e) => {
           if (closing && e.target === e.currentTarget) unmount();
         }}
       >
-        <header className="sc-head">
+        <div className="sc-head">
           <h2 id="sc-title" className="sc-title">
             Keyboard shortcuts
           </h2>
           <CloseButton onClick={onClose} />
-        </header>
+        </div>
 
-        <div className="sc-body">
+        <div className="sc-body" tabIndex={0} role="region" aria-label="Shortcuts list">
           {GROUPS.map((g) => (
             <section key={g.title} className="sc-group">
               <h3 className="sc-group-title">{g.title}</h3>

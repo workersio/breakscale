@@ -132,10 +132,17 @@ export function TaskCard({
     const at = document.activeElement;
     if (at === null || at === document.body) {
       refocusRef.current = false;
-      const field = ringRef.current?.querySelector<HTMLElement>(
-        'input, select, textarea, button',
-      );
-      (field ?? cardRef.current ?? chipRef.current)?.focus();
+      /* The value itself, not the minus button in front of it, which is
+         also disabled at one instance: focus() on that did nothing and left
+         focus on the page. */
+      const row = ringRef.current;
+      const field =
+        row?.querySelector<HTMLElement>(
+          'input:not(:disabled), select:not(:disabled), textarea:not(:disabled)',
+        ) ?? row?.querySelector<HTMLElement>('button:not(:disabled)');
+      field?.focus();
+      if (!field || document.activeElement !== field)
+        (cardRef.current ?? chipRef.current)?.focus();
     } else if (!cardRef.current?.contains(at)) refocusRef.current = false;
   });
   const hiddenNow = view.hidden || squeezed;
@@ -160,7 +167,10 @@ export function TaskCard({
           type="button"
           className="btn btn-sm task-chip"
           aria-label={`Show your task, ${countText}`}
-          onClick={() => onHide(false)}
+          onClick={(e) => {
+            refocusRef.current = e.detail === 0;
+            onHide(false);
+          }}
         >
           <span>
             Your task, <span className="task-chip-count">{countText}</span>
@@ -193,7 +203,11 @@ export function TaskCard({
           <button
             type="button"
             className="btn btn-sm btn-ghost"
-            onClick={() => onHide(true)}
+            onClick={(e) => {
+              // From a keyboard, focus goes on to the chip that replaces it.
+              refocusRef.current = e.detail === 0;
+              onHide(true);
+            }}
           >
             Hide
           </button>

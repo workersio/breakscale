@@ -5,10 +5,18 @@
  * own toolbar and page.
  */
 
-/** In the order F6 visits them. A closed panel is not in the page. */
+/**
+ * In the order F6 visits them. A closed panel is not in the page.
+ *
+ * The third is the card that guides the work on the diagram: the tour, a
+ * task, a brief, "Can you break it?" or an incident. It floats inside the
+ * stage, and without its own stop a reader who went to the inspector to do
+ * what a step asked had no key back to the step.
+ */
 export const REGIONS = [
   '.app-bar',
   '.app-stage .stage-canvas',
+  '.tour-card, .task-card, .task > button, .chal',
   '.app-slot-left',
   '.app-slot-right',
   '.app-slot-bottom',
@@ -41,7 +49,8 @@ export function focusDiagram(root: ParentNode = document): boolean {
 /** The region an element is in, as an index into REGIONS, or -1. */
 export function regionOf(el: Element | null, root: ParentNode = document): number {
   if (!el) return -1;
-  for (let i = 0; i < REGIONS.length; i++) {
+  // Innermost first: the guiding card sits inside the stage.
+  for (let i = REGIONS.length - 1; i >= 0; i--) {
     const region = root.querySelector(REGIONS[i]!);
     if (region?.contains(el)) return i;
   }
@@ -62,6 +71,12 @@ export function cycleRegion(dir: 1 | -1, root: ParentNode = document): number {
     if (i === 1) {
       if (focusDiagram(root)) return i;
       continue;
+    }
+    // A card that takes focus itself is focused whole, so its heading is
+    // what a screen reader says first.
+    if (region.matches('[tabindex="-1"]') && shown(region)) {
+      region.focus({ preventScroll: true });
+      if (document.activeElement === region) return i;
     }
     const first = [...region.querySelectorAll<HTMLElement>(FOCUSABLE)].find(shown);
     if (first) {

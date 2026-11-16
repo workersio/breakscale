@@ -7,6 +7,7 @@ import { isCoarsePointer } from '../useCoarsePointer';
 import './Examples.css';
 import './Incidents.css';
 import { CloseButton } from './CloseButton';
+import { trapTab } from './trapTab';
 
 /* ==========================================================================
    The examples gallery.
@@ -137,13 +138,15 @@ export function Examples({
             e.preventDefault();
             e.stopPropagation();
             onClose();
+            return;
           }
+          trapTab(e, cardRef.current);
         }}
         onAnimationEnd={(e) => {
           if (closing && e.target === e.currentTarget) unmount();
         }}
       >
-        <header className="ex-head">
+        <div className="ex-head">
           <div>
             <h2 id="ex-title" className="ex-title">
               Examples
@@ -179,7 +182,7 @@ export function Examples({
             ) : null}
             <CloseButton onClick={onClose} />
           </div>
-        </header>
+        </div>
 
         <input
           ref={searchRef}
