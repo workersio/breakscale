@@ -358,6 +358,35 @@ input.gl-search-input {
   text-wrap: pretty;
 }
 
+/* The beginner card for a component: what it is, a product the reader may
+   know, and when to reach for it. Labels in --text-dim, the same pairing as
+   .gl-short, so it reads as part of the entry rather than a new panel. */
+.gl-intro {
+  display: grid;
+  gap: var(--sp-1);
+  margin: var(--sp-2) 0 0;
+}
+
+.gl-intro-row {
+  display: grid;
+  gap: 0;
+}
+
+.gl-intro dt {
+  font-size: var(--fs-label);
+  font-weight: var(--fw-med);
+  line-height: var(--lh-sm);
+  color: var(--text-dim);
+}
+
+.gl-intro dd {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  color: var(--text);
+  text-wrap: pretty;
+}
+
 /* --------------------------------------------------------------------------
    Cross references
    -------------------------------------------------------------------------- */

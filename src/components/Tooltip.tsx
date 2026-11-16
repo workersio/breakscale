@@ -140,6 +140,17 @@ export function setGlossaryNavigate(fn: ((id: string) => void) | null): void {
   navigateHandler = fn;
 }
 
+/**
+ * Opens the glossary panel on one entry, for a "Learn more" link outside a
+ * tooltip (the palette card, the inspector's kind line). Does nothing when
+ * no shell has registered the panel, as in a test that mounts one surface.
+ */
+export function openGlossaryEntry(id: string): void {
+  const go = navigateHandler;
+  closeNow();
+  go?.(id);
+}
+
 function emit(): void {
   for (const l of listeners) l();
 }

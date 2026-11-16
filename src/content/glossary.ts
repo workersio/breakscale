@@ -34,6 +34,21 @@ export interface GlossaryEntry {
   see?: string[];
   /** Extra words that should match this entry when searching. */
   aliases?: string[];
+  /**
+   * For a component kind: the beginner card the palette and inspector show.
+   * Written for someone who has never met the term, so each line stands on
+   * its own and names a real product they may have heard of.
+   */
+  intro?: KindIntro;
+}
+
+export interface KindIntro {
+  /** What it is, in one plain sentence. */
+  what: string;
+  /** A well-known real-world product that is one of these. */
+  example: string;
+  /** When you would reach for it, as a full sentence. */
+  useWhen: string;
 }
 
 export const GLOSSARY: GlossaryEntry[] = [
@@ -431,6 +446,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Spreads incoming requests across several servers',
     why: 'Lets you scale out by adding servers. It does not create capacity, though. If every server talks to the same database, that database is still the bottleneck.',
     category: 'component',
+    intro: {
+      what: 'Spreads incoming requests across several copies of a server.',
+      example: 'AWS Elastic Load Balancing, NGINX or HAProxy.',
+      useWhen:
+        'You run more than one copy of a server and want them to share the work, or to skip a copy that is down.',
+    },
     aliases: ['lb'],
     see: ['bottleneck', 'instances'],
   },
@@ -440,6 +461,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Remembers recent answers so the work is not repeated',
     why: 'A hit is answered immediately; a miss costs a full trip to whatever is behind it. For one cache, at 90% the database sees a tenth of the traffic. Each cache rolls that chance independently, so stacking two 80% caches leaves about 4% of traffic for whatever is behind them.',
     category: 'component',
+    intro: {
+      what: 'Fast memory that keeps recent answers so they do not have to be worked out again.',
+      example: 'Redis or Memcached.',
+      useWhen:
+        'The same data is read again and again, and an answer a few seconds old is fine.',
+    },
     see: ['hit-rate', 'cdn'],
   },
   {
@@ -457,6 +484,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'A cache close to your users, in front of everything',
     why: 'Serves the common requests before they ever reach your servers. The cheapest traffic to handle is traffic your system never sees. Its hit rate is rolled independently of every other cache on the path.',
     category: 'component',
+    intro: {
+      what: 'A network of servers around the world that keeps copies of your files close to your users.',
+      example: 'Cloudflare or Amazon CloudFront.',
+      useWhen:
+        'Many people load the same images, videos or pages, especially from far away.',
+    },
     aliases: ['content delivery network', 'edge cache'],
     see: ['cache', 'hit-rate'],
   },
@@ -466,6 +499,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Accepts work now so it can be done later',
     why: 'The caller gets an answer immediately while the work is buffered for a worker. This is how a system absorbs a spike instead of collapsing under it, but only if the workers eventually catch up.',
     category: 'component',
+    intro: {
+      what: 'A waiting line for jobs. The sender drops work in and moves on, and something else picks it up later.',
+      example: 'RabbitMQ or Amazon SQS.',
+      useWhen:
+        'The work can happen a little later, like sending an email, or you need to soak up sudden spikes.',
+    },
     aliases: ['message queue', 'buffer'],
     see: ['worker', 'backlog', 'async'],
   },
@@ -484,6 +523,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Processes queued work in the background',
     why: 'Workers set the drain rate. If they are slower than arrivals, the backlog grows without limit no matter how big the queue is.',
     category: 'component',
+    intro: {
+      what: 'A background program that takes jobs off a queue and does them, one after another.',
+      example: 'A Celery or Sidekiq worker process.',
+      useWhen:
+        'Paired with a queue, for slow jobs nobody should wait on, like resizing photos.',
+    },
     see: ['queue', 'backlog'],
   },
   {
@@ -492,6 +537,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Caps how many requests are let through per second',
     why: 'Protects what is behind it by refusing excess traffic cheaply and immediately. Errors go up, but latency stays flat and the service survives, which is often the better failure.',
     category: 'component',
+    intro: {
+      what: 'Lets through only a set number of requests per second and refuses the rest straight away.',
+      example: "NGINX's limit_req, or the request limits on the GitHub API.",
+      useWhen:
+        'You need to protect a service from spikes, or stop one user sending far more than their share.',
+    },
     aliases: ['throttle', 'token bucket', 'rate limit'],
     see: ['shed', 'burst'],
   },
@@ -509,6 +560,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Stops calling a dependency that is already failing',
     why: 'When errors pass a threshold it opens and fails instantly without calling downstream, giving the struggling service room to recover. It then lets a few test requests through to check whether it is safe to resume.',
     category: 'component',
+    intro: {
+      what: 'Stops sending requests to a service that keeps failing, then checks later whether it has recovered.',
+      example: "Resilience4j, or Netflix's Hystrix.",
+      useWhen:
+        'One failing dependency would otherwise make every caller wait on it and fail too.',
+    },
     aliases: ['circuit breaker', 'breaker', 'open', 'closed', 'half-open'],
     see: ['retry-storm', 'timeout'],
   },
@@ -518,6 +575,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Adds and removes instances to track a utilisation target',
     why: 'Watches a component and scales it to keep utilisation near a setpoint. New instances take time to start, so capacity always lags load. That is why a sharp spike still hurts even with autoscaling on.',
     category: 'component',
+    intro: {
+      what: 'Watches how busy a component is and adds or removes copies of it by itself.',
+      example: 'AWS Auto Scaling groups, or the Kubernetes Horizontal Pod Autoscaler.',
+      useWhen:
+        'Traffic rises and falls through the day, and you only want to pay for the machines you need.',
+    },
     see: ['instances', 'utilisation', 'warmup'],
   },
   {
@@ -535,6 +598,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'A slice of the data, held on its own partition',
     why: 'Splitting data across shards multiplies capacity, as long as traffic spreads evenly. One popular key breaks that assumption: a single shard saturates while the rest sit idle, and the total looks healthy while users see failures.',
     category: 'component',
+    intro: {
+      what: 'Splits one big set of data into pieces, each on its own machine, chosen by a key such as the user id.',
+      example: 'MongoDB sharding, or Vitess in front of MySQL.',
+      useWhen:
+        'One database machine cannot hold all the data or keep up with the writes, even with replicas.',
+    },
     aliases: ['sharding', 'partition', 'shards'],
     see: ['hot-key', 'bottleneck'],
   },
@@ -562,6 +631,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'A copy of the database that serves reads only',
     why: 'Most workloads read far more than they write, so replicas scale the common case cheaply. The cost is that a replica can be slightly behind the primary.',
     category: 'component',
+    intro: {
+      what: 'Copies of a database that answer reads, kept up to date from the main copy.',
+      example: 'Read replicas in Amazon RDS, or PostgreSQL streaming replication.',
+      useWhen:
+        'Reads are overloading your database, and a read that is a moment out of date is acceptable.',
+    },
     aliases: ['replica'],
     see: ['replication-lag', 'stale-read'],
   },
@@ -587,6 +662,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'A separate location your system runs in',
     why: 'Running in more than one region means one can fail without taking everything down. Failover is not instant, though, and requests arriving mid-switch are still lost.',
     category: 'component',
+    intro: {
+      what: 'A copy of your system running in another part of the world, so one place failing does not take everything down.',
+      example: 'AWS regions such as us-east-1 and eu-west-1.',
+      useWhen:
+        'The system has to keep working even if a whole data centre or city loses power.',
+    },
     aliases: ['failover', 'multi-region'],
     see: ['bottleneck'],
   },
@@ -596,6 +677,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Where the traffic comes from',
     why: 'Stands in for your users. It is also where end-to-end latency is measured, so the numbers it reports are what a real person would actually experience, including every hop and retry along the way.',
     category: 'component',
+    intro: {
+      what: 'The people or programs sending requests to your system.',
+      example: 'A web browser loading a page, or a phone app calling your API.',
+      useWhen:
+        'Every design starts with one. It is where traffic comes from and where you read what users actually feel.',
+    },
     aliases: ['user', 'traffic source'],
     see: ['rps', 'latency'],
   },
@@ -605,6 +692,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'A server that handles requests and calls its dependencies',
     why: 'The ordinary building block of a system. It waits for every dependency it calls before it can answer, so it is only ever as fast as its slowest one.',
     category: 'component',
+    intro: {
+      what: 'A program on a server that handles requests, often by calling a database or other services.',
+      example: "The Node.js, Python or Java backend behind an app's API.",
+      useWhen:
+        'You need code that does the real work of a request: checking a login, building a page, placing an order.',
+    },
     aliases: ['server', 'api', 'application'],
     see: ['capacity', 'bottleneck', 'instances'],
   },
@@ -614,6 +707,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Stores the data. Usually the first thing to saturate',
     why: 'Databases are harder to scale than servers: you can add application servers freely, but they all tend to talk to the same database, which is why it so often turns out to be the bottleneck.',
     category: 'component',
+    intro: {
+      what: 'Stores your data safely on disk and answers questions about it.',
+      example: 'PostgreSQL or MySQL.',
+      useWhen:
+        'You have data that must survive a restart and be looked up later, like users, orders or posts.',
+    },
     aliases: ['db', 'datastore'],
     see: ['bottleneck', 'read-replica', 'shard'],
   },
@@ -624,6 +723,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Blob storage: high flat latency, very wide pool',
     why: 'Stores files and blobs rather than rows. Every request pays a high flat latency, but the pool is so wide that saturating it takes deliberate effort. Keep user-facing reads behind a cache and it is the cheapest storage you have.',
     category: 'component',
+    intro: {
+      what: 'Stores whole files, like photos and videos, under a name, instead of rows in a table.',
+      example: 'Amazon S3 or Google Cloud Storage.',
+      useWhen:
+        'You need to keep large files cheaply, like user uploads, backups or video.',
+    },
     aliases: ['blob storage', 's3'],
     see: ['cache', 'database'],
   },
@@ -633,6 +738,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Search cluster where writes pay extra and appear late',
     why: 'Searches are cheap, but each write pays an indexing surcharge and only becomes searchable after a refresh delay. Bulk writes can starve the queries that were never the problem, and a search inside the delay window returns the old result.',
     category: 'component',
+    intro: {
+      what: 'Finds records by the words inside them, the way a search box does.',
+      example: 'Elasticsearch or OpenSearch.',
+      useWhen:
+        'People need to search text, like products or messages, and a normal database query is too slow.',
+    },
     aliases: ['search cluster', 'inverted index'],
     see: ['stale-search', 'database'],
   },
@@ -642,6 +753,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Built for appends; range queries cost hundreds of them',
     why: 'It swallows appends by the thousand, while a range query scans and aggregates many points at once. A few percent of range queries can dominate the whole store, which is why metrics do not live in your main database.',
     category: 'component',
+    intro: {
+      what: 'A database for measurements taken over time, like CPU use every second.',
+      example: 'Prometheus, InfluxDB or TimescaleDB.',
+      useWhen:
+        'You collect lots of timestamped numbers, like metrics or sensor readings, and chart them over time.',
+    },
     aliases: ['tsdb', 'metrics store'],
     see: ['range-query', 'database'],
   },
@@ -651,6 +768,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Stores relationships; deeper queries multiply the work',
     why: 'Each extra hop of traversal multiplies the edges visited by about three. A friends-of-friends query costs several times a direct lookup, and one more hop multiplies it again, so depth is the knob to watch.',
     category: 'component',
+    intro: {
+      what: 'Stores things and the links between them, like people and who they follow.',
+      example: 'Neo4j or Amazon Neptune.',
+      useWhen:
+        'Your questions follow connections, like friends of friends or people who bought this also bought.',
+    },
     see: ['traversal-depth', 'database'],
   },
   {
@@ -659,6 +782,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'The archive tier: cheap to keep, seconds to read',
     why: 'Retrieval takes seconds per request, and that is its whole identity. It is fine for a trickle of restores fed from a queue and hopeless for anything a user is actively waiting on.',
     category: 'component',
+    intro: {
+      what: 'Very cheap storage for data you almost never need, which takes a while to get back.',
+      example: 'Amazon S3 Glacier.',
+      useWhen:
+        'You must keep old data, like logs or backups, but rarely read it and can wait when you do.',
+    },
     aliases: ['archive', 'glacier'],
     see: ['objectstore', 'queue'],
   },
@@ -668,6 +797,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Similarity search over embeddings',
     why: 'Finds the items most similar to a query rather than exact matches. Cost grows with the size of the index and explodes as recall approaches perfect, so the recall setting is really a latency setting read backwards.',
     category: 'component',
+    intro: {
+      what: 'Finds items that are similar in meaning, using lists of numbers (embeddings) that describe each item.',
+      example: 'Pinecone, or pgvector in PostgreSQL.',
+      useWhen:
+        'You search by meaning rather than exact words, like finding documents to hand an AI chatbot.',
+    },
     aliases: ['embedding search', 'ann index'],
     see: ['recall', 'database'],
   },
@@ -677,6 +812,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'A partitioned, replayable log between services',
     why: 'Producers are acknowledged instantly and each consumer group reads at its own pace, so a slow consumer builds lag instead of slowing anyone else. Partition count, not consumer count, caps how fast a group can drain.',
     category: 'component',
+    intro: {
+      what: 'Keeps an ordered log of events that many services can read, each at its own pace, and read again later.',
+      example: 'Apache Kafka or Amazon Kinesis.',
+      useWhen:
+        'Several services need the same stream of events, like clicks or orders, and may need to replay old ones.',
+    },
     aliases: ['kafka', 'event stream', 'log'],
     see: ['consumer-lag', 'retention', 'queue'],
   },
@@ -686,6 +827,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'One publish becomes one delivery per subscriber',
     why: 'Total load is multiplied by the number of subscribers whether you noticed or not. A slow subscriber fails on its own without delaying the others, which is the point of the decoupling.',
     category: 'component',
+    intro: {
+      what: 'A topic that hands a copy of each message to every service that signed up for it.',
+      example: 'Google Cloud Pub/Sub or Amazon SNS.',
+      useWhen:
+        'One event, like a new order, should set off several separate things: an email, an invoice, analytics.',
+    },
     aliases: ['topic', 'publish subscribe'],
     see: ['fan-out', 'queue'],
   },
@@ -695,6 +842,11 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Holds long-lived connections; the scarce thing is slots',
     why: 'Capacity here is concurrent connections held open, not requests per second. At 30 new connections a second, each held for 8 seconds, 240 slots are simply occupied, which is why chat systems run out of sockets long before CPU.',
     category: 'component',
+    intro: {
+      what: 'Keeps a connection open to each user so the server can push messages to them instantly.',
+      example: 'A Socket.IO server, or Amazon API Gateway WebSocket APIs.',
+      useWhen: 'You need live updates, like chat, multiplayer games or live scores.',
+    },
     aliases: ['websockets', 'socket gateway'],
     see: ['connection-slot', 'capacity'],
   },
@@ -704,6 +856,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'The front door: authenticates, rate limits, and routes',
     why: 'Three kinds of refusal happen here so the backends only ever see traffic worth serving. Watch the split between admitted, throttled, and failed auth to tell an attack from an outage.',
     category: 'component',
+    intro: {
+      what: 'The single front door to your APIs. It checks who is calling, limits how often, and sends each request to the right service.',
+      example: 'Amazon API Gateway or Kong.',
+      useWhen:
+        'You have several backend services and want logins and limits handled once, in one place.',
+    },
     aliases: ['gateway', 'front door'],
     see: ['rate-limiter', 'tokens'],
   },
@@ -713,6 +871,13 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'A proxy beside one service: a tax paid for resilience',
     why: 'It charges its own service time on every request and pays you back with retries, deadlines, and ejecting an upstream that keeps failing. Put one at every hop and the taxes stack; that is a service mesh.',
     category: 'component',
+    intro: {
+      what: 'A small proxy, a program that passes requests along, running next to one service and handling its calls: retries, timeouts and routing.',
+      example:
+        'Envoy, which Istio runs beside every service. A setup like that is called a service mesh.',
+      useWhen:
+        "You run many services and want the same retry and timeout rules on every call without changing each service's code.",
+    },
     aliases: ['service mesh', 'envoy'],
     see: ['outlier-ejection', 'breaker'],
   },
@@ -722,6 +887,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Scales instantly to a cap, with a cold-start penalty',
     why: 'There is no queue: past the concurrency cap, requests are refused outright. A request that finds no warm instance pays the cold start, so idle periods and sudden bursts are exactly when it is slowest.',
     category: 'component',
+    intro: {
+      what: 'Your code runs only when a request arrives, with no server for you to look after.',
+      example: 'AWS Lambda or Google Cloud Functions.',
+      useWhen:
+        'Traffic is occasional or spiky and you would rather not keep servers running all day.',
+    },
     aliases: ['lambda', 'faas', 'function'],
     see: ['cold-start', 'capacity'],
   },
@@ -731,6 +902,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Fires on a schedule and dumps its whole batch at once',
     why: 'Between firings it does nothing at all. The database that handles the daytime load falls over at midnight not because traffic grew, but because the whole batch arrived in the same instant.',
     category: 'component',
+    intro: {
+      what: 'Runs a job by itself at set times, like every night at midnight.',
+      example: 'The Unix cron tool, or Kubernetes CronJobs.',
+      useWhen:
+        'Something must happen on a schedule, like nightly reports, clean-ups or billing.',
+    },
     aliases: ['scheduled job', 'batch job'],
     see: ['backlog', 'queue'],
   },
@@ -740,6 +917,13 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Caps calls in flight to the dependency behind it',
     why: 'When that dependency slows down, the pool fills within one round trip and the excess fails fast here instead of queueing behind a sick service. Watching the pool fill is your earliest warning of a slow dependency.',
     category: 'component',
+    intro: {
+      what: 'Caps how many calls can wait on one dependency at once, so a slow one cannot tie up everything else.',
+      example:
+        "Resilience4j's Bulkhead, or a separate connection pool for each dependency.",
+      useWhen:
+        'One slow dependency could otherwise use up every slot and take unrelated features down with it.',
+    },
     aliases: ['concurrency pool'],
     see: ['breaker', 'timeout'],
   },
@@ -749,6 +933,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Delivers messages, retries failures, keeps the dead',
     why: 'It acknowledges the sender instantly, delivers downstream itself, and redelivers failures. Messages that fail every attempt land on the dead letter shelf: counted, not vanished.',
     category: 'component',
+    intro: {
+      what: 'A queue that keeps trying to deliver each message and sets aside the ones that never get through, in a dead letter queue.',
+      example: 'Amazon SQS with a dead-letter queue.',
+      useWhen:
+        'A message must not be lost even if the receiver is down for a while, like a payment notification.',
+    },
     aliases: ['delivery queue'],
     see: ['dead-letter', 'redelivery', 'queue'],
   },
@@ -758,6 +948,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'A batch farm where each job takes seconds',
     why: 'Throughput is boxes times jobs-per-box divided by job time, so size it against arrivals. Undersize it by even 10% and the backlog grows forever, because the deficit is structural rather than a burst.',
     category: 'component',
+    intro: {
+      what: 'Converts video or audio into other formats and sizes, which takes seconds for each file.',
+      example: 'AWS Elemental MediaConvert, or FFmpeg on a fleet of machines.',
+      useWhen:
+        'People upload video that has to be turned into the sizes and formats players need.',
+    },
     aliases: ['batch farm', 'encoder'],
     see: ['worker', 'backlog'],
   },
@@ -767,6 +963,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'A small function running close to the user',
     why: 'The share of requests it can fully answer never touches your origin; the rest pass through and pay the full path. Unlike a cache hit rate, that share is a property of your code, not your traffic.',
     category: 'component',
+    intro: {
+      what: 'Runs small pieces of your code on servers near the user, before a request reaches your own servers.',
+      example: 'Cloudflare Workers or AWS Lambda@Edge.',
+      useWhen:
+        'Some requests can be answered without your main servers, like redirects, login checks or picking a language.',
+    },
     aliases: ['edge function', 'edge worker'],
     see: ['edge-share', 'cdn'],
   },
@@ -776,6 +978,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Acknowledges writes from memory, flushes them later',
     why: 'The caller sees a one-millisecond write while the store sees the same load smoothed out. Crash it, and every write still in the buffer is lost after being confirmed, which is the trade you are making.',
     category: 'component',
+    intro: {
+      what: 'A cache that says a write is saved straight away and writes it to the database a little later.',
+      example: 'Redis or Hazelcast used as a write buffer in front of a database.',
+      useWhen:
+        'Writes arrive faster than the database can take them, and losing the last few in a crash is acceptable.',
+    },
     aliases: ['write buffer', 'write back'],
     see: ['dirty-write', 'cache'],
   },
@@ -785,6 +993,13 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Refuses traffic by priority when tokens run low',
     why: 'Low-priority traffic must leave a reserve of tokens untouched, so under saturation it is dropped first while the traffic that matters keeps being admitted. Degradation as a policy rather than an accident.',
     category: 'component',
+    intro: {
+      what: 'When overloaded, turns away the least important requests on purpose so the important ones still get through.',
+      example:
+        "Envoy's overload manager, or the priority-based load shedding Netflix runs on its API gateway.",
+      useWhen:
+        'Under heavy load you would rather drop background or analytics traffic than checkout requests.',
+    },
     aliases: ['priority shedding', 'triage'],
     see: ['rate-limiter', 'tokens', 'shed'],
   },
@@ -1161,6 +1376,8 @@ export function searchGlossary(query: string): GlossaryEntry[] {
     else if (aliases.some((a) => a.includes(q))) score = 40;
     else if (entry.short.toLowerCase().includes(q)) score = 20;
     else if (entry.why.toLowerCase().includes(q)) score = 10;
+    // "kafka" or "s3" should find the kind even without an alias for it.
+    else if (entry.intro?.example.toLowerCase().includes(q)) score = 5;
 
     if (score > 0) scored.push({ entry, score });
   }

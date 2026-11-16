@@ -497,6 +497,22 @@ function Entry({ entry, active, landed, onSelect, onNavigate }: EntryProps) {
     >
       <h4 className="gl-term">{entry.term}</h4>
       <p className="gl-short">{entry.short}</p>
+      {entry.intro ? (
+        <dl className="gl-intro">
+          <div className="gl-intro-row">
+            <dt>What it is</dt>
+            <dd>{entry.intro.what}</dd>
+          </div>
+          <div className="gl-intro-row">
+            <dt>Real example</dt>
+            <dd>{entry.intro.example}</dd>
+          </div>
+          <div className="gl-intro-row">
+            <dt>When to use it</dt>
+            <dd>{entry.intro.useWhen}</dd>
+          </div>
+        </dl>
+      ) : null}
       <p className="gl-why">{entry.why}</p>
 
       {see.length > 0 ? (

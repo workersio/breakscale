@@ -7,12 +7,10 @@ import {
   KIND_GROUPS,
   KIND_ICON,
   KIND_NAME,
-  KIND_TERM,
   NODE_DND_MIME,
-  whatIsKind,
 } from './nodeVisuals';
 import type { KindGroup } from './nodeVisuals';
-import { Term } from './Tooltip';
+import { usePaletteCard } from './PaletteCard';
 import { usePreference } from '../content/preferences';
 import { useVendor } from '../content/vendors/useVendor';
 import { nameFor } from '../content/vendors/lookup';
@@ -40,10 +38,10 @@ import './Palette.css';
  * ------------------------------------------------------------------ */
 
 /**
- * Shown as the row's `title` only. The prose that used to render under
- * every name is what made this rail 260px wide with 84px rows; the real
- * explanation lives in the inspector, where there is room for it and
- * where the student is already looking once they have chosen.
+ * Searched, and shown as the row's `title` when explanations are switched
+ * off. The prose that used to render under every name is what made this
+ * rail 260px wide with 84px rows; with explanations on, the row's card
+ * (PaletteCard.tsx) says what the component is instead.
  */
 const KIND_HINT: Record<NodeKind, string> = {
   client: 'Sends requests at the rate you set',
@@ -326,14 +324,22 @@ function handleAnnDragStart(event: DragEvent<HTMLButtonElement>, tool: Annotatio
 
 export function Palette({ onAdd, onAddAnnotation, armedTool }: PaletteProps) {
   /**
-   * Whether the hover explanations are on. With them OFF (the default) the
-   * per-row "?" mark is not rendered at all: <Term> degrades to its bare
-   * children then, which left 33 inert question marks with no handler and no
-   * focus stop — decoration that could only mislead — and their sr-only
-   * labels, no longer anchored by the positioned .pal-explain wrapper,
-   * silently extended the document's scroll box by ~634px.
+   * Whether the explanations are on. With them off, the rows open no card
+   * and fall back to a plain `title`.
    */
   const hintsOn = usePreference('tooltips');
+  const rowsRef = useRef<HTMLDivElement | null>(null);
+  /** Moves focus along the rail from `row`. False for a key that does not move. */
+  const moveFrom = useCallback((key: string, row: HTMLElement): boolean => {
+    const rows = [
+      ...(rowsRef.current?.querySelectorAll<HTMLButtonElement>('.pal-row') ?? []),
+    ];
+    const next = rovingIndex(key, rows.indexOf(row as HTMLButtonElement), rows.length);
+    if (next === null) return false;
+    rows[next]?.focus();
+    return true;
+  }, []);
+  const kindCard = usePaletteCard(hintsOn, moveFrom);
   const vendor = useVendor();
 
   const totalKinds = useMemo(
@@ -365,43 +371,52 @@ export function Palette({ onAdd, onAddAnnotation, armedTool }: PaletteProps) {
     [groups],
   );
 
-  const onSearchChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
-    setQuery(e.target.value);
-  }, []);
+  const { close: closeCard } = kindCard;
+  const onSearchChange = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      // The row a card belongs to may be about to be filtered away.
+      closeCard();
+      setQuery(e.target.value);
+    },
+    [closeCard],
+  );
 
   /** Escape clears the box, then gives it up. The usual contract for search. */
-  /* The rows are one Tab stop, not 33 (66 with their "?" marks): arrows
-     move between them, Enter or Space adds one, "?" explains the focused
-     one. `active` is the row Tab returns to. */
+  /* The rows are one Tab stop, not 33: arrows move between them, Enter or
+     Space adds one, and "?" moves into the focused row's card. `active` is
+     the row Tab returns to. */
   const [active, setActive] = useState<string | null>(null);
-  const rowsRef = useRef<HTMLDivElement | null>(null);
-  const onRowsKeyDown = useCallback((e: KeyboardEvent<HTMLDivElement>) => {
-    const target = e.target as HTMLElement;
-    const item = target.closest('.pal-item');
-    const row = item?.querySelector<HTMLButtonElement>('.pal-row');
-    if (!row) return;
-    if (e.key === '?' && target === row) {
-      // The row's own explanation, not the app's glossary.
-      const term = item?.querySelector<HTMLElement>('.pal-explain');
-      if (!term) return;
+  const { focusCard, dismiss: dismissCard } = kindCard;
+  const onRowsKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLDivElement>) => {
+      const target = e.target as HTMLElement;
+      const item = target.closest('.pal-item');
+      const row = item?.querySelector<HTMLButtonElement>('.pal-row');
+      if (!row) return;
+      if (e.key === '?' && target === row) {
+        // The row's own card, not the app's glossary.
+        const kind = row.dataset.kind as NodeKind | undefined;
+        if (!kind || !focusCard(kind, row)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (e.key === 'Escape' && target === row && dismissCard()) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (e.key === 'Escape' && target !== row) {
+        row.focus();
+        return;
+      }
+      if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      if (!moveFrom(e.key, row)) return;
       e.preventDefault();
       e.stopPropagation();
-      term.focus();
-      return;
-    }
-    if (e.key === 'Escape' && target !== row) {
-      row.focus();
-      return;
-    }
-    const rows = [
-      ...(e.currentTarget.querySelectorAll<HTMLButtonElement>('.pal-row') ?? []),
-    ];
-    const next = rovingIndex(e.key, rows.indexOf(row), rows.length);
-    if (next === null || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-    e.preventDefault();
-    e.stopPropagation();
-    rows[next]?.focus();
-  }, []);
+    },
+    [focusCard, dismissCard, moveFrom],
+  );
 
   const onSearchKeyDown = useCallback((e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'ArrowDown') {
@@ -552,22 +567,10 @@ export function Palette({ onAdd, onAddAnnotation, armedTool }: PaletteProps) {
                 <ul className="pal-list">
                   {group.kinds.map((kind) => (
                     /*
-                    WHY THE EXPLANATION IS NOT ON THE ROW ITSELF.
-
-                    Every other surface in the app wraps the label in <Term>.
-                    Here that is wrong, and the reason is what the row DOES:
-                    clicking it puts a component on the canvas. Making the
-                    name a tooltip trigger would nest one interactive element
-                    inside another, and worse, it would mean the gesture for
-                    "what IS a circuit breaker?" and the gesture for "give me
-                    a circuit breaker" are the same click. A student browsing
-                    to learn would litter the canvas doing it.
-
-                    So the trigger is a SIBLING of the button, not a child.
-                    The row keeps its click, its drag and its keyboard
-                    activation exactly as they were; the mark beside it
-                    explains. Hovering anywhere on the row reveals the mark,
-                    so it is discoverable without being 33 permanent dots.
+                    The explanation is a card the row opens on hover, focus
+                    or a long press (PaletteCard.tsx), never on a click: a
+                    click is "give me one", and a student browsing to learn
+                    must not litter the canvas doing it.
                   */
                     <li key={kind} className="pal-item">
                       <button
@@ -581,11 +584,18 @@ export function Palette({ onAdd, onAddAnnotation, armedTool }: PaletteProps) {
                         data-row={kind}
                         tabIndex={kind === tabRow ? 0 : -1}
                         draggable
-                        onDragStart={(e) => handleDragStart(e, kind)}
+                        {...kindCard.rowProps(kind)}
+                        onDragStart={(e) => {
+                          kindCard.close();
+                          handleDragStart(e, kind);
+                        }}
                         onDragEnd={endCarry}
-                        onClick={() => onAdd(kind)}
+                        onClick={() => {
+                          if (kindCard.consumeClick(kind)) return;
+                          onAdd(kind);
+                        }}
                         onKeyDown={(e) => onRowKeyDown(e, kind)}
-                        title={KIND_HINT[kind]}
+                        title={hintsOn ? undefined : KIND_HINT[kind]}
                       >
                         <span className="pal-glyph">
                           <Glyph kind={kind} />
@@ -603,22 +613,6 @@ export function Palette({ onAdd, onAddAnnotation, armedTool }: PaletteProps) {
                           )}
                         </span>
                       </button>
-                      {/*
-                      `bare` because the row is already a strong affordance
-                      and a dotted underline on a lone question mark would be
-                      noise on top of noise. The tooltip itself is unchanged.
-                    */}
-                      {hintsOn && (
-                        <Term
-                          id={KIND_TERM[kind]}
-                          className="pal-explain"
-                          bare
-                          tabIndex={-1}
-                        >
-                          <span aria-hidden="true">?</span>
-                          <span className="sr-only">{whatIsKind(kind)}</span>
-                        </Term>
-                      )}
                     </li>
                   ))}
                 </ul>
@@ -684,6 +678,7 @@ export function Palette({ onAdd, onAddAnnotation, armedTool }: PaletteProps) {
           </div>
         </div>
       </div>
+      {kindCard.card}
     </nav>
   );
 }

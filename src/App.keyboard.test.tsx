@@ -151,12 +151,19 @@ describe('getting to the diagram from the keyboard', () => {
     expect(document.activeElement).toBe(rows[rows.length - 1]);
     key('Home');
     expect(document.activeElement).toBe(rows[0]);
+    // Focus alone opens the row's card, and the row is described by it.
+    const card = document.querySelector('.pal-card');
+    expect(card?.textContent).toContain('Example:');
+    expect(rows[0]!.getAttribute('aria-describedby')).toBeTruthy();
     key('?');
-    expect(document.activeElement?.classList.contains('pal-explain')).toBe(true);
+    expect(document.activeElement?.textContent).toBe('Learn more');
+    expect(card?.contains(document.activeElement)).toBe(true);
     // The row's own explanation, not the glossary panel.
     expect(document.querySelector('[role="dialog"][aria-label="Glossary"]')).toBeNull();
-    // The first Escape shuts the explanation, the second goes back to the row.
+    // Escape shuts the card and goes back to the row; a second is harmless.
     key('Escape');
+    expect(document.activeElement).toBe(rows[0]);
+    expect(document.querySelector('.pal-card')).toBeNull();
     key('Escape');
     expect(document.activeElement).toBe(rows[0]);
     key('?');
