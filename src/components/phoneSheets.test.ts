@@ -70,7 +70,8 @@ describe('the phone layout query', () => {
   const root = fileURLToPath(new URL('..', import.meta.url));
   const FILES = readdirSync(root, { recursive: true, encoding: 'utf8' })
     .filter((f) => f.endsWith('.css'))
-    .map((f) => `../${f}`)
+    // readdirSync joins with backslashes on Windows; the paths here are URLs.
+    .map((f) => `../${f.replaceAll('\\', '/')}`)
     .filter((f) => /@media[^{]*\b72[01]px\b/.test(read(f)));
 
   it('finds the stylesheets it checks', () => {
