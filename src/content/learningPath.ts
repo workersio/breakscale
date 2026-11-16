@@ -120,6 +120,25 @@ export const LEARNING_PATH: readonly PathTrack[] = [
     ],
   },
   {
+    id: 'verification',
+    title: 'Checking correctness',
+    about: 'Fast and up is not enough. Check what happened to the data.',
+    steps: [
+      ex('checkout', 'Run Can you break it? and watch it find a double charge.'),
+      ch('charged-twice', 'See why a retry after a timeout can charge a card twice.'),
+      ch('lost-on-the-way-back', 'Make a retry safe when only the answer was lost.'),
+      ch('sent-twice', 'Catch a request the network delivered twice.'),
+      ch(
+        'saved-then-gone',
+        'See what "saved" means when a store answers before its disk.',
+      ),
+      ch(
+        'read-your-own-write',
+        'Give people their own writes back from copies that lag.',
+      ),
+    ],
+  },
+  {
     id: 'real-systems',
     title: 'Real systems',
     about: 'Put it all together, then take apart systems you have heard of.',

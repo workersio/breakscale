@@ -37,7 +37,7 @@ import { ChallengePanel } from './components/Challenge';
 import { IncidentPanel } from './components/Incidents';
 import { BreakPanel } from './components/BreakIt';
 import type { Names } from './components/breakCopy';
-import { secs } from './components/breakCopy';
+import { clock, secs } from './components/breakCopy';
 import { formatGoalMs, formatGoalPct, formatShareDown } from './components/format';
 import { Challenges } from './components/Challenges';
 import {
@@ -3128,16 +3128,22 @@ export default function App() {
     breakBlockedRef.current = breakBlocked;
   }, [breakBlocked]);
 
+  /* Names from the design as it is, then from the one the verdict ran on,
+     so a part deleted since keeps its name in that verdict. */
+  const ranDesign = breakView.status === 'done' ? breakView.design : null;
   const breakNames = useMemo<Names>(() => {
-    const label = (id: string) => nodeNames[id] ?? id;
+    const ran = (id: string) => ranDesign?.nodes.find((n) => n.id === id)?.label;
+    const label = (id: string) => nodeNames[id] ?? ran(id) ?? id;
     return {
       node: label,
       edge: (id: string) => {
-        const e = topology.edges.find((x) => x.id === id);
+        const e =
+          topology.edges.find((x) => x.id === id) ??
+          ranDesign?.edges.find((x) => x.id === id);
         return e ? `the cable from ${label(e.from)} to ${label(e.to)}` : id;
       },
     };
-  }, [nodeNames, topology.edges]);
+  }, [nodeNames, topology.edges, ranDesign]);
 
   /* The parts under attack, for the canvas: a ring while a schedule is
      tried, numbered badges on a break. */
@@ -3196,6 +3202,53 @@ export default function App() {
     breakWatchSet?.result === breakView.result
       ? breakWatchSet
       : null;
+
+  /* During the replay of a correctness break, the part where the checked
+     request went wrong, once the replay's clock passes that moment. The
+     moment is the one the search measured: the live run steps at the
+     display's rate, so on screen it can land a little apart. */
+  const violationAt = useMemo(() => {
+    if (!breakWatch || breakView.status !== 'done') return null;
+    if (breakView.result.status !== 'broke') return null;
+    const v = breakView.result.run.violations?.[0];
+    if (v === undefined) return null;
+    const count = breakView.result.run.actual ?? 0;
+    switch (v.check) {
+      case 'atMostOnce':
+        return {
+          node: v.nodeId,
+          atMs: v.chargedMs[1],
+          count,
+          text: `Charged twice: request ${v.rid}`,
+          past: `request ${v.rid} was charged a second time`,
+        };
+      case 'lostAckedWrite':
+        return {
+          node: v.nodeId,
+          atMs: v.lostMs,
+          count,
+          text: `Lost after saved: request ${v.rid}`,
+          past: `request ${v.rid} was lost after it was saved`,
+        };
+      case 'readYourWrites':
+        return {
+          node: v.nodeId,
+          atMs: v.readMs,
+          count,
+          text: `Stale read: request ${v.rid}`,
+          past: `request ${v.rid} read the value from before its own write`,
+        };
+    }
+  }, [breakWatch, breakView]);
+  const violationShown =
+    violationAt !== null && snapshot !== null && engine.now >= violationAt.atMs;
+  const violationMarks = useMemo(
+    () =>
+      violationAt !== null && violationShown
+        ? new Map([[violationAt.node, violationAt.text]])
+        : undefined,
+    [violationAt, violationShown],
+  );
 
   /** The reader's design under a replay, and the replay as it went on. */
   const breakBeforeRef = useRef<{ before: Topology; installed: Topology } | null>(null);
@@ -3266,6 +3319,11 @@ export default function App() {
     });
   }, [history, installDesign]);
 
+  const handleMarkChargeable = useCallback(
+    (id: string) => handleConfigChange(id, { chargeable: 1 }),
+    [handleConfigChange],
+  );
+
   /* The panel's search, with the moves that leave a verdict ending its replay. */
   const breakPanelSearch = useMemo(
     () => ({
@@ -3319,6 +3377,14 @@ export default function App() {
     const now = engine.now;
     const { firstMs, goal } = breakWatch;
     const until = ` The first fault lands at ${secs(firstMs)} (in ${Math.ceil((firstMs - now) / 1000)}s).`;
+    // A correctness goal is read from the run the search checked, not the
+    // live one, which keeps no operation log.
+    if (violationAt !== null) {
+      const where = breakNames.node(violationAt.node);
+      return now < violationAt.atMs
+        ? `Replay: watch ${where} at ${clock(violationAt.atMs)}.${now < firstMs ? until : ''}`
+        : `Replay: ${violationAt.past}, at ${where} at ${clock(violationAt.atMs)}. The search counted ${violationAt.count} in the window.`;
+    }
     const tally = now < BREAK_WARMUP_MS ? null : engine.readTally();
     if (!tally)
       return `Replay: the first fault lands at ${secs(firstMs)} (in ${Math.ceil((firstMs - now) / 1000)}s).`;
@@ -3342,7 +3408,7 @@ export default function App() {
     return now >= BREAK_END_MS
       ? `Replay: between ${secs(BREAK_WARMUP_MS)} and ${secs(BREAK_END_MS)}, ${figure}.`
       : `Replay: in the window so far, ${figure}.${now < firstMs ? until : ''}`;
-  }, [breakWatchSec, breakWatch, engine]);
+  }, [breakWatchSec, breakWatch, engine, violationAt, breakNames]);
 
   const handleBreakLink = useCallback(() => {
     const r = breakReplay();
@@ -4162,6 +4228,7 @@ export default function App() {
               fitSignal={fitNonce}
               visibleRef={stageSafeRef}
               breakMarks={breakMarks}
+              violationMarks={violationMarks}
               emptyActions={emptyActions}
               fitTight={challenge !== undefined}
               spotlightId={
@@ -4237,6 +4304,7 @@ export default function App() {
                 onClose={handleCloseBreak}
                 onWatch={handleWatchBreak}
                 onReplayLink={handleBreakLink}
+                onMarkChargeable={handleMarkChargeable}
                 watchLine={breakWatchLine}
                 foldOnStart={false}
                 onSheetResize={handleSheetResize}

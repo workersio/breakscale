@@ -473,6 +473,10 @@ function faultText(
   switch (f.kind) {
     case 'crash':
       return `${name}: you crashed it, so everything sent to it fails.`;
+    case 'restart':
+      return `${name}: you restarted it, so everything sent to it fails until it is back.`;
+    case 'pause':
+      return `${name}: you stalled it, so its work waits, and callers that give up may send it again.`;
     case 'errors':
       return `${name}: you made it fail ${formatPct(f.rate ?? 0)} of requests.`;
     case 'partition': {

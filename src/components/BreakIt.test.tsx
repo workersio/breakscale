@@ -21,7 +21,7 @@ import {
 } from '../sim/breakit';
 import type { Attack, SearchProgress } from '../sim/breakit';
 import type { Goal } from '../sim/challenge';
-import { PRESETS } from '../sim/presets';
+import { PRESETS, defaultConfig } from '../sim/presets';
 import type { Topology } from '../sim/types';
 import type { BreakSearch, BreakView } from '../useBreakSearch';
 
@@ -110,6 +110,7 @@ function fake(view: BreakView, over: Partial<BreakSearch> = {}): BreakSearch {
     view,
     stale: false,
     goalGone: false,
+    goneId: null,
     remembered: [],
     start: vi.fn(),
     stop: vi.fn(),
@@ -131,6 +132,7 @@ function show(
     onClose: vi.fn(),
     onWatch: vi.fn(),
     onReplayLink: vi.fn(),
+    onMarkChargeable: vi.fn(),
     watchLine: null,
     ...extra,
   };
@@ -358,5 +360,249 @@ describe('break copy', () => {
     expect(lines[0]).toBe(
       'Crash Database at 10s for 0.5s and cut the cable from API Server to Database at 10s, then make API Server fail 50% of requests at 12s for 2s, then take down one machine of API Server at 15s.',
     );
+  });
+});
+
+describe('BreakPanel: correctness goals', () => {
+  /** The double-charge fixture: a retry after a timeout charges twice. */
+  const pay: Topology = {
+    nodes: [
+      {
+        ...t.nodes[0],
+        id: 'client',
+        kind: 'client',
+        label: 'Client',
+        config: { ...t.nodes[0].config, rps: 100 },
+      },
+      {
+        id: 'checkout',
+        kind: 'service',
+        label: 'Checkout',
+        x: 0,
+        y: 0,
+        config: {
+          ...defaultConfig('service'),
+          capacity: 64,
+          serviceMs: 5,
+          timeoutMs: 300,
+          retries: 2,
+        },
+      },
+      {
+        id: 'pay',
+        kind: 'service',
+        label: 'Payment Provider',
+        x: 0,
+        y: 0,
+        config: {
+          ...defaultConfig('service'),
+          capacity: 64,
+          serviceMs: 100,
+          serviceCv: 0.3,
+        },
+      },
+    ],
+    edges: [
+      { id: 'a', from: 'client', to: 'checkout', weight: 1 },
+      { id: 'b', from: 'checkout', to: 'pay', weight: 1 },
+    ],
+  };
+  const payNames: Names = {
+    node: (id) => pay.nodes.find((n) => n.id === id)?.label ?? id,
+    edge: (id) => id,
+  };
+  const once: Goal = { metric: 'doubleCharges', max: 0 };
+
+  function picking(design: Topology) {
+    const search = fake(
+      { status: 'picking' },
+      { templates: breakGoals(design), goalId: 'once', goal: once, maxOf: () => 0 },
+    );
+    act(() =>
+      root.render(
+        <BreakPanel
+          search={search}
+          names={payNames}
+          nodes={design.nodes}
+          onClose={vi.fn()}
+          onWatch={vi.fn()}
+          onReplayLink={vi.fn()}
+          onMarkChargeable={mark}
+          watchLine={null}
+        />,
+      ),
+    );
+    return search;
+  }
+  const mark = vi.fn();
+
+  it('asks which part charges the card before it can run', () => {
+    picking(pay);
+    const text = container.textContent ?? '';
+    expect(text).toContain('Every payment charged at most once');
+    expect(text).toContain('Pick the part that charges the card to measure it.');
+    const run = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Try to break it',
+    );
+    expect(run?.disabled).toBe(true);
+    const select = [...container.querySelectorAll('select')].find((s) =>
+      s.labels?.[0]?.textContent?.includes('Which part charges the card?'),
+    );
+    if (!select) throw new Error('no picker');
+    // Every part a call finishes at, and not the client.
+    expect([...select.options].map((o) => o.value)).toEqual(['', 'checkout', 'pay']);
+    act(() => {
+      select.value = 'pay';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(mark).toHaveBeenCalledWith('pay');
+    // The terms in the goal are explained on hover.
+    const terms = [...container.querySelectorAll('[data-term]')].map((e) =>
+      e.getAttribute('data-term'),
+    );
+    expect(terms).toEqual(expect.arrayContaining(['at-most-once', 'idempotency-key']));
+  });
+
+  it('runs once a part is marked, and says which', () => {
+    const marked = {
+      ...pay,
+      nodes: pay.nodes.map((n) =>
+        n.id === 'pay' ? { ...n, config: { ...n.config, chargeable: 1 } } : n,
+      ),
+    };
+    picking(marked);
+    expect(container.textContent).toContain('Counted at Payment Provider');
+    const run = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Try to break it',
+    );
+    expect(run?.disabled).toBe(false);
+  });
+
+  it('shows the first double charge and follows that request', () => {
+    const marked = {
+      ...pay,
+      nodes: pay.nodes.map((n) =>
+        n.id === 'pay' ? { ...n, config: { ...n.config, chargeable: 1 } } : n,
+      ),
+    };
+    const result = runSearch(marked, once, DEFAULT_OPTIONS);
+    if (result.status !== 'broke')
+      throw new Error(`expected a break, got ${result.status}`);
+    const first = result.run.violations?.[0];
+    if (first?.check !== 'atMostOnce') throw new Error('no double charge');
+    const search = fake(
+      {
+        status: 'done',
+        result,
+        design: searchDesign(marked),
+        goal: once,
+        designSig: 'x',
+      },
+      { templates: breakGoals(marked), goalId: 'once', goal: once },
+    );
+    act(() =>
+      root.render(
+        <BreakPanel
+          search={search}
+          names={payNames}
+          nodes={marked.nodes}
+          onClose={vi.fn()}
+          onWatch={vi.fn()}
+          onReplayLink={vi.fn()}
+          onMarkChargeable={vi.fn()}
+          watchLine={null}
+        />,
+      ),
+    );
+    expect(container.textContent).toContain(
+      `Request ${first.rid} was charged twice at Payment Provider`,
+    );
+    const follow = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === `Follow request ${first.rid}`,
+    );
+    if (!follow) throw new Error('no follow button');
+    expect(follow.getAttribute('aria-expanded')).toBe('false');
+    press(follow);
+    expect(follow.getAttribute('aria-expanded')).toBe('true');
+    const list = container.querySelector(
+      `#${CSS.escape(follow.getAttribute('aria-controls') ?? '')}`,
+    );
+    expect(list?.tagName).toBe('OL');
+    const bad = [...(list?.querySelectorAll('.is-bad') ?? [])];
+    expect(bad).toHaveLength(1);
+    expect(bad[0].textContent).toContain('Payment Provider charges the card again.');
+    expect(bad[0].textContent).toContain('Charged again');
+  }, 60_000);
+  function render(search: BreakSearch, design: Topology) {
+    act(() =>
+      root.render(
+        <BreakPanel
+          search={search}
+          names={payNames}
+          nodes={design.nodes}
+          onClose={vi.fn()}
+          onWatch={vi.fn()}
+          onReplayLink={vi.fn()}
+          onMarkChargeable={vi.fn()}
+          watchLine={null}
+        />,
+      ),
+    );
+  }
+
+  it('says a hold comes from nothing retrying when nothing before the charge retries', () => {
+    const noRetry = {
+      ...pay,
+      nodes: pay.nodes.map((n) =>
+        n.id === 'pay'
+          ? { ...n, config: { ...n.config, chargeable: 1 } }
+          : n.id === 'checkout'
+            ? { ...n, config: { ...n.config, retries: 0 } }
+            : n,
+      ),
+    };
+    // With cables delivering twice left out: a duplicate needs no retry.
+    const result = runSearch(noRetry, once, {
+      ...DEFAULT_OPTIONS,
+      kinds: DEFAULT_OPTIONS.kinds.filter((k) => k !== 'duplicate'),
+      budget: 5,
+    });
+    if (result.status !== 'held')
+      throw new Error(`expected held, got ${result.status}`);
+    render(
+      fake(
+        {
+          status: 'done',
+          result,
+          design: searchDesign(noRetry),
+          goal: once,
+          designSig: 'x',
+        },
+        { templates: breakGoals(noRetry), goalId: 'once', goal: once },
+      ),
+      noRetry,
+    );
+    expect(container.textContent).toContain(
+      'Nothing on the way to Payment Provider sends a call again',
+    );
+  }, 60_000);
+
+  it('does not quietly run another goal once the one it ran is gone', () => {
+    const search = fake(done(broke), { stale: true, goneId: 'saved', goalGone: true });
+    render(search, pay);
+    const text = container.textContent ?? '';
+    expect(text).toContain('no saved write can be lost this way');
+    expect(
+      [...container.querySelectorAll('button')].some(
+        (b) => b.textContent === 'Run again',
+      ),
+    ).toBe(false);
+    const pick = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Pick another goal',
+    );
+    if (!pick) throw new Error('no pick button');
+    press(pick);
+    expect(search.backToGoals).toHaveBeenCalled();
+    expect(search.start).not.toHaveBeenCalled();
   });
 });

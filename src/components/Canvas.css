@@ -2256,3 +2256,27 @@
   font-variant-numeric: tabular-nums;
   text-anchor: middle;
 }
+
+/* --------------------------------------------------------------------------
+   Where a correctness break went wrong, during its replay: a solid ring,
+   apart from the dashed fault ring, and the words above the node, so the
+   mark does not lean on colour.
+   -------------------------------------------------------------------------- */
+.cv-violation {
+  pointer-events: none;
+}
+
+.cv-violation-ring {
+  fill: none;
+  stroke: var(--danger-mark);
+  stroke-width: 3;
+}
+
+.cv-violation-text {
+  fill: var(--danger);
+  stroke: var(--bg);
+  stroke-width: 4px;
+  paint-order: stroke;
+  font-size: 12px;
+  font-weight: 600;
+}

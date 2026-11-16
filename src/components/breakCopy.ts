@@ -7,7 +7,9 @@ import type {
 } from '../sim/breakit';
 import { BREAK_END_MS, BREAK_WARMUP_MS } from '../sim/breakit';
 import type { Goal } from '../sim/challenge';
-import { formatGoalMs, formatGoalPct, formatShareDown } from './format';
+import type { RequestTimeline, TimelineEvent, Violation } from '../sim/oplog';
+import type { FailureReason } from '../sim/types';
+import { formatCount, formatGoalMs, formatGoalPct, formatShareDown } from './format';
 
 /* ------------------------------------------------------------------ *
  * The words "Can you break it?" uses: fault phrases, schedules and
@@ -45,6 +47,12 @@ export function faultPhrase(a: Attack, names: Names): string {
       return `make ${names.node(a.target)} fail ${pct(a.rate)} of requests`;
     case 'cut':
       return `cut ${names.edge(a.target)}`;
+    case 'duplicate':
+      return `make ${names.edge(a.target)} deliver ${pct(a.rate)} of requests twice`;
+    case 'pause':
+      return `stall ${names.node(a.target)}`;
+    case 'cut-replies':
+      return `make ${names.edge(a.target)} lose its answers`;
   }
 }
 
@@ -127,6 +135,12 @@ export function effectSentence(run: SeedRun, goal: Goal, names: Names): string {
       return `${run.actual ?? 0} saved ${run.actual === 1 ? 'write' : 'writes'} never reached the database.`;
     case 'lostJobs':
       return `${run.actual ?? 0} accepted ${run.actual === 1 ? 'job' : 'jobs'} failed later.`;
+    case 'doubleCharges':
+      return `${WINDOW_PHRASE}, ${run.actual ?? 0} ${run.actual === 1 ? 'payment was' : 'payments were'} charged more than once.`;
+    case 'lostAckedWrites':
+      return `${WINDOW_PHRASE}, ${run.actual ?? 0} ${run.actual === 1 ? 'write' : 'writes'} the client was told ${run.actual === 1 ? 'was' : 'were'} saved never reached storage.`;
+    case 'staleReads':
+      return `${WINDOW_PHRASE}, ${run.actual ?? 0} ${run.actual === 1 ? 'read' : 'reads'} missed a write the same client had been told was saved.`;
     case 'queueDepth':
       return '';
   }
@@ -151,6 +165,18 @@ export function baselineSentence(run: SeedRun, goal: Goal, names: Names): string
       return `With no faults, ${run.actual ?? 0} saved writes are lost.`;
     case 'lostJobs':
       return `With no faults, ${run.actual ?? 0} accepted jobs fail.`;
+    case 'doubleCharges':
+      return run.actual === 0
+        ? 'With no faults, no payment is charged twice.'
+        : `With no faults, ${run.actual ?? 0} ${run.actual === 1 ? 'payment is' : 'payments are'} charged more than once.`;
+    case 'lostAckedWrites':
+      return run.actual === 0
+        ? 'With no faults, every write the client is told was saved reaches storage.'
+        : `With no faults, ${run.actual ?? 0} ${run.actual === 1 ? 'write' : 'writes'} the client is told ${run.actual === 1 ? 'was' : 'were'} saved never ${run.actual === 1 ? 'reaches' : 'reach'} storage.`;
+    case 'staleReads':
+      return run.actual === 0
+        ? 'With no faults, every read shows the writes its client was told were saved.'
+        : `With no faults, ${run.actual ?? 0} ${run.actual === 1 ? 'read misses' : 'reads miss'} a write the same client was told was saved.`;
     case 'queueDepth':
       return '';
   }
@@ -231,4 +257,233 @@ export function singlePointLines(
     const cables = parts.filter((x) => x.startsWith('the cable'));
     return `Every request from ${names.node(c)} has to pass through ${listed([...boxes, ...cables])}.`;
   });
+}
+
+/* ---------------- correctness evidence ---------------- */
+
+/** A time on the replay's clock to the hundredth of a second: "10.64s". */
+export function clock(ms: number): string {
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
+/** How a write's kept copy was lost, after "lost": "when Database crashed". */
+function lostHow(reason: FailureReason, at: string): string {
+  switch (reason) {
+    case 'crashed':
+      return `when ${at} crashed`;
+    case 'partitioned':
+      return `on a cut cable from ${at}`;
+    case 'packet-loss':
+      return `on a lossy link from ${at}`;
+    case 'timeout':
+      return `when ${at} timed out saving it`;
+    default:
+      return `when ${at} failed to save it`;
+  }
+}
+
+function times(n: number): string {
+  return n === 2 ? 'twice' : `${n} times`;
+}
+
+/**
+ * The earliest violation as evidence: which request, what happened to it
+ * and when, on the replay's clock.
+ */
+export function evidenceSentence(v: Violation, names: Names): string {
+  if (v.check === 'atMostOnce') {
+    const at = v.chargedMs.map(clock);
+    const told =
+      v.outcome === 'ok'
+        ? 'The client was told it went through.'
+        : v.outcome === 'failed'
+          ? 'The client was told it failed.'
+          : 'The client never heard back.';
+    const where = new Set(v.nodeIds);
+    if (where.size > 1) {
+      const each = v.nodeIds.map((id, i) => `at ${names.node(id)} at ${at[i]}`);
+      return `Request ${v.rid} was charged ${times(v.chargedMs.length)}, ${listed(each)}. ${told}`;
+    }
+    return `Request ${v.rid} was charged ${times(v.chargedMs.length)} at ${names.node(v.nodeId)}, at ${listed(at)}. ${told}`;
+  }
+  if (v.check === 'readYourWrites') {
+    return `Request ${v.rid} read a record at ${names.node(v.nodeId)} at ${clock(v.readMs)}. The same client had been told at ${clock(v.savedMs)} that request ${v.wroteRid} saved a change to it, but the change only showed up in reads at ${clock(v.visibleMs)}, so the read got the old value.`;
+  }
+  if (v.copy === 'disk') {
+    return `Request ${v.rid} was saved by ${names.node(v.nodeId)} at ${clock(v.bufferedMs)}, and the client was told so, but it was still in memory. It was lost when ${names.node(v.lostAt)} went down at ${clock(v.lostMs)}, before it reached disk.`;
+  }
+  return `Request ${v.rid} was held in ${names.node(v.nodeId)} at ${clock(v.bufferedMs)}, and the client was told it was saved. It was lost ${lostHow(v.reason, names.node(v.lostAt))} at ${clock(v.lostMs)}, before it reached storage.`;
+}
+
+/** The line an event is drawn with: "Charged again" and "Lost" carry the meaning in words. */
+export type TimelineTag = 'charged-again' | 'lost' | 'stale' | null;
+
+export interface TimelineLine {
+  t: number;
+  text: string;
+  tag: TimelineTag;
+}
+
+/** One line of a request's story. `v` is the violation it is followed for. */
+function eventLine(e: TimelineEvent, names: Names, v?: Violation): TimelineLine {
+  const n = names.node;
+  const line = (text: string, tag: TimelineTag = null): TimelineLine => ({
+    t: e.t,
+    text,
+    tag,
+  });
+  switch (e.type) {
+    case 'invoke':
+      return line(`${n(e.node)} sends it.`);
+    case 'send':
+      // Tries count from 0 in the log: try 0 is the first call.
+      return line(
+        e.attempt > 0
+          ? `${n(e.from)} calls ${n(e.to)} again, try ${e.attempt + 1}.`
+          : `${n(e.from)} calls ${n(e.to)}.`,
+      );
+    case 'lost':
+      return line(`${n(e.from)}'s call to ${n(e.to)} never arrives.`, 'lost');
+    case 'reply-lost':
+      return line(
+        e.ok
+          ? `${n(e.node)} answers, but the answer is lost on the way back to ${n(e.to)}.`
+          : `${n(e.node)} answers that it failed, but the answer is lost on the way back to ${n(e.to)}.`,
+        'lost',
+      );
+    case 'duplicate':
+      return line(
+        `The cable delivers ${n(e.from)}'s call to ${n(e.to)} a second time.`,
+      );
+    case 'timeout':
+      return line(
+        `${n(e.node)} stops waiting for ${n(e.to)}. That try keeps running there.`,
+      );
+    case 'retry':
+      return line(`${n(e.node)} will try ${n(e.to)} again.`);
+    case 'apply':
+      if (v?.check === 'readYourWrites' && e.node === v.nodeId && e.t >= v.readMs) {
+        return line(
+          `${n(e.node)} answers the read from before request ${v.wroteRid}'s write showed up.`,
+          'stale',
+        );
+      }
+      if (!e.charge) return line(`${n(e.node)} does its part.`);
+      return e.repeat
+        ? line(`${n(e.node)} charges the card again.`, 'charged-again')
+        : line(`${n(e.node)} charges the card.`);
+    case 'dedupe':
+      return line(
+        e.inFlight
+          ? `${n(e.node)} refuses it: the same request is still being worked on.`
+          : `${n(e.node)} has done this request already, so it answers with the first result.`,
+      );
+    case 'buffered':
+      return line(
+        e.disk
+          ? `${n(e.node)} saves it and says so, but has not written it to disk yet.`
+          : `${n(e.node)} says it is saved, but only holds it in memory.`,
+      );
+    case 'landed':
+      return line(
+        e.disk
+          ? `${n(e.node)} writes it to disk.`
+          : `${n(e.node)}'s copy reaches storage.`,
+      );
+    case 'dropped':
+      return line(
+        e.disk
+          ? `${n(e.node)} goes down before writing it to disk, so it is lost.`
+          : `${n(e.node)}'s copy is lost ${lostHow(e.reason, n(e.at))}.`,
+        'lost',
+      );
+    case 'answer':
+      if (e.heard === 'client') {
+        return line(
+          e.ok ? 'The client hears it worked.' : 'The client hears it failed.',
+        );
+      }
+      if (e.heard === 'nobody') {
+        return line(
+          e.ok
+            ? `${n(e.node)} finishes, but nobody is waiting for the answer.`
+            : `${n(e.node)} fails, but nobody is waiting for the answer.`,
+        );
+      }
+      return line(
+        e.ok ? `${n(e.node)} answers.` : `${n(e.node)} answers that it failed.`,
+      );
+  }
+}
+
+/** A request's story in lines, in the order it happened. */
+export function timelineWords(
+  tl: RequestTimeline,
+  names: Names,
+  v?: Violation,
+): TimelineLine[] {
+  // A try whose answer was lost has already finished, so when its caller
+  // gives up on it, it is not still running anywhere.
+  const answered = new Set<string>();
+  return tl.events.map((e) => {
+    if (e.type === 'reply-lost') answered.add(`${e.to}|${e.node}|${e.attempt}`);
+    if (e.type === 'timeout' && answered.has(`${e.node}|${e.to}|${e.attempt}`)) {
+      return {
+        t: e.t,
+        text: `${names.node(e.node)} stops waiting for ${names.node(e.to)}, never having heard back.`,
+        tag: null,
+      };
+    }
+    return eventLine(e, names, v);
+  });
+}
+
+/**
+ * For a correctness goal that held: that every schedule was checked, how
+ * many things that is on the run with no faults, and what was not checked.
+ */
+export function checkedLine(goal: Goal, checked: number): string {
+  const n = formatCount(checked);
+  switch (goal.metric) {
+    case 'doubleCharges':
+      return `Every fault schedule was checked; with no faults that is ${n} ${checked === 1 ? 'payment' : 'payments'}. Not checked: a payment the client was told failed that was charged anyway.`;
+    case 'lostAckedWrites':
+      return `Every fault schedule was checked; with no faults that is ${n} ${checked === 1 ? 'write' : 'writes'} the client was told ${checked === 1 ? 'was' : 'were'} saved.`;
+    case 'staleReads':
+      return `Every fault schedule was checked; with no faults that is ${n} ${checked === 1 ? 'read' : 'reads'} from stores whose reads trail their writes.`;
+    default:
+      return '';
+  }
+}
+
+/** The log keeps so many requests; past them a run is only partly checked. */
+export const TRUNCATED_LINE =
+  'Not every request was checked: this design sends more than the 1,048,576 requests one check can follow, and the ones after that were left out.';
+
+/**
+ * For a held double-charge goal where nothing on the way to a charge
+ * retries: why it held, so it is not read as the work of idempotency.
+ */
+export function nothingRetriesLine(charged: readonly string[], names: Names): string {
+  const parts = listed(charged.map(names.node));
+  return `Nothing on the way to ${parts} sends a call again, and no cable was tried delivering a call twice, so nothing tried could charge twice. Turn on retries before it, or let the search deliver requests twice, to test it.`;
+}
+
+/**
+ * Why a goal picked earlier is no longer offered, by its template id: the
+ * part it was about has gone from the design.
+ */
+export function goneLine(id: string): string {
+  switch (id.split(':')[0]) {
+    case 'saved':
+      return 'Nothing in the design says a write is saved before it is any more, so no saved write can be lost this way.';
+    case 'jobs':
+      return 'Nothing in the design holds jobs for workers any more, so no job can be lost this way.';
+    case 'fresh':
+      return 'No store in the design serves reads that trail its writes any more, so no read can miss a write this way.';
+    case 'once':
+      return 'No part of the design can charge money any more.';
+    default:
+      return 'That traffic source is gone.';
+  }
 }

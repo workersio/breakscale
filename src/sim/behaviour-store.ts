@@ -448,6 +448,7 @@ const db: ComponentBehaviour = {
   buffersForConsumers: false,
   pump: 'none',
   creditsJoinCompletion: true,
+  hasDisk: true,
 
   initState: (): DbExt => ({ ...initPool(), writers: 0 }),
 
@@ -553,6 +554,8 @@ const searchindex: ComponentBehaviour = {
   buffersForConsumers: false,
   pump: 'none',
   creditsJoinCompletion: true,
+  // The same refresh delay searchDrained plays.
+  readLagMs: (config) => Math.max(0, num(config.indexLagMs, 0)),
 
   initState(): SearchExt {
     const visibleAt = new Float64Array(KEYSPACE);

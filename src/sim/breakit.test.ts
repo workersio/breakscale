@@ -12,6 +12,7 @@ import {
   defaultMax,
   neighbours,
   playBaseline,
+  playBaselines,
   replayOf,
   runLengthMs,
   runSearch,
@@ -371,6 +372,7 @@ describe('break it: goals', () => {
     expect(breakGoals(preset('single-server')).map((g) => g.id)).toEqual([
       'up',
       'fast',
+      'once',
     ]);
     const stripe = breakGoals(preset('stripe')).map((g) => g.id);
     expect(stripe).toContain('up:dashboards');
@@ -380,11 +382,34 @@ describe('break it: goals', () => {
   it('offers lost writes and lost jobs only where they can happen', () => {
     for (const p of PRESETS) {
       const ids = breakGoals(p.topology).map((g) => g.id);
-      expect(ids.includes('writes')).toBe(
+      expect(ids.includes('saved')).toBe(
         p.topology.nodes.some((n) => n.kind === 'writebehind'),
+      );
+      expect(ids).not.toContain('writes');
+      expect(ids).toContain('once');
+      expect(ids.includes('fresh')).toBe(
+        p.topology.nodes.some((n) => n.kind === 'replica' || n.kind === 'searchindex'),
       );
     }
   });
+
+  it('measures the other goals at their own settle time beside a correctness goal', () => {
+    const t = preset('resilient-delivery');
+    const goals: Goal[] = [
+      { metric: 'lostJobs', max: 0 },
+      { metric: 'lostWrites', max: 0 },
+    ];
+    const run = (gs: Goal[]) => {
+      const it = playBaselines(t, gs);
+      for (;;) {
+        const step = it.next();
+        if (step.done) return step.value;
+      }
+    };
+    const alone = run(goals);
+    const beside = run([...goals, { metric: 'lostAckedWrites', max: 0 }]);
+    expect(beside.slice(0, 2)).toEqual(alone);
+  }, 60_000);
 
   it('sets the default above a design that already sits near the line', () => {
     const goal: Goal = { metric: 'errorRate', max: 1 };

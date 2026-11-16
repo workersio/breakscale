@@ -229,3 +229,91 @@ describe('wantsAttention', () => {
     expect(wantsAttention([ev(1, 'cause'), ev(2, 'better')], 1)).toBe(false);
   });
 });
+
+describe('timeline: a cable delivering twice', () => {
+  it('says when a link starts delivering twice and when it stops', () => {
+    const top = preset('circuit-breaker');
+    const r = run(top, 4, (engine, _t, ms) => {
+      if (ms === 1000) engine.duplicateEdge('breaker->payments', 0.05);
+      if (ms === 2500) engine.undupEdge('breaker->payments');
+    });
+    const on = line(r.lines, 'The link from Circuit Breaker to Payments API started');
+    expect(on.text).toBe(
+      'The link from Circuit Breaker to Payments API started delivering 5% of requests twice.',
+    );
+    // `act` runs before the step, so the engine was at 900ms.
+    expect(on.atMs).toBe(900);
+    expect(
+      line(r.lines, 'The link from Circuit Breaker to Payments API delivers').text,
+    ).toBe(
+      'The link from Circuit Breaker to Payments API delivers each request once again.',
+    );
+  });
+});
+
+describe('timeline: a pause and lost answers', () => {
+  it('says when a part pauses and when it carries on by itself', () => {
+    const top = preset('circuit-breaker');
+    const r = run(top, 4, (engine, _t, ms) => {
+      if (ms === 1000) engine.injectFailure('payments', 'pause', { pauseMs: 1000 });
+    });
+    expect(line(r.lines, 'Payments API stalled').text).toBe(
+      'Payments API stalled for 1s.',
+    );
+    expect(line(r.lines, 'Payments API carries on').text).toBe(
+      'Payments API carries on.',
+    );
+  });
+
+  it('says when a link starts losing its answers and when it carries them again', () => {
+    const top = preset('circuit-breaker');
+    const r = run(top, 4, (engine, _t, ms) => {
+      if (ms === 1000) engine.cutReplies('breaker->payments');
+      if (ms === 2500) engine.restoreReplies('breaker->payments');
+    });
+    expect(
+      line(r.lines, 'The link from Circuit Breaker to Payments API started').text,
+    ).toBe(
+      'The link from Circuit Breaker to Payments API started losing the answers coming back.',
+    );
+    // The breaker has no timeout, so the calls that lost an answer still wait.
+    expect(
+      line(r.lines, 'The link from Circuit Breaker to Payments API carries').text,
+    ).toMatch(
+      /^The link from Circuit Breaker to Payments API carries answers back again, but \d+ calls are still waiting for answers it lost\.$/,
+    );
+  });
+
+  it('calls the link mended when its caller gives up on lost answers by itself', () => {
+    const top = preset('checkout');
+    const wire = top.edges.find((e) => e.from === 'api');
+    if (!wire) throw new Error('no api cable');
+    const r = run(top, 4, (engine, _t, ms) => {
+      if (ms === 1000) engine.cutReplies(wire.id);
+      if (ms === 2500) engine.restoreReplies(wire.id);
+    });
+    const restored = r.lines.find((l) => l.text.includes('carries answers back again'));
+    if (!restored) throw new Error('no restore line');
+    expect(restored.text).toMatch(
+      /^The link from Checkout API to .+ carries answers back again\.$/,
+    );
+    expect(restored.tone).toBe('better');
+  });
+
+  it('does not call the link mended while a caller with no timeout still waits', () => {
+    const top = preset('single-server');
+    const api = top.nodes.find((n) => n.kind === 'service');
+    const wire = top.edges.find((e) => e.from === api?.id);
+    if (!api || !wire) throw new Error('no api cable');
+    expect(api.config.timeoutMs ?? 0).toBe(0);
+    const r = run(top, 4, (engine, _t, ms) => {
+      if (ms === 1000) engine.cutReplies(wire.id);
+      if (ms === 2500) engine.restoreReplies(wire.id);
+    });
+    const restored = r.lines.find((l) => l.text.includes('carries answers back again'));
+    expect(restored?.text).toMatch(
+      /^The link from .+ carries answers back again, but \d+ calls are still waiting for answers it lost\.$/,
+    );
+    expect(restored?.tone).toBe('trouble');
+  });
+});

@@ -1,9 +1,16 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { isCorrectnessGoal } from '../sim/challenge';
 import type { Challenge, ChallengeResult, Goal, GoalMetric } from '../sim/challenge';
-import { CHECK_SEEDS, DEFAULT_WARMUP_S, DEFAULT_WINDOW_S } from '../sim/judge';
+import {
+  CHECK_SEEDS,
+  CORRECTNESS_SETTLE_MS,
+  DEFAULT_WARMUP_S,
+  DEFAULT_WINDOW_S,
+} from '../sim/judge';
 import type { BudgetUse, RunResult, Unjudgeable, Verdict } from '../sim/judge';
 import type { FailureReason } from '../sim/types';
 import type { CheckView } from '../useChallengeCheck';
+import { evidenceSentence } from './breakCopy';
 import { formatCount, formatGoalMs, formatGoalPct, formatShareDown } from './format';
 import { KIND_NAME } from './nodeVisuals';
 import './Challenge.css';
@@ -77,6 +84,9 @@ const LABEL: Record<GoalMetric, string> = {
   lostWrites: 'Saves that never reached the database',
   lostJobs: 'Accepted jobs that failed later',
   queueDepth: 'Jobs still waiting in the queue',
+  doubleCharges: 'Payments charged more than once',
+  lostAckedWrites: 'Saved writes that never reached storage',
+  staleReads: 'Reads that missed their own saved write',
 };
 
 /**
@@ -94,6 +104,9 @@ const COUNTED: ReadonlySet<GoalMetric> = new Set([
   'lostWrites',
   'lostJobs',
   'queueDepth',
+  'doubleCharges',
+  'lostAckedWrites',
+  'staleReads',
 ]);
 
 /** A reading against a goal, rounded toward failing it. See format.ts. */
@@ -104,6 +117,9 @@ function formatGoal(metric: GoalMetric, value: number | null): string {
     case 'lostWrites':
     case 'lostJobs':
     case 'queueDepth':
+    case 'doubleCharges':
+    case 'lostAckedWrites':
+    case 'staleReads':
       return formatCount(value);
     case 'p99':
     case 'p95':
@@ -142,6 +158,12 @@ function missLine(
       return `${a} accepted ${one ? 'job' : 'jobs'} failed later, ${end}`;
     case 'queueDepth':
       return `${a} ${one ? 'job was' : 'jobs were'} still waiting in the queue at the end, ${end}`;
+    case 'doubleCharges':
+      return `${a} ${one ? 'payment was' : 'payments were'} charged more than once, ${end}`;
+    case 'lostAckedWrites':
+      return `${a} ${one ? 'save' : 'saves'} the client heard succeed never reached storage, ${end}`;
+    case 'staleReads':
+      return `${a} ${one ? 'read' : 'reads'} missed a write the same client heard succeed, ${end}`;
   }
 }
 
@@ -506,8 +528,15 @@ export function ChallengePanel({
   }, [hintsShown]);
   const deciding = verdict && 'deciding' in verdict ? verdict.deciding : null;
   const line = verdict ? verdictLine(verdict, nameOf) : null;
+  // A missed correctness goal is about the data, not lost requests, so the
+  // line under the verdict names the first request it went wrong for.
+  const evidence = deciding?.evidence;
   const reason =
-    verdict && verdict.status !== 'passed' && deciding ? reasonLine(deciding) : null;
+    verdict && verdict.status !== 'passed' && deciding
+      ? evidence !== undefined
+        ? evidenceSentence(evidence, { node: nameOf, edge: nameOf })
+        : reasonLine(deciding)
+      : null;
   const shown = challenge.hints.slice(0, hintsShown);
   const warmS = challenge.warmupS ?? DEFAULT_WARMUP_S;
   const endS = warmS + (challenge.windowS ?? DEFAULT_WINDOW_S);
@@ -662,6 +691,9 @@ export function ChallengePanel({
                 The check plays your design {CHECK_SEEDS.length} times, each with
                 slightly different random traffic. It counts from {warmS}s to {endS}s of
                 each run.
+                {challenge.goals.some(isCorrectnessGoal)
+                  ? ` Then it plays ${CORRECTNESS_SETTLE_MS / 1000}s more, so a try still running can finish before it checks the data.`
+                  : null}
               </p>
               {check.status === 'checking' ? (
                 <>

@@ -14,7 +14,12 @@ import type {
   SimNode,
   SystemStats,
 } from '../sim/types';
-import { canCrashOneInstance } from '../sim/behaviour';
+import {
+  behaviourFor,
+  canCrashOneInstance,
+  canPause,
+  takesCorrectness,
+} from '../sim/behaviour';
 import { defaultConfig } from '../sim/presets';
 import { suggestionFor } from '../content/suggestions';
 import { KIND_NAME, KIND_TERM } from './nodeVisuals';
@@ -41,7 +46,9 @@ import {
   LinkLossControls,
   NodeFaultControls,
 } from './FaultControls';
+import { restartLosesFor } from './faultWiring';
 import type { InspectorFaults } from './faultWiring';
+import { FlushRow } from './Durability';
 import './Inspector.css';
 
 /* ------------------------------------------------------------------ *
@@ -1522,6 +1529,44 @@ function formatMultiple(v: number): string {
   return `${formatCount(v)}x`;
 }
 
+/**
+ * An on or off setting. Off removes the field rather than writing 0, so a
+ * design that never turned it on shares and saves exactly as before.
+ */
+function ToggleRow({
+  label,
+  hint,
+  checked,
+  locked,
+  onChange,
+}: {
+  label: ReactNode;
+  hint: string;
+  checked: boolean;
+  /** Held still by a challenge. See SliderRow. */
+  locked?: string;
+  onChange: (on: boolean) => void;
+}) {
+  const hintId = useId();
+  return (
+    <div className={locked ? 'ins-field-row is-locked' : 'ins-field-row'}>
+      <label className="ins-toggle">
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={locked !== undefined}
+          aria-describedby={hintId}
+          onChange={(e) => onChange(e.currentTarget.checked)}
+        />
+        <span>{label}</span>
+      </label>
+      <p id={hintId} className="ins-hint">
+        {locked ?? hint}
+      </p>
+    </div>
+  );
+}
+
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="ins-section">
@@ -2405,10 +2450,23 @@ export function Inspector({
                   ) : null}
                   <Section title="Break it on purpose">
                     <EdgeFaultControls
+                      key={faults.edge.id}
                       cable={faults.edge}
                       cutBy={faults.edge.cutBy}
                       onCut={faults.onCut}
                       onRestore={faults.onRestore}
+                      dup={faults.edge.dup}
+                      replyCut={faults.edge.replyCut}
+                      stranded={faults.edge.stranded}
+                      callerWaits={faults.edge.callerWaits}
+                      {...(faults.edge.carriesRequests
+                        ? {
+                            onDuplicate: faults.onDuplicate,
+                            onUndup: faults.onUndup,
+                            onCutReplies: faults.onCutReplies,
+                            onRestoreReplies: faults.onRestoreReplies,
+                          }
+                        : {})}
                       recorded={faults.recorded}
                       onForget={faults.onForget}
                     />
@@ -2604,6 +2662,23 @@ function useLingering(on: boolean): boolean {
   return on || held;
 }
 
+/**
+ * True only once `on` has held for a continuous HINT_HOLD_MS, and false the
+ * moment it drops. For a signal that spikes on single snapshots, where even
+ * a lingering hint would show nearly all the time.
+ */
+function useSustained(on: boolean): boolean {
+  const [held, setHeld] = useState(false);
+  // Turning off takes effect during render, so a dip restarts the wait.
+  if (!on && held) setHeld(false);
+  useEffect(() => {
+    if (!on) return;
+    const t = setTimeout(() => setHeld(true), HINT_HOLD_MS);
+    return () => clearTimeout(t);
+  }, [on]);
+  return on && held;
+}
+
 type QueueHintState = 'idle' | 'queued' | 'shedding';
 
 const QUEUE_HINT_RANK: Record<QueueHintState, number> = {
@@ -2664,7 +2739,12 @@ function ReplicaSetSection({ per, stats }: { per: number[]; stats: NodeStats }) 
   const readAvg = reads.length ? reads.reduce((a, b) => a + b, 0) / reads.length : 0;
   // Lingering keeps the slot from flicking between messages, not just from
   // moving: a hint swaps only after its signal has settled.
-  const writeBound = useLingering(primary - readAvg > 0.4);
+  // A primary that also takes the fresh reads swings from idle to full on
+  // single snapshots, so with that on the gap must hold before it counts.
+  const freshReads = stats.primaryReadShare !== undefined;
+  const gap = primary - readAvg > 0.4;
+  const sustainedGap = useSustained(gap);
+  const writeBound = useLingering(freshReads ? sustainedGap : gap);
   const stale = useLingering(stats.staleReadRate > 0);
   const hint = writeBound ? 'write-bound' : stale ? 'stale' : null;
   return (
@@ -2691,15 +2771,26 @@ function ReplicaSetSection({ per, stats }: { per: number[]; stats: NodeStats }) 
           value={formatPct(stats.staleReadRate)}
           tone={toneClass(healthOfErr(stats.staleReadRate))}
         />
+        {stats.primaryReadShare !== undefined && (
+          <StatRow
+            label="Reads sent to the primary"
+            term="read-your-writes"
+            value={formatPct(stats.primaryReadShare)}
+          />
+        )}
       </div>
       <div className="ins-hint-stack">
         <p className="ins-hint is-warn" data-active={hint === 'write-bound'}>
           The primary is the bottleneck, not the replicas. Adding more read replicas
-          will not help; every write still goes through the one primary.
+          will not help; every write still goes through the one primary
+          {freshReads
+            ? ', and so do the reads sent to it while the copies are behind.'
+            : '.'}
         </p>
         <p className="ins-hint" data-active={hint === 'stale'}>
           Some reads are answered by a replica that has not caught up with the latest
-          write yet. Lower the replication lag to reduce this.
+          write yet. Lower the replication lag, or send those reads to the primary under
+          Correctness.
         </p>
       </div>
     </Section>
@@ -3036,6 +3127,59 @@ function SingleInspector({
           </Section>
         ))}
 
+        {takesCorrectness(node.kind) && (
+          <Section title="Correctness">
+            <div className="ins-fields">
+              <ToggleRow
+                label="Each finished call charges money"
+                hint="Only the correctness checks in Can you break it? read this. It changes nothing about how the run plays."
+                checked={node.config.chargeable === 1}
+                locked={lockedFields?.includes('chargeable') ? lockNote : undefined}
+                onChange={(on) => onChange(node.id, { chargeable: on ? 1 : undefined })}
+              />
+              <ToggleRow
+                label={
+                  <>
+                    Ignore repeats with an{' '}
+                    <Term id="idempotency-key">idempotency key</Term>
+                  </>
+                }
+                hint="Every request carries a key, the same on each retry. A key whose call succeeded here gets that answer again instead of doing the work twice. One still being worked on is refused, so the caller tries again, and one whose call failed is forgotten, so a retry does the work. Turn this on where the card is charged. On a part in front of it, a call that charged and then failed on the way back is forgotten, and the retry charges again. Keys are forgotten after 65,536 newer requests."
+                checked={node.config.idempotencyKeys === 1}
+                locked={
+                  lockedFields?.includes('idempotencyKeys') ? lockNote : undefined
+                }
+                onChange={(on) =>
+                  onChange(node.id, { idempotencyKeys: on ? 1 : undefined })
+                }
+              />
+              {node.kind === 'replica' && (
+                <ToggleRow
+                  label="Read from the primary while the copies are behind"
+                  hint="A read of a record the copies have not caught up on goes to the primary, so people always see a change they were told was saved. Each one waits for and takes one of the primary's write slots."
+                  checked={node.config.freshReads === 1}
+                  locked={lockedFields?.includes('freshReads') ? lockNote : undefined}
+                  onChange={(on) =>
+                    onChange(node.id, { freshReads: on ? 1 : undefined })
+                  }
+                />
+              )}
+            </div>
+          </Section>
+        )}
+
+        {behaviourFor(node.kind).hasDisk === true && (
+          <Section title="Durability">
+            <div className="ins-fields">
+              <FlushRow
+                value={node.config.flushEveryMs ?? 0}
+                locked={lockedFields?.includes('flushEveryMs') ? lockNote : undefined}
+                onChange={(ms) => onChange(node.id, { flushEveryMs: ms })}
+              />
+            </div>
+          </Section>
+        )}
+
         {showCeiling && (
           <Section title="What that works out to">
             <div className="ins-stats">
@@ -3083,6 +3227,8 @@ function SingleInspector({
               fault={faults.fault}
               cables={faults.cables}
               onCrash={() => faults.onInject(node.id, 'crash')}
+              onRestart={(downMs) => faults.onInject(node.id, 'restart', { downMs })}
+              restartLoses={restartLosesFor(node)}
               onCrashOne={
                 fleet > 1 && canCrashOneInstance(node.kind)
                   ? () => faults.onInject(node.id, 'crash-instance')
@@ -3093,10 +3239,19 @@ function SingleInspector({
               // slow fault there would change nothing.
               canSlow={fields.includes('serviceMs')}
               onSlow={(factor) => faults.onInject(node.id, 'slow', { factor })}
+              onPause={
+                canPause(node.kind)
+                  ? (pauseMs) => faults.onInject(node.id, 'pause', { pauseMs })
+                  : undefined
+              }
               onGlitch={(rate) => faults.onInject(node.id, 'errors', { rate })}
               onFix={() => faults.onFix(node.id)}
               onCut={faults.onCut}
               onRestore={faults.onRestore}
+              onDuplicate={faults.onDuplicate}
+              onUndup={faults.onUndup}
+              onCutReplies={faults.onCutReplies}
+              onRestoreReplies={faults.onRestoreReplies}
               recorded={faults.recorded}
               onForget={faults.onForget}
             />
@@ -3145,6 +3300,20 @@ function SingleInspector({
                   value={formatRate(stats.arrivalRate)}
                 />
                 <KindStatRows kind={node.kind} config={node.config} stats={stats} />
+                {stats.unflushedWrites !== undefined && (
+                  <>
+                    <StatRow
+                      label="Not on disk yet"
+                      term="durability"
+                      value={formatCount(stats.unflushedWrites)}
+                    />
+                    <StatRow
+                      label="Lost when it last went down"
+                      value={formatCount(stats.lostInLastCrash ?? 0)}
+                      tone={(stats.lostInLastCrash ?? 0) > 0 ? 'is-danger' : undefined}
+                    />
+                  </>
+                )}
                 <StatRow
                   label="Typical request"
                   term="p50"

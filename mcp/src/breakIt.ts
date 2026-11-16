@@ -1,15 +1,23 @@
 import { ShareLinkTooLargeError, buildShareUrl } from '../../src/share';
 import type { AttackKind } from '../../src/sim/breakit';
-import { verifySteps } from '../../src/sim/verify';
+import { isCorrectnessGoal } from '../../src/sim/challenge';
+import type { Violation } from '../../src/sim/oplog';
+import { followRequest, verifySteps } from '../../src/sim/verify';
 import type { Verdict, VerifyGoal, VerifyOptions } from '../../src/sim/verify';
 import type { FailureReason, Topology } from '../../src/sim/types';
 import {
   baselineSentence,
+  checkedLine,
+  clock,
   closestLine,
   effectSentence,
+  evidenceSentence,
   goalLine,
+  nothingRetriesLine,
   scheduleSentence,
   singlePointLines,
+  timelineWords,
+  TRUNCATED_LINE,
   triedLine,
 } from '../../src/components/breakCopy';
 import type { Names } from '../../src/components/breakCopy';
@@ -67,6 +75,7 @@ export interface BreakRequest {
   budget?: number;
   seed?: number;
   includeSinglePoints?: boolean;
+  chargeable?: string[];
 }
 
 export type BreakOutcome =
@@ -102,6 +111,31 @@ function failures(byReason: Partial<Record<FailureReason, number>>): string | nu
   );
 }
 
+/** A story line's tag, after the line. */
+const TAG = { 'charged-again': 'charged again', lost: 'lost', stale: 'stale' } as const;
+
+/** Most lines of a request's story one answer carries. */
+const STORY_LINES = 24;
+
+/**
+ * The earliest violation of a correctness goal, and the request's story
+ * from the replay, a line per step.
+ */
+function evidence(v: Violation, replay: Topology, names: Names): string[] {
+  const tl = followRequest(replay, v.rid);
+  const lines = ['', evidenceSentence(v, names)];
+  if (tl === null) return lines;
+  const story = timelineWords(tl, names, v).map(
+    (l) => `${clock(l.t)} ${l.text}${l.tag === null ? '' : ` (${TAG[l.tag]})`}`,
+  );
+  lines.push(`What happened to request ${v.rid}, on the replay's clock:`);
+  lines.push(...story.slice(0, STORY_LINES));
+  if (story.length > STORY_LINES) {
+    lines.push(`And ${story.length - STORY_LINES} more steps.`);
+  }
+  return lines;
+}
+
 /** Search the design for a schedule of faults that misses the goal, and say what happened. */
 export async function breakDesign(
   design: Topology,
@@ -132,6 +166,7 @@ export async function breakDesign(
     ...(req.includeSinglePoints !== undefined
       ? { includeSinglePoints: req.includeSinglePoints }
       : {}),
+    ...(req.chargeable !== undefined ? { chargeable: req.chargeable } : {}),
   };
 
   const it = verifySteps(design, goal, opts);
@@ -168,6 +203,10 @@ export async function breakDesign(
       );
       const why = failures(m.failuresByReason);
       if (why) lines.push(why);
+      if (m.truncated === true) lines.push(TRUNCATED_LINE);
+      if (verdict.first !== undefined && verdict.replay !== undefined) {
+        lines.push(...evidence(verdict.first, verdict.replay, names));
+      }
       break;
     }
     case 'held': {
@@ -199,6 +238,14 @@ export async function breakDesign(
           `That was the whole budget. Up to ${limits.maxBudget} schedules can be tried.`,
         );
       }
+      if (verdict.nothingRetries === true) {
+        const charged = design.nodes
+          .filter((n) => n.config.chargeable === 1 || req.chargeable?.includes(n.id))
+          .map((n) => n.id);
+        lines.push(nothingRetriesLine(charged, names));
+      }
+      if (verdict.checked !== undefined) lines.push(checkedLine(goal, verdict.checked));
+      if (verdict.truncated === true) lines.push(TRUNCATED_LINE);
       const c = verdict.closest;
       // closestLine's "yet" is for the panel's live progress; this answer is final.
       lines.push(
@@ -226,6 +273,9 @@ export async function breakDesign(
             ? 'No smaller schedule breaks it.'
             : 'A smaller schedule might still break it.'),
       );
+      if (verdict.first !== undefined) {
+        lines.push(...evidence(verdict.first, verdict.replay, names));
+      }
       try {
         lines.push(
           '',
@@ -245,7 +295,11 @@ export async function breakDesign(
   const points = singlePointLines(verdict.singlePoints, names);
   if (points.length > 0) {
     lines.push('', 'Single points of failure:', ...points);
-    if (!req.includeSinglePoints && verdict.status !== 'alreadyBroken') {
+    if (
+      !req.includeSinglePoints &&
+      verdict.status !== 'alreadyBroken' &&
+      !isCorrectnessGoal(verdict.goal)
+    ) {
       lines.push(
         'Losing one of these breaks any goal, so the search never crashed, failed or cut them whole. It could still slow them and take down single machines. includeSinglePoints true crashes and cuts them too.',
       );

@@ -260,6 +260,14 @@ export interface NodeConfig {
    * then propagate.
    */
   readFraction: number;
+  /**
+   * Replica set only: 1 when a read of a key the replicas have not caught
+   * up on yet is served by the primary instead, so a client always sees a
+   * write it was told was saved. Such a read takes one of the primary's
+   * write slots, which is the cost. Unset means every read goes to a
+   * replica, however far behind.
+   */
+  freshReads?: number;
 
   /* ---- shard: horizontal partitioning ------------------------------ */
 
@@ -564,6 +572,40 @@ export interface NodeConfig {
    * means no budget.
    */
   cpuMsCap?: number;
+
+  /* ---- correctness ---------------------------------------------------- */
+
+  /**
+   * 1 when every call that finishes its own work here charges money, as a
+   * payment provider does. Read only by the correctness checks; it changes
+   * nothing about how the run plays. Unset means it charges nothing.
+   */
+  chargeable?: number;
+  /**
+   * 1 when this part honours idempotency keys. Every request carries one
+   * key from its client onward, the same on every retry. A call whose key
+   * this part already finished is answered with that first answer and does
+   * no work; one whose key is still being worked on is refused, so its
+   * caller can try again. Keys are forgotten after 65,536 newer requests.
+   * Unset means every call does the work.
+   */
+  idempotencyKeys?: number;
+
+  /* ---- durability ----------------------------------------------------- */
+
+  /**
+   * Database and replica set only: how long a write may sit in memory after
+   * the store has said it is saved, in ms. 0 or unset means each write is on
+   * disk before the store answers, so a crash loses nothing it said was
+   * saved. Above 0 the store answers first and the write reaches disk
+   * `flushEveryMs` after it applied: the longest a periodic flush can leave
+   * it there, so a crash at any moment loses the most that setting can.
+   * A whole-store crash or restart loses every write still waiting. A
+   * replica set restarts as one, every member losing what it had not
+   * flushed, so its replicas do not save a write either. Losing one
+   * machine of several loses nothing: the others share the data.
+   */
+  flushEveryMs?: number;
 }
 
 export interface SimNode {
@@ -937,6 +979,12 @@ export interface NodeStats {
    */
   staleReadRate: number;
   /**
+   * Replica set only, and only with `freshReads` on: the share of reads the
+   * primary served because the copies were behind on their record, 0..1,
+   * over the current window. The cost of reading your own writes.
+   */
+  primaryReadShare?: number;
+  /**
    * Utilisation of the single busiest shard, 0..1. Shard nodes only. With a
    * hot key this pins at 1 while `utilization` (the mean across shards)
    * still looks healthy -- that gap is the lesson.
@@ -1219,6 +1267,20 @@ export interface NodeStats {
    */
   lockWaitMs?: number;
 
+  /* ---- durability readouts ---------------------------------------------- *
+   * Present only on a database or replica set that answers before its
+   * writes reach disk (`flushEveryMs` above 0), so a design that never sets
+   * it snapshots exactly as before. Both are counts, not estimates.
+   * ---------------------------------------------------------------------- */
+
+  /** Writes it has said are saved that are not on disk yet. */
+  unflushedWrites?: number;
+  /**
+   * Writes lost the last time the whole store went down, or 0 when it has
+   * not. A crash during service is not counted: that caller heard it fail.
+   */
+  lostInLastCrash?: number;
+
   /* ---- objectstore readouts --------------------------------------------- */
 
   /**
@@ -1390,7 +1452,24 @@ export type FailureKind =
   /** The node returns errors at `rate`, on top of its configured errorRate. */
   | 'errors'
   /** Named edges are cut: a request offered to one fails as 'partitioned'. */
-  | 'partition';
+  | 'partition'
+  /**
+   * The node goes down as a crash does, then comes back on its own
+   * `downMs` later. While down it is exactly 'crash': work in progress is
+   * lost and new work fails on arrival. A store that answers before its
+   * writes reach disk (`flushEveryMs`) loses the ones still in memory.
+   */
+  | 'restart'
+  /**
+   * The node stops for `pauseMs` and then carries on, the way a process
+   * stalls for a long garbage collection. Nothing fails and nothing is lost:
+   * work in service waits and finishes late by the length of the pause, new
+   * arrivals wait to be let in, and its own timers and the answers to its own
+   * calls wait too. Its callers' timeouts keep running, so a caller may give
+   * up and send the call again while the first try is only stalled, and both
+   * finish. Ends by itself; a clear ends it early.
+   */
+  | 'pause';
 
 /**
  * The same list at runtime, for the validators that cannot read a type.
@@ -1402,6 +1481,8 @@ export const FAILURE_KINDS: readonly FailureKind[] = [
   'errors',
   'partition',
   'crash-instance',
+  'restart',
+  'pause',
 ];
 
 /** Knobs for an injected failure. Which ones apply depends on the kind. */
@@ -1422,6 +1503,16 @@ export interface FailureOpts {
    * edge leaving the node, which is the "unplug this box" case.
    */
   edgeIds?: string[];
+  /**
+   * 'restart' only: ms the node stays down before it starts again by
+   * itself. Required for 'restart', above 0.
+   */
+  downMs?: number;
+  /**
+   * 'pause' only: ms the node stops for before it carries on by itself.
+   * Required for 'pause', above 0.
+   */
+  pauseMs?: number;
 }
 
 /**
@@ -1439,6 +1530,22 @@ export interface FailureOpts {
  *            node fault, so a node can be slow AND have one wire cut.
  *   restore  reconnect an edge that a `cut` severed. An edge cut by a
  *            node's 'partition' fault stays cut until that fault is cleared.
+ *   duplicate
+ *            make one edge hand over a share of the requests that cross it
+ *            twice, `rate` of them, 0 to 1 and above 0, drawn from the seeded
+ *            random stream per crossing. The second copy does the work again
+ *            at the far end, and nobody hears its answer. Independent of a
+ *            cut, and of the edge's own `lossRate`: a lost request is not
+ *            delivered at all, so it is not delivered twice either.
+ *   undup    stop an edge delivering anything twice.
+ *   cut-replies
+ *            make one edge lose every answer coming back across it, while
+ *            the requests still cross and do their work. The caller hears
+ *            nothing, so it waits until its own timeout gives up, and a
+ *            caller with no timeout waits for good. Independent of a cut.
+ *   restore-replies
+ *            let answers back across it again. An answer already lost
+ *            stays lost.
  */
 export type FaultEvent =
   | {
@@ -1450,7 +1557,41 @@ export type FaultEvent =
     }
   | { atMs: number; action: 'clear'; nodeId: string }
   | { atMs: number; action: 'cut'; edgeId: string }
-  | { atMs: number; action: 'restore'; edgeId: string };
+  | { atMs: number; action: 'restore'; edgeId: string }
+  | { atMs: number; action: 'duplicate'; edgeId: string; rate: number }
+  | { atMs: number; action: 'undup'; edgeId: string }
+  | { atMs: number; action: 'cut-replies'; edgeId: string }
+  | { atMs: number; action: 'restore-replies'; edgeId: string };
+
+/** An edge delivering some requests twice, as reported back to the UI. */
+export interface ActiveDuplicate {
+  edgeId: string;
+  /** Share of crossings delivered twice, 0 to 1. */
+  rate: number;
+  /** Simulated time in ms at which it began, or its rate last changed. */
+  sinceMs: number;
+  /** Second copies it has delivered since then. Counted, not estimated. */
+  delivered: number;
+}
+
+/** An edge losing the answers that come back across it. */
+export interface ActiveReplyCut {
+  edgeId: string;
+  /** Simulated time in ms at which it began. */
+  sinceMs: number;
+  /** Answers it has lost since then. Counted, not estimated. */
+  lost: number;
+}
+
+/**
+ * Calls still waiting on answers an edge lost, after the loss itself may
+ * have ended: their caller has no timeout, so nothing ends the wait.
+ */
+export interface StrandedReplies {
+  edgeId: string;
+  /** Calls waiting now. Counted, not estimated. */
+  waiting: number;
+}
 
 /** An injected failure as reported back to the UI. */
 export interface ActiveFailure {
@@ -1465,6 +1606,10 @@ export interface ActiveFailure {
   rate?: number;
   /** 'partition' only: the edge ids actually cut. */
   edgeIds?: string[];
+  /** 'restart' only: how long it stays down, in ms. */
+  downMs?: number;
+  /** 'pause' only: how long it stops for, in ms. */
+  pauseMs?: number;
 }
 
 /**
@@ -1524,6 +1669,22 @@ export interface SimSnapshot {
    * alone without asking the engine anything else.
    */
   activeFailures: ActiveFailure[];
+  /**
+   * Edges delivering some requests twice right now. Absent, rather than
+   * empty, while none is, so a run without the fault snapshots byte for
+   * byte as it did before the field existed.
+   */
+  duplicating?: ActiveDuplicate[];
+  /**
+   * Edges losing every answer that comes back across them, by id, with
+   * when each began. Absent while none is, for the reason `duplicating` is.
+   */
+  repliesCut?: ActiveReplyCut[];
+  /**
+   * Edges whose lost answers still leave calls waiting for good. Absent
+   * while none do, for the reason `duplicating` is.
+   */
+  repliesStranded?: StrandedReplies[];
   /**
    * The most recent completed request, hop by hop, or null before one has
    * finished.
@@ -1611,11 +1772,16 @@ export interface RunTally {
    * the client measured it. `length === completed`. A copy the caller owns.
    */
   latencies: Float64Array;
-  /** Writes a write-behind cache acknowledged inside the window. */
+  /**
+   * Writes acknowledged inside the window before they were safe: by a
+   * write-behind cache, or by a store that answers before its writes reach
+   * disk (`flushEveryMs`).
+   */
   writesAcked: number;
   /**
-   * How many of `writesAcked` have landed at the store so far, counted past
-   * the window's end for as long as the engine has run since.
+   * How many of `writesAcked` have landed at the store, or reached its disk,
+   * so far, counted past the window's end for as long as the engine has run
+   * since.
    */
   writesLanded: number;
   /** Jobs a queue accepted inside the window. */

@@ -63,6 +63,8 @@ export interface BreakSearch {
   /** Fault-free figures per template, once measured for this design. */
   baselines: Baseline[] | null;
   goalId: string;
+  /** The goal picked earlier when the design no longer offers it, else null. */
+  goneId: string | null;
   setGoalId: (id: string) => void;
   /** The selected goal with its number. */
   goal: Goal;
@@ -75,7 +77,7 @@ export interface BreakSearch {
   view: BreakView;
   /** The design changed after the answer on screen. */
   stale: boolean;
-  /** The selected goal's client was deleted. */
+  /** The selected goal is no longer offered: its client or its part was deleted. */
   goalGone: boolean;
   remembered: Attack[][];
   start: (harder?: boolean) => void;
@@ -377,6 +379,7 @@ export function useBreakSearch(open: boolean, topology: Topology): BreakSearch {
     templates,
     baselines,
     goalId: shown.id,
+    goneId: goalGone ? goalId : null,
     setGoalId,
     goal,
     maxOf,

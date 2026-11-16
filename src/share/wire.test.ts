@@ -152,6 +152,10 @@ describe('protocol tables', () => {
       prefixRps: true,
       renditions: true,
       cpuMsCap: true,
+      chargeable: true,
+      idempotencyKeys: true,
+      flushEveryMs: true,
+      freshReads: true,
     };
     for (const field of Object.keys(every)) expect(WIRE_FIELDS).toContain(field);
   });
@@ -645,5 +649,29 @@ describe('hostile bytes', () => {
       1, 0, 0, 0, 0, 0, 0, 2, 7, 0, 0, 0, 0, 0, 0, 0xf8, 0x7f,
     ]);
     expect(unpackTopology(bytes)).toBeNull();
+  });
+});
+
+describe('correctness settings', () => {
+  it('carries both, and leaves them absent when unset', () => {
+    const t: Topology = {
+      nodes: [
+        node('c', 'client', 0, 0, {}, 'c'),
+        node('pay', 'service', 100, 0, { chargeable: 1, idempotencyKeys: 1 }, 'pay'),
+        node('db', 'db', 200, 0, {}, 'db'),
+      ],
+      edges: [
+        { id: 'c->pay', from: 'c', to: 'pay', weight: 1 },
+        { id: 'pay->db', from: 'pay', to: 'db', weight: 1 },
+      ],
+    };
+    const back = unpackTopology(packTopology(t));
+    const pay = back?.nodes.find((n) => n.label === 'pay');
+    expect(pay?.config.chargeable).toBe(1);
+    expect(pay?.config.idempotencyKeys).toBe(1);
+    for (const n of back?.nodes.filter((x) => x.label !== 'pay') ?? []) {
+      expect('chargeable' in n.config).toBe(false);
+      expect('idempotencyKeys' in n.config).toBe(false);
+    }
   });
 });

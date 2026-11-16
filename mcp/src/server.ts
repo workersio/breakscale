@@ -180,8 +180,9 @@ export function createServer({
       description:
         'Searches for a schedule of faults (crashes, slowdowns, errors, cut edges) that makes a design miss a goal, then makes the schedule as small as it can. ' +
         'Returns the verdict in words and, when it breaks, a breakscale.tech link that replays the run. ' +
+        'For the correctness goals, doubleCharges, lostAckedWrites and staleReads, it also names the first request that broke the rule and tells its story step by step. ' +
         `Deterministic: the same design, goal and options always give the same answer. Tries at most ${breakLimits.maxBudget} schedules from its budget per call, then plays a few more to make a break smaller. ` +
-        'By default it never crashes, fails or cuts a single point of failure whole; includeSinglePoints turns that on. ' +
+        'By default it never crashes, fails or cuts a single point of failure whole, except for the correctness goals, which an outage cannot break; includeSinglePoints turns that on. ' +
         'Takes the same design as create_view, plus the goal.',
       inputSchema: z.object({
         ...design,
@@ -189,17 +190,21 @@ export function createServer({
         // in words, where an enum would answer with a JSON path.
         goal: z
           .object({
-            metric: z.string().describe(`One of ${VERIFY_METRICS.join(', ')}`),
+            metric: z
+              .string()
+              .describe(
+                `One of ${VERIFY_METRICS.join(', ')}. doubleCharges counts payments charged more than once, such as a retry after a timeout where both tries charge; it needs chargeable. lostAckedWrites counts writes the client was told were saved that never reached storage; it needs a write-behind cache, or a db or replica set with flushEveryMs above 0. staleReads counts reads that missed a write the same client was told was saved; it needs a replica set or a search index`,
+              ),
             max: z
               .number()
               .describe(
-                'No more than this: percent for errorRate (1 means 1%), ms for p99 and p95, a count for lostWrites and lostJobs',
+                'No more than this: percent for errorRate (1 means 1%), ms for p99 and p95, a count for lostWrites, lostJobs, doubleCharges, lostAckedWrites and staleReads',
               ),
             route: z
               .string()
               .optional()
               .describe(
-                "A client's id, to hold the goal for that client's requests only. Not for lostWrites or lostJobs",
+                "A client's id, to hold the goal for that client's requests only. Not for lostWrites, lostJobs, doubleCharges, lostAckedWrites or staleReads",
               ),
           })
           .describe('What has to hold'),
@@ -228,6 +233,12 @@ export function createServer({
           .optional()
           .describe(
             'Also crash, fail and cut the parts every request passes through. Default false: those break any goal',
+          ),
+        chargeable: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'For doubleCharges: ids of the parts where every finished call charges money, such as a payment provider',
           ),
       }),
       annotations: { title: 'Try to break a design', readOnlyHint: true },

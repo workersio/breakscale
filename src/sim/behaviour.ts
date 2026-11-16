@@ -16,7 +16,15 @@
  * Engine class both documents that surface and stops a behaviour reaching into
  * scheduling internals it has no business knowing about.
  */
-import type { EdgeState, FailureReason, NodeKind, NodeStats, SimEdge } from './types';
+import type {
+  EdgeState,
+  FailureReason,
+  NodeConfig,
+  NodeKind,
+  NodeStats,
+  SimEdge,
+  SimNode,
+} from './types';
 import type { BehaviourCtx, ReqLike, NodeStateLike } from './engine-types';
 import { DATA_BEHAVIOURS } from './behaviour-data';
 import { EDGE_BEHAVIOURS } from './behaviour-edge';
@@ -112,6 +120,33 @@ export interface ComponentBehaviour {
    * ordinary downstream call.
    */
   buffersForConsumers: boolean;
+  /**
+   * Does this kind answer its caller before the request's work is done, and
+   * then pass a copy of it on itself? True for a retry queue and a
+   * write-behind cache. Only that copy ever finishes service here, so the
+   * caller's call never does its work at this node.
+   */
+  acksBeforeDone?: boolean;
+  /**
+   * Does this kind tell its caller a write is saved while it is only in
+   * memory? True for a write-behind cache alone. The tally counts these
+   * promises, and the correctness check follows each one to the store.
+   */
+  acksBeforeSaved?: boolean;
+  /**
+   * Does this kind keep its writes on a disk of its own, so `flushEveryMs`
+   * can let it answer before they reach it? True for a database and a
+   * replica set. See `flushesLater`.
+   */
+  hasDisk?: boolean;
+  /**
+   * For a store that serves reads from copies that trail its writes: how many
+   * ms a write committed here takes to show up in reads. A replica set's
+   * replication lag, a search index's refresh delay. Read only by the
+   * correctness checks; the kind's own code already plays the lag. Absent on
+   * a store whose reads always see its last write.
+   */
+  readLagMs?: (config: NodeConfig) => number;
   /** How waiting work is drained when capacity frees up. */
   pump: PumpMode;
   /**
@@ -478,6 +513,41 @@ for (const b of ALL) BY_KIND.set(b.kind, b);
  * Resolve a kind's behaviour. Called once per node at buildNodes() time and
  * cached on the node state; never called from the event loop.
  */
+/**
+ * Whether a call can finish its own work at this kind, so marking it as
+ * charging money, or giving it idempotency keys, means something. Not a
+ * client, which sends the requests; not a kind that only routes, limits or
+ * holds them; and not one that answers before passing a copy on, where only
+ * the copy ever finishes.
+ */
+export function takesCorrectness(kind: NodeKind): boolean {
+  const b = behaviourFor(kind);
+  return b.servesRequests && !b.generatesLoad && b.acksBeforeDone !== true;
+}
+
+/**
+ * Whether this node answers before its writes reach disk: a kind with a
+ * disk, and `flushEveryMs` above 0. Read by the engine, the checks and the
+ * inspector, so the three cannot disagree.
+ */
+export function flushesLater(node: Pick<SimNode, 'kind' | 'config'>): boolean {
+  const ms = node.config.flushEveryMs;
+  return (
+    behaviourFor(node.kind).hasDisk === true &&
+    typeof ms === 'number' &&
+    ms > 0 &&
+    ms < Infinity
+  );
+}
+
+/**
+ * Whether this node can tell a caller a write is saved before it is safe:
+ * a write-behind cache, or a store that answers before its disk has it.
+ */
+export function acksBeforeSafe(node: Pick<SimNode, 'kind' | 'config'>): boolean {
+  return behaviourFor(node.kind).acksBeforeSaved === true || flushesLater(node);
+}
+
 export function behaviourFor(kind: NodeKind): ComponentBehaviour {
   const b = BY_KIND.get(kind);
   if (b) return b;
@@ -497,6 +567,18 @@ export function behaviourFor(kind: NodeKind): ComponentBehaviour {
 export function canCrashOneInstance(kind: NodeKind): boolean {
   const b = behaviourFor(kind);
   return b.scaleField === 'instances' && b.slotsOutliveService !== true;
+}
+
+/**
+ * Whether a 'pause' is offered for this kind: one that serves requests and
+ * is not a client. A pause holds whatever such a node does, its own work, the
+ * requests reaching it and the answers to its calls, so it means something
+ * even for a gate that does no timed work. Read by the inspector and by the
+ * search, so the two offer it on the same parts.
+ */
+export function canPause(kind: NodeKind): boolean {
+  const b = behaviourFor(kind);
+  return b.servesRequests && !b.generatesLoad;
 }
 
 export function clamp01(v: number): number {
