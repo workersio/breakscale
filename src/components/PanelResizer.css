@@ -90,22 +90,38 @@
 
 /* A pointer that is coarse gets a bigger target: 5px is a mouse-sized
    affordance and a finger cannot land on it. */
+/* 44px to a finger, the size every other touch target here has. Most of it
+   lies over the canvas rather than the panel, so a tap on a field near the
+   panel's edge still reaches the field. */
 @media (pointer: coarse) {
   .pr-left,
   .pr-right {
-    width: 14px;
+    width: 44px;
   }
 
   .pr-left {
-    right: -7px;
+    right: -32px;
   }
 
   .pr-right {
-    left: -7px;
+    left: -32px;
   }
 
   .pr-bottom {
-    top: -7px;
-    height: 14px;
+    top: -32px;
+    height: 44px;
+  }
+
+  /* The grip stays on the seam, not in the middle of the wider strip. */
+  .pr-left::after {
+    left: 12px;
+  }
+
+  .pr-right::after {
+    left: 32px;
+  }
+
+  .pr-bottom::after {
+    top: 32px;
   }
 }
