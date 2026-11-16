@@ -581,7 +581,10 @@ describe('the check beside the bar', () => {
     const now = [
       ...container.querySelectorAll('.chal-body > .chal-goals .chal-goal-now'),
     ];
-    expect(now.map((n) => n.textContent)).toEqual(['Live now 127ms', 'Live now 0.4%']);
+    expect(now.map((n) => n.textContent)).toEqual([
+      'Right now 127ms',
+      'Right now 0.4%',
+    ]);
   });
 
   it('shows no live reading while nothing is getting through', () => {

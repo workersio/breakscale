@@ -466,7 +466,7 @@ function GoalList({
             </span>
             {nowShown ? (
               <span className="chal-goal-now">
-                Live now{' '}
+                Right now{' '}
                 <span className="num">{formatLive(goal.metric, now.actual)}</span>
               </span>
             ) : null}

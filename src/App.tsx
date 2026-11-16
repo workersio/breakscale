@@ -2976,7 +2976,10 @@ export default function App() {
       text = await file.text();
     } catch {
       toastSeq.current += 1;
-      setToast({ text: 'That file could not be read.', id: toastSeq.current });
+      setToast({
+        text: 'That file could not be read. Choose a backup file saved from Breakscale (.json).',
+        id: toastSeq.current,
+      });
       return;
     }
 
@@ -3320,7 +3323,10 @@ export default function App() {
       } catch {
         // A failed export must say so. Silence here reads as a broken button.
         toastSeq.current += 1;
-        setToast({ text: 'That picture could not be saved.', id: toastSeq.current });
+        setToast({
+          text: 'The picture could not be saved. Try again, or save the design to a file.',
+          id: toastSeq.current,
+        });
       }
     },
     [presetId],

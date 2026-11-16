@@ -235,13 +235,11 @@ input.gl-search-input {
 /* The result count. A fact about the list, so it stays quiet. */
 .gl-count {
   margin: var(--sp-2) 0 0;
-  font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum' 1;
-  font-size: var(--fs-label);
+  font-size: var(--fs-sm);
   font-weight: var(--fw-body);
-  line-height: var(--lh-label);
-  letter-spacing: var(--tr-num);
+  line-height: var(--lh-sm);
   color: var(--text-faint);
 }
 
