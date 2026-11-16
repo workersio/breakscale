@@ -339,6 +339,19 @@
   --danger-press: #a8232a; /* white on it = 7.14:1 */
   --danger-ring: rgba(197, 43, 48, 0.28);
 
+  /* Requests drawn moving along the wires. One colour per way a call can
+     end. Aliases, so the dark theme follows on its own; they are graphics,
+     held to 3:1 on the canvas and on every section tint a wire can cross
+     (theme.contrast.test.ts). Got through stays neutral on purpose: it is
+     most of the traffic, and the colours are kept for what went wrong. */
+  --flow-ok: var(--line-5);
+  --flow-fail: var(--danger-mark);
+  --flow-retry: var(--warn-mark);
+  --flow-refused: var(--cat-violet);
+  --flow-lost: var(--cat-blue);
+  /* Smaller as well as lighter, since it sits close to --flow-ok. */
+  --flow-pending: var(--line-4);
+
   /* ==========================================================================
      PER-KIND COLOUR SYSTEM — the heart of the redesign.
 

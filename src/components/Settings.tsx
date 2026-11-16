@@ -75,6 +75,11 @@ function toggles(coarse: boolean): ToggleRow[] {
       label: 'Minimap',
       hint: 'A small map of the whole diagram, for finding your way around a big one.',
     },
+    {
+      key: 'trafficDots',
+      label: 'Show requests moving along connections',
+      hint: 'Busier connections carry more dots. The colours show whether calls got through, failed, were lost or were turned away, and a ring marks a call tried again.',
+    },
   ];
 }
 

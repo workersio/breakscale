@@ -106,6 +106,11 @@ import { glanceLayout, glanceScale } from './glance';
 import type { GlanceLayout } from './glance';
 import { useSettledHealthMap } from './settledHealth';
 import { serialiseSvg } from '../imageExport';
+import { TrafficDots, TrafficKey, type DotWire } from './TrafficDots';
+import { markOffset, midLeg, type MidLeg } from './edgeMarks';
+import { EDGE_OUTCOME_SLOTS, EO_FIRST, EO_LOST, EO_RETRY } from '../sim/edgeOutcomes';
+import { rawLine, useLineStates, type LineState } from './lineHold';
+import { useReducedMotion } from '../useReducedMotion';
 import './Canvas.css';
 
 /* ------------------------------------------------------------------ *
@@ -356,6 +361,11 @@ export interface CanvasProps {
   snapshot: SimSnapshot | null;
   /** Each client's own figures, from `Engine.routes()`, for the client cards. */
   routes?: readonly RouteStats[];
+  /**
+   * Copies one edge's outcome rates into `out`; `Engine.readEdgeOutcomes`.
+   * Omitted, or returning false, means no traffic dots.
+   */
+  readOutcomes?: (edgeId: string, out: Float64Array) => boolean;
   /**
    * Ids of every selected node AND edge. Node ids and edge ids share one
    * namespace here; an edge id is `from->to`, which can never collide with a
@@ -1718,6 +1728,140 @@ function edgeWidth(f: number): number {
   return f <= 0 ? 1 : clamp(1 + Math.log10(1 + f) * 0.85, 1, 4.5);
 }
 
+/** What a severed wire's hover tooltip says, by why it is severed. */
+const SEVERED_HINT: Readonly<Record<'cut' | 'blocked', string>> = {
+  cut: 'Network split. Calls fail at the caller.',
+  blocked: 'The caller is holding calls back for now.',
+};
+
+/**
+ * A horizontal mid leg must be this long for "+240/s tried again". A shorter
+ * one says "+240/s retries", never the bare number, which on its own reads as
+ * a second rate for the wire.
+ */
+const RETRY_LONG_LEG = 160;
+
+/**
+ * Calls coming back to be sent again: a small hook bending off the wire and
+ * pointing back at the caller, toward the caller from the label point. At
+ * the label zoom it carries the measured rate of retries. On a horizontal leg
+ * both captions sit under the label point, retries first, since a short leg
+ * leaves no room for them either side of the middle.
+ */
+const RetryMark = memo(function RetryMark({
+  leg,
+  x,
+  y,
+  rate,
+  showLabel,
+}: {
+  leg: MidLeg;
+  x: number;
+  y: number;
+  rate: number;
+  showLabel: boolean;
+}) {
+  const { ux, uy, nx, ny } = leg;
+  const off = markOffset(leg.back);
+  const bx = x - ux * off;
+  const by = y - uy * off;
+  // Leaves the wire ahead, bows out to the side, lands behind.
+  const sx = bx + ux * 7 + nx * 2;
+  const sy = by + uy * 7 + ny * 2;
+  const cx = bx + nx * 15;
+  const cy = by + ny * 15;
+  const ex = bx - ux * 7 + nx * 2;
+  const ey = by - uy * 7 + ny * 2;
+  // Arrowhead along the curve's end tangent, which runs from the control
+  // point to the end.
+  const tl = Math.hypot(ex - cx, ey - cy) || 1;
+  const tx = (ex - cx) / tl;
+  const ty = (ey - cy) / tl;
+  const head = `M${f1(ex + tx * 1.5)},${f1(ey + ty * 1.5)} L${f1(ex - tx * 4 - ty * 3)},${f1(
+    ey - ty * 4 + tx * 3,
+  )} L${f1(ex - tx * 4 + ty * 3)},${f1(ey - ty * 4 - tx * 3)}Z`;
+  const horizontal = ny !== 0;
+  const long = !horizontal || leg.back + leg.ahead >= RETRY_LONG_LEG;
+  const text = `+${formatRate(rate)} ${long ? 'tried again' : 'retries'}`;
+  return (
+    <g className="cv-edge-retry" aria-hidden="true">
+      <path
+        className="cv-edge-retry-loop"
+        d={`M${f1(sx)},${f1(sy)} Q${f1(cx)},${f1(cy)} ${f1(ex)},${f1(ey)}`}
+      />
+      <path className="cv-edge-retry-head" d={head} />
+      {showLabel && (
+        <text
+          className="cv-edge-label is-retry"
+          x={horizontal ? x : bx + 18}
+          y={horizontal ? y + 26 : by + 4}
+          textAnchor={horizontal ? 'middle' : 'start'}
+        >
+          {text}
+        </text>
+      )}
+    </g>
+  );
+});
+
+/**
+ * A link that drops calls: two short slashes across the wire, toward the
+ * target from the label point. Faint until a drop has actually been
+ * measured, then in the lost colour, with the measured share at the label
+ * zoom.
+ */
+const LossMark = memo(function LossMark({
+  leg,
+  x,
+  y,
+  share,
+  showLabel,
+  below,
+}: {
+  leg: MidLeg;
+  x: number;
+  y: number;
+  share: number | null;
+  showLabel: boolean;
+  /** True when a retry caption takes the first row under the wire. */
+  below: boolean;
+}) {
+  const { ux, uy, nx, ny } = leg;
+  const off = markOffset(leg.ahead);
+  const px = x + ux * off;
+  const py = y + uy * off;
+  let d = '';
+  for (const k of [-2.5, 2.5]) {
+    const qx = px + ux * k;
+    const qy = py + uy * k;
+    d += `M${f1(qx - nx * 4.5 + ux * 1.5)},${f1(qy - ny * 4.5 + uy * 1.5)} L${f1(
+      qx + nx * 4.5 - ux * 1.5,
+    )},${f1(qy + ny * 4.5 - uy * 1.5)}`;
+  }
+  const measured = share !== null && share > 0;
+  const horizontal = ny !== 0;
+  return (
+    <g className={`cv-edge-loss${measured ? ' is-dropping' : ''}`} aria-hidden="true">
+      <path className="cv-edge-loss-tick" d={d} />
+      {showLabel && measured && (
+        <text
+          className="cv-edge-label"
+          x={horizontal ? x : px + 12}
+          y={horizontal ? y + (below ? 40 : 26) : py + 4}
+          textAnchor={horizontal ? 'middle' : 'start'}
+        >
+          {`${formatPct(share)} lost`}
+        </text>
+      )}
+    </g>
+  );
+});
+
+/** One decimal: path data at 10Hz stays short and stable. */
+function f1(v: number): string {
+  return v.toFixed(1);
+}
+
 interface EdgeViewProps {
   edge: SimEdge;
   /** Top-left of the SOURCE node's box; the router picks its own anchors. */
@@ -1765,6 +1909,16 @@ interface EdgeViewProps {
   labelDy: number;
   /** See `CanvasProps.breakMarks`. Undefined when the edge is not a target. */
   breakMark?: number;
+  /**
+   * Calls per second sent across this edge again after a failure, from the
+   * engine's per-edge tally. 0 when there are none or no tally to read.
+   */
+  retryRate?: number;
+  /**
+   * Measured share of crossings this link dropped, or null when it has no
+   * lossRate or nothing has crossed yet.
+   */
+  lostShare?: number | null;
 }
 
 const EdgeView = memo(function EdgeView({
@@ -1782,6 +1936,8 @@ const EdgeView = memo(function EdgeView({
   showLabel,
   labelDy,
   breakMark,
+  retryRate = 0,
+  lostShare = null,
 }: EdgeViewProps) {
   // The router arrives axis-aligned from whichever side it picked, so the
   // arrowhead is one of four fixed triangles and needs no trigonometry.
@@ -1858,6 +2014,16 @@ const EdgeView = memo(function EdgeView({
   const midX = route.label.x;
   const midY = route.label.y;
 
+  /* The marks for what goes wrong in transit: a loop where calls come back
+     to be sent again, and ticks where the link drops them. Both come from
+     the engine's tally, never from the configured rates. */
+  const lossy = !control && (edge.lossRate ?? 0) > 0;
+  const retrying = !control && retryRate > 0;
+  const leg = useMemo(
+    () => (lossy || retrying ? midLeg(route.points, route.label) : null),
+    [lossy, retrying, route],
+  );
+
   return (
     <g
       className={`cv-edge${selected ? ' is-selected' : ''}${
@@ -1874,7 +2040,13 @@ const EdgeView = memo(function EdgeView({
           data-* attributes are what the surface's pointerdown router reads;
           no handler is attached here, so nothing can be swallowed before the
           router sees it. */}
-      <path d={d} className="cv-edge-hit" data-hit="edge" data-id={edge.id} />
+      <path d={d} className="cv-edge-hit" data-hit="edge" data-id={edge.id}>
+        {severed ? (
+          <title>{SEVERED_HINT[state]}</title>
+        ) : (
+          retrying && <title>{`+${formatRate(retryRate)} tried again`}</title>
+        )}
+      </path>
       <path d={d} className="cv-edge-line" strokeWidth={width} />
       {active && (
         <path d={d} className="cv-edge-flow" strokeWidth={width * 0.75} style={style} />
@@ -1906,6 +2078,27 @@ const EdgeView = memo(function EdgeView({
             d="M-4.5,-5 L-1.5,0 L-4.5,5 M4.5,-5 L1.5,0 L4.5,5"
           />
         </g>
+      )}
+      {/* The break says what it is in a word, at the zoom the rate labels
+          use. Above the mark, which takes the wire's own label point. */}
+      {showLabel && severed && (
+        <text className="cv-edge-label is-severed" x={midX} y={midY - 11 + labelDy}>
+          {state === 'cut' ? 'cut' : 'held back'}
+        </text>
+      )}
+
+      {leg && lossy && !severed && (
+        <LossMark
+          leg={leg}
+          x={midX}
+          y={midY}
+          share={lostShare}
+          showLabel={showLabel}
+          below={retrying}
+        />
+      )}
+      {leg && retrying && (
+        <RetryMark leg={leg} x={midX} y={midY} rate={retryRate} showLabel={showLabel} />
       )}
 
       {/*
@@ -2690,6 +2883,52 @@ const QueueVessel = memo(function QueueVessel({
   );
 });
 
+/** The waiting-line bar's band: under the secondary row, over the meter. */
+const LINE_Y = METER_Y - 6;
+const LINE_H = 3;
+
+/**
+ * How full a node's waiting line is, as a thin bar over the meter.
+ *
+ * The meter shows how busy the node is, and the waiting count is a number in
+ * one cell, which a database replaces with its lock wait once writes contend.
+ * So a database 63 deep in a 64 line read "9.4ms lock" and nothing else on
+ * its card. This bar is that line against its limit, at every detail level.
+ * At the limit, turning calls away, the brim takes the danger colour and
+ * flashes once as it starts; the flash is the only motion, and reduced
+ * motion drops it.
+ */
+const WaitingLine = memo(function WaitingLine({
+  queued,
+  limit,
+  refusing,
+}: {
+  queued: number;
+  limit: number;
+  refusing: boolean;
+}) {
+  const fill = clamp(queued / limit, 0, 1);
+  const fw = fill > 0 ? Math.max(2, fill * METER_W) : 0;
+  return (
+    <g
+      className={`cv-line${refusing ? ' is-refusing' : ''}`}
+      transform={`translate(${PAD_X},${LINE_Y})`}
+    >
+      <rect className="cv-line-track" width={METER_W} height={LINE_H} rx={1.5}>
+        <title>{`${queued} of ${limit} waiting in line`}</title>
+      </rect>
+      {fw > 0 && <rect className="cv-line-fill" width={fw} height={LINE_H} rx={1.5} />}
+      <rect
+        className="cv-line-brim"
+        x={METER_W - 1.5}
+        y={-1.5}
+        width={1.5}
+        height={LINE_H + 3}
+      />
+    </g>
+  );
+});
+
 /* ------------------------------------------------------------------ *
  * Node
  * ------------------------------------------------------------------ */
@@ -2749,6 +2988,11 @@ interface NodeViewProps {
   breakMark?: number;
   /** See `CanvasProps.violationMarks`. */
   violationMark?: string;
+  /**
+   * The waiting line after its display hold (lineHold.ts), from the parent.
+   * Absent or 'none' draws no line bar.
+   */
+  line?: LineState;
 }
 
 /**
@@ -2784,6 +3028,7 @@ export const NodeView = memo(function NodeView({
   entering,
   breakMark,
   violationMark,
+  line = 'none',
 }: NodeViewProps) {
   const readout = stats
     ? readoutFor(node.kind, stats, node.config, backlog, route)
@@ -2833,6 +3078,15 @@ export const NodeView = memo(function NodeView({
           : pending > 0
             ? 'stack'
             : 'none';
+
+  /* The waiting line, for a node whose card has no picture of it already:
+     the vessel is one, and a strip's cells are each partition's own. */
+  const showLine =
+    line !== 'none' &&
+    stats !== null &&
+    stats.queueLimit > 0 &&
+    structure !== 'strip' &&
+    structure !== 'vessel';
 
   const handleKey = useCallback(
     (e: React.KeyboardEvent<SVGGElement>) => {
@@ -2957,6 +3211,11 @@ export const NodeView = memo(function NodeView({
               : `${stats?.instances} instances`
           : null,
         pending > 0 ? `${pending} warming up` : null,
+        showLine && stats
+          ? `${stats.queued} of ${stats.queueLimit} waiting in line${
+              line === 'refusing' ? ', turning calls away' : ''
+            }`
+          : null,
         // The fault is announced, not just drawn: a screen-reader user has
         // no access to the square mark in the corner.
         fault ? `faulted: ${fault}` : null,
@@ -3367,6 +3626,14 @@ export const NodeView = memo(function NodeView({
           rx={1.5}
         />
       )}
+      {showLine && stats && (
+        <WaitingLine
+          queued={stats.queued}
+          limit={stats.queueLimit}
+          refusing={line === 'refusing'}
+        />
+      )}
+
       {/* Threshold tick. A fixed landmark at the warn line, so a bar can be
           read against WHERE trouble starts, not just against its own length. */}
       <rect
@@ -3555,10 +3822,14 @@ interface LinkState {
  * Canvas
  * ------------------------------------------------------------------ */
 
+/** Below this zoom the traffic dots give way to the dashes. */
+const DOT_MIN_ZOOM = 0.3;
+
 export default function Canvas({
   topology,
   snapshot,
   routes,
+  readOutcomes,
   selectedIds,
   onSelectionChange,
   onMoveNode,
@@ -3636,6 +3907,8 @@ export default function Canvas({
    * trackpad and no deal at all on a touchscreen.
    */
   const snapOn = usePreference('snapToGrid');
+  const dotsOn = usePreference('trafficDots');
+  const reducedMotion = useReducedMotion();
 
   /**
    * The surface's size in screen px, for the minimap's viewport rectangle.
@@ -6156,6 +6429,39 @@ export default function Canvas({
     snapshot?.system.timeMs ?? null,
   );
 
+  /* Each node's waiting line, held so a line that blinks between 0 and 2
+     does not blink a bar in and out (lineHold.ts). */
+  const rawLineById = useMemo(() => {
+    const m = new Map<string, LineState>();
+    if (!snapshot) return m;
+    for (const n of topology.nodes) {
+      const s = snapshot.nodes[n.id];
+      if (s) m.set(n.id, rawLine(s.queued, s.queueLimit, s.shedRate));
+    }
+    return m;
+  }, [snapshot, topology.nodes]);
+  const lineById = useLineStates(rawLineById, snapshot?.system.timeMs ?? null);
+
+  /* Retries and drops per wire, read from the engine's tally once per
+     snapshot. Only wires with something to draw get an entry, so most
+     EdgeViews keep the same props and skip the render. */
+  const edgeTallyById = useMemo(() => {
+    const m = new Map<string, { retry: number; lost: number | null }>();
+    if (!readOutcomes || !snapshot) return m;
+    const out = new Float64Array(EDGE_OUTCOME_SLOTS);
+    for (const ed of topology.edges) {
+      if (!readOutcomes(ed.id, out)) continue;
+      const retry = out[EO_RETRY] ?? 0;
+      const sent = (out[EO_FIRST] ?? 0) + retry;
+      const lost =
+        (ed.lossRate ?? 0) > 0 && sent > 0
+          ? clamp((out[EO_LOST] ?? 0) / sent, 0, 1)
+          : null;
+      if (retry > 0 || lost !== null) m.set(ed.id, { retry, lost });
+    }
+    return m;
+  }, [snapshot, readOutcomes, topology.edges]);
+
   const healthById = useMemo(() => {
     if (faultById.size === 0) return settledHealthById;
     const m = new Map(settledHealthById);
@@ -6183,6 +6489,34 @@ export default function Canvas({
     }
     return m;
   }, [topology.edges]);
+
+  /**
+   * Traffic dots: on with the setting and an engine to read, and only while
+   * the wires are long enough on screen for a dot to travel. Dots keep one
+   * screen size at every zoom, so the floor sits below MINIMAL_ZOOM: a
+   * phone fits a large example at 0.38 (FIT_MIN_NARROW) and should still
+   * see its traffic. Below it the moving dashes come back. With reduced
+   * motion nothing moves; each wire shows a still bar of the same shares.
+   */
+  const dotMode: 'moving' | 'still' | null =
+    !dotsOn || !readOutcomes || view.k < DOT_MIN_ZOOM
+      ? null
+      : reducedMotion
+        ? 'still'
+        : 'moving';
+  /** Request paths the dots travel: the same routes EdgeView draws. */
+  const dotWires = useMemo(() => {
+    const out: DotWire[] = [];
+    for (const ed of topology.edges) {
+      if (controlEdges.has(ed.id)) continue;
+      const a = nodeById.get(ed.from);
+      const b = nodeById.get(ed.to);
+      if (!a || !b) continue;
+      const r = routeEdge(nodeRect(a), nodeRect(b), laneById.get(ed.id) ?? 0);
+      out.push({ id: ed.id, points: r.points, label: r.label });
+    }
+    return out;
+  }, [topology.edges, controlEdges, nodeById, laneById]);
 
   /**
    * De-conflicted vertical offsets for edge rate labels, keyed by edge id.
@@ -6323,7 +6657,9 @@ export default function Canvas({
   return (
     <div
       ref={hostRef}
-      className={`cv-host${dropHint ? ' is-dropping' : ''}`}
+      className={`cv-host${dropHint ? ' is-dropping' : ''}${
+        dotMode === 'moving' ? ' has-dots' : ''
+      }`}
       onContextMenu={(e) => e.preventDefault()}
     >
       {/*
@@ -6394,10 +6730,22 @@ export default function Canvas({
                     showLabel={showEdgeLabels}
                     labelDy={labelDyById.get(ed.id) ?? 0}
                     breakMark={breakMarks?.get(ed.id)}
+                    retryRate={edgeTallyById.get(ed.id)?.retry ?? 0}
+                    lostShare={edgeTallyById.get(ed.id)?.lost ?? null}
                   />
                 );
               })}
             </g>
+
+            {dotMode && readOutcomes && (
+              <TrafficDots
+                wires={dotWires}
+                read={readOutcomes}
+                clock={snapshot?.system.timeMs ?? 0}
+                view={view}
+                mode={dotMode}
+              />
+            )}
 
             {previewD && (
               <path
@@ -6428,6 +6776,7 @@ export default function Canvas({
                   entering={enteredIdRef.current === n.id}
                   breakMark={breakMarks?.get(n.id)}
                   violationMark={violationMarks?.get(n.id)}
+                  line={lineById.get(n.id)}
                 />
               ))}
             </g>
@@ -6865,6 +7214,8 @@ export default function Canvas({
         setView={setView}
         onFit={fitToContent}
       />
+
+      {dotMode && topology.edges.length > 0 && <TrafficKey mode={dotMode} />}
 
       <div className="cv-zoom" data-chrome="zoom">
         <button

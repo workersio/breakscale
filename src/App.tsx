@@ -1258,6 +1258,18 @@ export default function App() {
    */
   const [routes, setRoutes] = useState<RouteStats[]>(() => engine.routes());
 
+  /* The per-wire outcome counts behind the traffic dots and the canvas's
+     retry and loss marks, which stay on with the dots turned off. The engine
+     keeps them outside the snapshot, so they never change what a replay or
+     a share link reproduces. */
+  useEffect(() => {
+    engine.setEdgeOutcomes(true);
+  }, [engine]);
+  const readOutcomes = useCallback(
+    (edgeId: string, out: Float64Array) => engine.readEdgeOutcomes(edgeId, out),
+    [engine],
+  );
+
   // "Find the problem": the last answer, shown while it still applies.
   const [finding, setFinding] = useState<Finding | null>(null);
   const shownFinding = currentFinding(finding, topology, snapshot);
@@ -4239,6 +4251,7 @@ export default function App() {
               topology={topology}
               snapshot={snapshot}
               routes={routes}
+              readOutcomes={readOutcomes}
               selectedIds={selectedIds}
               onSelectionChange={setSelectedIds}
               onMoveNode={handleMoveNode}
