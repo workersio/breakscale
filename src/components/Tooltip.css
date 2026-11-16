@@ -108,7 +108,7 @@
   padding: var(--sp-3);
   background: var(--surface);
   border: var(--bw) solid var(--border-strong);
-  border-radius: var(--r-btn);
+  border-radius: var(--r-md);
   box-shadow: var(--shadow-lg);
   /* The pointer must be able to travel in to reach a "see also" link. */
   pointer-events: auto;

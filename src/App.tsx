@@ -4937,15 +4937,15 @@ export default function App() {
           <div className="app-history">
             <button
               type="button"
-              className="btn btn-sm btn-icon"
+              className="btn btn-icon"
               disabled={!canUndo}
               aria-label="Undo"
               title={`Undo (${shortcutLabel('Ctrl+Z')})`}
               onClick={handleUndo}
             >
               <svg
-                width="14"
-                height="14"
+                width="16"
+                height="16"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -4960,15 +4960,15 @@ export default function App() {
             </button>
             <button
               type="button"
-              className="btn btn-sm btn-icon"
+              className="btn btn-icon"
               disabled={!canRedo}
               aria-label="Redo"
               title={`Redo (${shortcutLabel('Ctrl+Shift+Z')})`}
               onClick={handleRedo}
             >
               <svg
-                width="14"
-                height="14"
+                width="16"
+                height="16"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
