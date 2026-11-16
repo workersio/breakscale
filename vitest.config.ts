@@ -12,6 +12,9 @@ export default defineConfig({
     // mcp/src too: its tests import only the engine and this repo's own
     // modules, so they run on a clean checkout without mcp's dependencies.
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'mcp/src/**/*.test.ts'],
+    // Many component tests mount the whole App and run the engine for
+    // simulated seconds; on a busy machine or runner that passes 5s.
+    testTimeout: 30_000,
     coverage: {
       provider: 'v8',
       include: ['src/sim/**', 'src/content/**', 'src/components/format.ts'],

@@ -77,7 +77,9 @@ export const Trace = memo(function Trace({ trace, nameOf, idleText }: TraceProps
       ? 'Most of this request was spent waiting, not working.'
       : queued < service * 0.25
         ? 'Almost all of this was real work. Nothing was queueing.'
-        : 'Waiting and working are close. Raise the load to see that change.';
+        : // No advice to raise the load: in a challenge the load is fixed, and
+          // a node already near full would make the advice wrong.
+          'Waiting and working are close, so nothing is backed up yet.';
 
   return (
     <section className="tr" aria-label="Request trace">

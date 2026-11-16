@@ -43,7 +43,25 @@ export const RouteAlert = memo(function RouteAlert({
       {text ? (
         <p className="route-alert" aria-hidden="true">
           <span className="route-alert-dot" />
-          <span className="route-alert-text">{text}</span>
+          <span className="route-alert-text">
+            {text.split(/(?<=\.)\s+/).map((part, i) => {
+              // "Checkout users: 40% failing." The name carries the weight,
+              // so the eye finds who is hurting before it reads how.
+              const at = part.indexOf(': ');
+              return (
+                <span key={i} className="route-alert-line">
+                  {at > 0 ? (
+                    <>
+                      <span className="route-alert-name">{part.slice(0, at)}</span>
+                      {part.slice(at)}
+                    </>
+                  ) : (
+                    part
+                  )}
+                </span>
+              );
+            })}
+          </span>
         </p>
       ) : null}
     </div>

@@ -256,6 +256,15 @@
   stroke-width: 2;
 }
 
+/* A pinned run. Dotted, unlike offered's dashes, and in the faint ink, so it
+   reads as a reference behind the live traces rather than another series of
+   them. Drawn first, so the live lines sit on top where they cross. */
+.mx-line-pin {
+  stroke: var(--text-faint);
+  stroke-width: 2;
+  stroke-dasharray: 0.5 4;
+}
+
 /* The gap between offered and goodput IS the dropped traffic, drawn as
    literal area rather than left for the eye to infer. It is painted only
    when the engine reports real loss, so a healthy chart has no red haze at
@@ -384,6 +393,15 @@
   border-top-color: var(--text-dim);
 }
 
+/* The key follows the line's health, so one p99 has one colour. */
+.mx-key-p99.is-warn {
+  border-top-color: var(--warn-mark);
+}
+
+.mx-key-p99.is-danger {
+  border-top-color: var(--danger-mark);
+}
+
 .mx-key-offered {
   border-top-style: dashed;
   border-top-color: var(--line-3);
@@ -391,6 +409,11 @@
 
 .mx-key-goodput {
   border-top-color: var(--accent);
+}
+
+.mx-key-pin {
+  border-top-style: dotted;
+  border-top-color: var(--text-faint);
 }
 
 /* The dropped key is an area, not a line, so its sample is a filled band
@@ -692,4 +715,49 @@
    Dimmed so it reads as an absence rather than a value. */
 .mx-readout.is-unmeasured {
   color: var(--text-dim);
+}
+
+/* --------------------------------------------------------------------------
+   Reading a sample
+
+   Point at a plot, or press and drag on it, and a rule marks the nearest
+   sample while the legend reads its values. Vertical drags still scroll the
+   strip: only a sideways drag is the chart's.
+   -------------------------------------------------------------------------- */
+
+.mx-plot {
+  touch-action: pan-y;
+  cursor: crosshair;
+}
+
+.mx-hover {
+  pointer-events: none;
+}
+
+.mx-hover-rule {
+  stroke: var(--text-faint);
+  stroke-width: 1;
+}
+
+/* A ring in the series' own stroke, on the panel colour, so it reads on top
+   of the trace it sits on. Dashes belong to lines, not to dots. */
+.mx-hover .mx-dot {
+  fill: var(--surface);
+  stroke-width: 2;
+  stroke-dasharray: none;
+  vector-effect: none;
+}
+
+.mx-hover-at {
+  fill: var(--text-dim);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  font-size: var(--fs-label);
+}
+
+/* The hovered sample's headline figure, beside its time. */
+.mx-hover-val {
+  fill: var(--text);
+  font-weight: var(--fw-med);
 }

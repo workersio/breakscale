@@ -125,6 +125,9 @@ const replica: ComponentBehaviour = {
   // pools. The engine's single busy/waiting pair cannot express that.
   pump: 'none',
   creditsJoinCompletion: true,
+  // The same lag startReplicaService and onReplicaDrained play.
+  readLagMs: (config) => (config.replicationLagMs > 0 ? config.replicationLagMs : 0),
+  hasDisk: true,
 
   onDiscard(ctx: BehaviourCtx, state: NodeStateLike): void {
     // Both lines are emptied before anything is failed: failing a request
@@ -167,14 +170,20 @@ const replica: ComponentBehaviour = {
     // call re-draws, exactly as a real client re-issuing a request would.
     const isWrite = ctx.roll() >= clamp01(state.config.readFraction);
     ctx.markWrite(req, isWrite);
+    // A read of a key the replicas are still behind on, sent to the primary
+    // when the set is told to. It waits for and holds a write slot.
+    const primary =
+      isWrite ||
+      (state.config.freshReads === 1 && ctx.now < ext.visibleAt[req.key % KEYSPACE]);
+    if (primary && !isWrite) ctx.markFromPrimary(req);
 
-    const queue = isWrite ? ext.writeQueue : ext.readQueue;
-    const head = isWrite ? ext.writeHead : ext.readHead;
-    const busy = isWrite ? ext.writeBusy : ext.readBusy;
-    const capacity = isWrite ? writeCapacity(state) : readCapacity(state);
+    const queue = primary ? ext.writeQueue : ext.readQueue;
+    const head = primary ? ext.writeHead : ext.readHead;
+    const busy = primary ? ext.writeBusy : ext.readBusy;
+    const capacity = primary ? writeCapacity(state) : readCapacity(state);
 
     if (busy < capacity) {
-      startReplicaService(ctx, state, req, isWrite);
+      startReplicaService(ctx, state, req, primary);
       return 'handled';
     }
 
@@ -244,6 +253,12 @@ const replica: ComponentBehaviour = {
     const stale = ctx.counterRate(state, 'staleRead');
     const total = fresh + stale;
     stats.staleReadRate = total > 0 ? stale / total : 0;
+    // Only while reads can go to the primary, so a snapshot of a set that
+    // never does has exactly the fields it always had.
+    if (state.config.freshReads === 1) {
+      const primary = ctx.counterRate(state, 'primaryRead');
+      stats.primaryReadShare = total > 0 ? primary / total : 0;
+    }
 
     // Occupancy is the two pools together against their combined slots, so the
     // meter still means "how full is this thing".
@@ -259,19 +274,25 @@ const replica: ComponentBehaviour = {
  *
  * A write occupies a primary slot and, on completion, pushes this key's
  * visibility deadline out by the replication lag. A read occupies a replica
- * slot and is judged stale at the moment it is served.
+ * slot and is judged stale at the moment it is served, unless it was sent
+ * to the primary, which has every write and is never stale.
  */
 function startReplicaService(
   ctx: BehaviourCtx,
   state: NodeStateLike,
   req: ReqLike,
-  isWrite: boolean,
+  primary: boolean,
 ): void {
   const ext = replicaExt(state);
   const key = req.key % KEYSPACE;
+  const isWrite = req.isWrite;
 
-  if (isWrite) {
+  if (primary) {
     ext.writeBusy++;
+    if (!isWrite) {
+      ctx.countCustom(state, 'freshRead', 1);
+      ctx.countCustom(state, 'primaryRead', 1);
+    }
   } else {
     ext.readBusy++;
     // Judge staleness at service time: the replica answers from whatever it
@@ -299,7 +320,9 @@ function startReplicaService(
 /** A replica-set request finished its service time: free its slot, pull next. */
 function onReplicaDrained(ctx: BehaviourCtx, state: NodeStateLike, req: ReqLike): void {
   const ext = replicaExt(state);
-  if (req.isWrite) {
+  if (req.fromPrimary) {
+    if (ext.writeBusy > 0) ext.writeBusy--;
+  } else if (req.isWrite) {
     if (ext.writeBusy > 0) ext.writeBusy--;
     // The write has now committed on the primary. Replication starts from
     // here, so this is the moment the real visibility deadline is known.
@@ -369,7 +392,16 @@ interface ShardExt {
   sized: number;
   /** Last time utilisation was integrated. */
   lastIntegrateMs: number;
+  /**
+   * Requests admitted per key, decaying with a two-second time constant, so
+   * the hottest key's share is a reading of the recent past rather than of
+   * the whole run. Indexed by key; never resized.
+   */
+  keyWeight: Float64Array;
 }
+
+/** Time constant of `keyWeight`, ms. */
+const KEY_WINDOW_MS = 2000;
 
 function shardExt(state: NodeStateLike): ShardExt {
   return state.ext as ShardExt;
@@ -386,6 +418,7 @@ function makeShardExt(count: number): ShardExt {
     report: new Array<number>(count).fill(0),
     sized: count,
     lastIntegrateMs: 0,
+    keyWeight: new Float64Array(KEYSPACE),
   };
 }
 
@@ -408,6 +441,8 @@ function ensureSized(state: NodeStateLike, ext: ShardExt): ShardExt {
 
   const next = makeShardExt(want);
   next.lastIntegrateMs = ext.lastIntegrateMs;
+  // Key counts are per key, not per shard, so a resize does not touch them.
+  next.keyWeight = ext.keyWeight;
   // Busy slots belong to requests already in service; their drain callback
   // will decrement whichever shard they were charged to, so carry the counts
   // across for the shards that still exist.
@@ -486,6 +521,7 @@ const shard: ComponentBehaviour = {
   onAdmit(ctx: BehaviourCtx, state: NodeStateLike, req: ReqLike): AdmitAction {
     const ext = ensureSized(state, shardExt(state));
     const count = ext.sized;
+    ext.keyWeight[((req.key % KEYSPACE) + KEYSPACE) % KEYSPACE] += 1;
     const idx = shardIndexFor(ctx, state, req, count);
     const capacity = clampInt(state.config.shardCapacity, 1, MAX_SHARD_CAPACITY);
 
@@ -534,6 +570,8 @@ const shard: ComponentBehaviour = {
     // integrate this node as idle. Report the real total, or an autoscaler
     // watching a melting sharded store reads 0.0 and scales it down.
     ctx.reportOccupancy(state, busy, ext.sized * capacity);
+    const fade = exp(-dt / KEY_WINDOW_MS);
+    for (let k = 0; k < KEYSPACE; k++) ext.keyWeight[k] *= fade;
   },
 
   decorateStats(ctx: BehaviourCtx, state: NodeStateLike, stats: NodeStats): void {
@@ -564,6 +602,27 @@ const shard: ComponentBehaviour = {
     stats.queued = queued;
     ctx.reportShardUtilization(state, ext.report);
     stats.shardUtilization = ext.report;
+
+    // Published only while a client skews its keys. With an even spread the
+    // hottest of 64 keys is noise around 1.6%, and leaving the field off
+    // keeps every snapshot from before skew existed byte for byte the same.
+    if (ctx.keysSkewed()) {
+      let total = 0;
+      let top = 0;
+      let topKey = 0;
+      for (let k = 0; k < KEYSPACE; k++) {
+        const w = ext.keyWeight[k];
+        total += w;
+        if (w > top) {
+          top = w;
+          topKey = k;
+        }
+      }
+      if (total > 0) {
+        stats.hottestKeyShare = top / total;
+        stats.hottestKeyShard = topKey % n;
+      }
+    }
   },
 };
 

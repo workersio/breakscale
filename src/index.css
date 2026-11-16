@@ -108,6 +108,10 @@
   --lh-prose: 1.65;
   --lh-num: 1.15;
   --lh-hero: 1;
+  /* Aliases for names some components reach for. Without them a reference
+     silently falls back to the inherited line height. */
+  --lh-body: var(--lh-base);
+  --lh-tight: var(--lh-num);
 
   /* Three weights. 450 reads lighter and friendlier than 500 on a light
      background, where type appears optically heavier than on a dark one. */
@@ -116,13 +120,14 @@
   --fw-num: 650;
 
   /* ------------------------------------------------------------------------
-     Spacing — strict 4px grid, seven tokens.
+     Spacing — strict 4px grid, eight tokens.
 
        4   number-to-unit gap, icon-to-text, tick clearance
        8   compact control padding, stacked legend rows
        12  list row padding, label-to-control gap
        16  panel padding on narrow rails
        20  panel padding, default
+       24  dialog widths and offsets that sit between 20 and 28
        28  between sections within a panel
        40  between top-level bar regions only
      ------------------------------------------------------------------------ */
@@ -131,6 +136,7 @@
   --sp-3: 12px;
   --sp-4: 16px;
   --sp-5: 20px;
+  --sp-6: 24px;
   --sp-7: 28px;
   --sp-10: 40px;
 
@@ -338,6 +344,19 @@
   --danger-soft: #fdeceb;
   --danger-press: #a8232a; /* white on it = 7.14:1 */
   --danger-ring: rgba(197, 43, 48, 0.28);
+
+  /* Requests drawn moving along the wires. One colour per way a call can
+     end. Aliases, so the dark theme follows on its own; they are graphics,
+     held to 3:1 on the canvas and on every section tint a wire can cross
+     (theme.contrast.test.ts). Got through stays neutral on purpose: it is
+     most of the traffic, and the colours are kept for what went wrong. */
+  --flow-ok: var(--line-5);
+  --flow-fail: var(--danger-mark);
+  --flow-retry: var(--warn-mark);
+  --flow-refused: var(--cat-violet);
+  --flow-lost: var(--cat-blue);
+  /* Smaller as well as lighter, since it sits close to --flow-ok. */
+  --flow-pending: var(--line-4);
 
   /* ==========================================================================
      PER-KIND COLOUR SYSTEM — the heart of the redesign.
@@ -1255,6 +1274,47 @@ h4 {
   min-width: 0;
 }
 
+/* A card floating over the canvas: the tour, "What just happened", "Find
+   the problem". The same frame as the brief's panel (Challenge.css), so
+   every card that comes and goes over the diagram reads as one family.
+   Even on all four sides: state is said in words, never with an edge. */
+.card-float {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  background: var(--surface);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md);
+}
+
+/* A quiet line above the title: a step count or a status, and a ghost
+   button whose own padding lines its text up with the card's edge. */
+.card-float-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-height: 32px;
+  margin: calc(var(--sp-2) * -1) calc(var(--sp-2) * -1) calc(var(--sp-1) * -1) 0;
+}
+
+.card-float-title {
+  margin: 0;
+  font-size: var(--fs-num);
+  font-weight: var(--fw-med);
+  line-height: var(--lh-sm);
+  color: var(--text);
+  text-wrap: balance;
+}
+
+.card-float-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
 /* T1. The sole 11px definition in the codebase. Uppercase is mandatory: it is
    what makes 11px read as a label rather than as failed body text.
    Never a sentence, never a number, max ~18 characters. */
@@ -1641,10 +1701,8 @@ h4 {
   border-radius: var(--r-pill);
   background: var(--surface-2);
   color: var(--text-dim);
-  font-size: var(--fs-label);
+  font-size: var(--fs-sm);
   font-weight: var(--fw-med);
-  letter-spacing: var(--tr-label);
-  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -2052,7 +2110,7 @@ textarea:not(.cv-note-editor) {
   height: 36px;
   padding: 0 var(--sp-3);
   border: var(--bw) solid var(--border-strong);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-btn);
   background: var(--surface);
   color: var(--text);
   font-size: var(--fs-base);
@@ -2110,7 +2168,7 @@ select:focus,
 textarea:not(.cv-note-editor):focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-ring);
+  box-shadow: 0 0 0 4px var(--accent-ring);
 }
 
 input[type='text']:focus-visible,
@@ -2119,7 +2177,7 @@ select:focus-visible,
 textarea:not(.cv-note-editor):focus-visible {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-ring);
+  box-shadow: 0 0 0 4px var(--accent-ring);
 }
 
 input::placeholder,

@@ -158,7 +158,7 @@ export async function storeTopology(
     // as a pause rather than a refusal, and it says how long, because a
     // wait nobody has put a number on feels indefinite.
     throw new ShareStoreError(
-      'Slow down a moment. That is a lot of links at once, so the store is taking a breather. Try again in a minute, or save the design to a file.',
+      'Too many links were made in a short time. Try again in a minute, or save the design to a file.',
     );
   }
   if (res.status === 413) {
@@ -181,7 +181,9 @@ export async function storeTopology(
       ? body.id
       : null;
   if (id === null)
-    throw new ShareStoreError('The link store returned something unreadable.');
+    throw new ShareStoreError(
+      'The link could not be made. Try again, or save the design to a file.',
+    );
 
   const url = new URL(base);
   url.hash = '';

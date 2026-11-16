@@ -18,6 +18,11 @@ const STORAGE_KEY = 'bs-stars';
    spending requests against the unauthenticated rate limit, short enough
    that a count climbing during a launch is right by the next page load. */
 const STALE_MS = 5 * 60 * 1000;
+/* A refused request (403 when the shared rate limit is spent, or any other
+   failure) is remembered for an hour. Uncached, every page load asked
+   again, was refused again, and logged a console error each time. */
+const FAILED_KEY = 'bs-stars-failed';
+const FAILED_BACKOFF_MS = 60 * 60 * 1000;
 
 interface Cached {
   count: number;
@@ -43,6 +48,24 @@ function writeCache(count: number): void {
   } catch {
     // Storage full or disabled: the count still renders this session, it
     // just refetches next time. Not worth surfacing.
+  }
+}
+
+/** True while the last failed request is still inside its hour of backoff. */
+export function failedRecently(now: number): boolean {
+  try {
+    const at = Number(localStorage.getItem(FAILED_KEY));
+    return Number.isFinite(at) && at > 0 && now - at < FAILED_BACKOFF_MS;
+  } catch {
+    return false;
+  }
+}
+
+function markFailed(): void {
+  try {
+    localStorage.setItem(FAILED_KEY, String(Date.now()));
+  } catch {
+    // As with writeCache: the cost is one more request next load.
   }
 }
 
@@ -113,19 +136,23 @@ export function useGithubStars(): number | null {
     // page load, not sit on yesterday's number for an hour.
     const cached = readCache();
     if (cached && Date.now() - cached.fetchedAt < STALE_MS) return;
+    if (failedRecently(Date.now())) return;
 
     let cancelled = false;
     fetch(`https://api.github.com/repos/${REPO}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data: { stargazers_count?: unknown } | null) => {
-        if (cancelled || typeof data?.stargazers_count !== 'number') return;
-        setCount(data.stargazers_count);
+        if (typeof data?.stargazers_count !== 'number') {
+          markFailed();
+          return;
+        }
         writeCache(data.stargazers_count);
+        if (!cancelled) setCount(data.stargazers_count);
       })
       // Offline, rate-limited, blocked by an extension: the button already
-      // works with no count, so there is nothing to recover and nothing to
-      // show the reader.
-      .catch(() => {});
+      // works with no count, so there is nothing to show the reader. It is
+      // remembered, so the next load does not ask again straight away.
+      .catch(markFailed);
 
     return () => {
       cancelled = true;

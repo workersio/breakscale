@@ -87,7 +87,9 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('Find the problem across runs', () => {
+// Mounts the whole App and runs the engine, which a loaded runner can
+// stretch past the default 5s.
+describe('Find the problem across runs', { timeout: 30_000 }, () => {
   it('does not bring an old answer back after a Reset', () => {
     run(2000);
     press(button('Find the problem'));

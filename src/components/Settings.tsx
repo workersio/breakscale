@@ -11,6 +11,8 @@ import type { Preferences, ThemeChoice } from '../content/preferences';
 import { resolveSystemTheme } from '../theme/applyTheme';
 import { VENDORS } from '../content/vendors';
 import './Settings.css';
+import { CloseButton } from './CloseButton';
+import { trapTab } from './trapTab';
 
 /* ==========================================================================
    Settings.
@@ -74,6 +76,11 @@ function toggles(coarse: boolean): ToggleRow[] {
       key: 'minimap',
       label: 'Minimap',
       hint: 'A small map of the whole diagram, for finding your way around a big one.',
+    },
+    {
+      key: 'trafficDots',
+      label: 'Show requests moving along connections',
+      hint: 'Busier connections carry more dots. The colours show whether calls got through, failed, were lost or were turned away, and a ring marks a call tried again.',
     },
   ];
 }
@@ -143,7 +150,8 @@ export function Settings({
   const cardRef = useRef<HTMLDivElement | null>(null);
   const prefs = usePreferences();
 
-  const rows = toggles(useCoarsePointer());
+  const coarse = useCoarsePointer();
+  const rows = toggles(coarse);
 
   /* Focus lands on the card and returns to the opener, the same contract the
      shortcuts dialog and the glossary both keep. */
@@ -182,36 +190,20 @@ export function Settings({
             e.preventDefault();
             e.stopPropagation();
             onClose();
+            return;
           }
+          trapTab(e, cardRef.current);
         }}
         onAnimationEnd={(e) => {
           if (closing && e.target === e.currentTarget) unmount();
         }}
       >
-        <header className="st-head">
+        <div className="st-head">
           <h2 id="st-title" className="st-title">
             Settings
           </h2>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm btn-icon"
-            onClick={onClose}
-            aria-label="Close settings"
-          >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              aria-hidden="true"
-            >
-              <path d="M18 6 6 18M6 6l12 12" />
-            </svg>
-          </button>
-        </header>
+          <CloseButton onClick={onClose} />
+        </div>
 
         <div className="st-body">
           <section className="st-group">
@@ -314,7 +306,9 @@ export function Settings({
                     <span className="st-action-text">
                       <span className="st-row-label">Open a file</span>
                       <span className="st-hint">
-                        Or drop one straight onto the canvas.
+                        {coarse
+                          ? 'A design you saved from Breakscale.'
+                          : 'Or drop one straight onto the canvas.'}
                       </span>
                     </span>
                   </button>

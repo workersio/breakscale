@@ -19,7 +19,21 @@ import { FAILURE_KINDS } from './types';
  */
 export const MAX_FAULT_EVENTS = 1000;
 
-const ACTIONS: readonly FaultEvent['action'][] = ['inject', 'clear', 'cut', 'restore'];
+const ACTIONS: readonly FaultEvent['action'][] = [
+  'inject',
+  'clear',
+  'cut',
+  'restore',
+  'duplicate',
+  'undup',
+  'cut-replies',
+  'restore-replies',
+];
+
+/** The node or edge an entry names. */
+export function faultTarget(f: FaultEvent): string {
+  return 'nodeId' in f ? f.nodeId : f.edgeId;
+}
 
 /**
  * Validate a fault schedule, entry by entry.
@@ -67,13 +81,29 @@ function problemWith(
     return `has atMs ${shown(f.atMs)}; use a time in milliseconds, 0 or more.`;
   }
   if (!ACTIONS.includes(f.action as FaultEvent['action'])) {
-    return `has action ${JSON.stringify(f.action)}; use inject, clear, cut or restore.`;
+    return `has action ${JSON.stringify(f.action)}; use ${ACTIONS.join(', ')}.`;
   }
 
-  if (f.action === 'cut' || f.action === 'restore') {
+  if (
+    f.action === 'cut' ||
+    f.action === 'restore' ||
+    f.action === 'duplicate' ||
+    f.action === 'undup' ||
+    f.action === 'cut-replies' ||
+    f.action === 'restore-replies'
+  ) {
     if (typeof f.edgeId !== 'string' || f.edgeId === '') return 'needs `edgeId`.';
     if (edgeIds && !edgeIds.has(f.edgeId)) {
       return `names edge '${f.edgeId}', but there is no such edge.`;
+    }
+    if (
+      f.action === 'duplicate' &&
+      (typeof f.rate !== 'number' ||
+        !Number.isFinite(f.rate) ||
+        f.rate <= 0 ||
+        f.rate > 1)
+    ) {
+      return `has rate ${shown(f.rate)}; give the share of requests delivered twice, above 0 and at most 1.`;
     }
     return null;
   }
@@ -98,11 +128,30 @@ function problemWith(
   ) {
     return `crashes one instance of '${f.nodeId}', but a ${nodeKind} cannot lose one instance; use crash.`;
   }
-  if (f.opts === undefined) return null;
+  if (f.opts === undefined) {
+    if (f.kind === 'restart') {
+      return 'restarts a node but has no opts.downMs; give how long it stays down, in milliseconds.';
+    }
+    return f.kind === 'pause'
+      ? 'pauses a node but has no opts.pauseMs; give how long it stops for, in milliseconds.'
+      : null;
+  }
   if (!f.opts || typeof f.opts !== 'object' || Array.isArray(f.opts)) {
     return 'has `opts` that is not an object.';
   }
   const o = f.opts as Record<string, unknown>;
+  if (
+    f.kind === 'restart' &&
+    (typeof o.downMs !== 'number' || !Number.isFinite(o.downMs) || o.downMs <= 0)
+  ) {
+    return `has opts.downMs ${shown(o.downMs)}; give how long it stays down, in milliseconds above 0.`;
+  }
+  if (
+    f.kind === 'pause' &&
+    (typeof o.pauseMs !== 'number' || !Number.isFinite(o.pauseMs) || o.pauseMs <= 0)
+  ) {
+    return `has opts.pauseMs ${shown(o.pauseMs)}; give how long it stops for, in milliseconds above 0.`;
+  }
   for (const key of ['factor', 'rate'] as const) {
     if (
       o[key] !== undefined &&
@@ -135,7 +184,12 @@ function rebuild(f: FaultEvent): FaultEvent {
   switch (f.action) {
     case 'cut':
     case 'restore':
+    case 'undup':
+    case 'cut-replies':
+    case 'restore-replies':
       return { atMs: f.atMs, action: f.action, edgeId: f.edgeId };
+    case 'duplicate':
+      return { atMs: f.atMs, action: 'duplicate', edgeId: f.edgeId, rate: f.rate };
     case 'clear':
       return { atMs: f.atMs, action: 'clear', nodeId: f.nodeId };
     case 'inject': {
@@ -143,6 +197,13 @@ function rebuild(f: FaultEvent): FaultEvent {
       if (f.opts?.factor !== undefined) opts.factor = f.opts.factor;
       if (f.opts?.rate !== undefined) opts.rate = f.opts.rate;
       if (f.opts?.edgeIds !== undefined) opts.edgeIds = f.opts.edgeIds.slice();
+      // Only a restart reads it, and the wire only carries it for one.
+      if (f.kind === 'restart' && f.opts?.downMs !== undefined) {
+        opts.downMs = f.opts.downMs;
+      }
+      if (f.kind === 'pause' && f.opts?.pauseMs !== undefined) {
+        opts.pauseMs = f.opts.pauseMs;
+      }
       return {
         atMs: f.atMs,
         action: 'inject',

@@ -13,9 +13,8 @@ interface CueLayout {
   right: boolean;
   /** Any box is outside the visible rect, on any side. */
   off: boolean;
-  /** The visible rect's vertical middle, from the host's top. */
-  mid: number;
   /** The visible rect's edges, from the host's matching edges. */
+  insetTop: number;
   insetLeft: number;
   insetRight: number;
   insetBottom: number;
@@ -27,7 +26,7 @@ function sameLayout(a: CueLayout | null, b: CueLayout | null): boolean {
     a.left === b.left &&
     a.right === b.right &&
     a.off === b.off &&
-    a.mid === b.mid &&
+    a.insetTop === b.insetTop &&
     a.insetLeft === b.insetLeft &&
     a.insetRight === b.insetRight &&
     a.insetBottom === b.insetBottom
@@ -61,7 +60,13 @@ function screenBox(
   };
 }
 
+/** The visible words, which are also the name (a phone hides them). */
 const LABEL: Record<Side, string> = {
+  left: 'More on the left',
+  right: 'More on the right',
+};
+
+const TITLE: Record<Side, string> = {
   left: 'Show more of the diagram on the left',
   right: 'Show more of the diagram on the right',
 };
@@ -108,8 +113,11 @@ interface EdgeCuesProps {
  * A wide diagram on a narrow screen starts at its left end and runs off the
  * right one (see fitViewport). Where the minimap and the zoom cluster are
  * hidden, nothing said so: the student saw four boxes and had no reason to
- * think there were twenty. A cue sits on each side that still has boxes past
- * it and pans most of a screen toward them. The stylesheet hides the cues
+ * think there were twenty. A cue for each side that still has boxes past it
+ * pans most of a screen toward them. They sit together in a corner, where
+ * the minimap would be on a desktop and beside the fit button on a phone:
+ * at the middle of the edge they covered the very boxes coming in from it,
+ * and the close button of "What just happened". The stylesheet hides them
  * wherever the minimap is shown, since that already says the same thing.
  *
  * Rendered by Canvas as siblings of .cv-surface, never inside it, and each
@@ -148,7 +156,7 @@ export function EdgeCues({
         left: over.left,
         right: over.right,
         off: over.any,
-        mid: Math.round(vis.top - host.top + vis.height / 2),
+        insetTop: Math.round(vis.top - host.top),
         insetLeft: Math.round(vis.left - host.left),
         insetRight: Math.round(host.right - vis.right),
         insetBottom: Math.round(host.bottom - vis.bottom),
@@ -222,32 +230,36 @@ export function EdgeCues({
 
   if (!cues) return null;
   const style = {
-    '--cue-mid': `${cues.mid}px`,
+    '--cue-top': `${cues.insetTop}px`,
     '--cue-left': `${cues.insetLeft}px`,
     '--cue-right': `${cues.insetRight}px`,
     '--cue-bottom': `${cues.insetBottom}px`,
   } as CSSProperties;
   return (
     <>
-      {(['left', 'right'] as const).map((side) =>
-        cues[side] ? (
-          <button
-            key={side}
-            ref={(el) => {
-              buttons.current[side] = el;
-            }}
-            type="button"
-            className={`btn btn-sm btn-icon cv-cue is-${side}`}
-            data-chrome="cue"
-            style={style}
-            aria-label={LABEL[side]}
-            title={LABEL[side]}
-            onClick={() => pan(side)}
-          >
-            <Chevron side={side} />
-          </button>
-        ) : null,
-      )}
+      {cues.left || cues.right ? (
+        <div className="cv-cues" data-chrome="cue" style={style}>
+          {(['left', 'right'] as const).map((side) =>
+            cues[side] ? (
+              <button
+                key={side}
+                ref={(el) => {
+                  buttons.current[side] = el;
+                }}
+                type="button"
+                className={`btn btn-sm cv-cue is-${side}`}
+                data-chrome="cue"
+                title={TITLE[side]}
+                onClick={() => pan(side)}
+              >
+                {side === 'left' ? <Chevron side={side} /> : null}
+                <span className="cv-cue-text">{LABEL[side]}</span>
+                {side === 'right' ? <Chevron side={side} /> : null}
+              </button>
+            ) : null,
+          )}
+        </div>
+      ) : null}
       {cues.off ? (
         <button
           ref={(el) => {
@@ -258,7 +270,7 @@ export function EdgeCues({
           data-chrome="cue"
           style={style}
           aria-label="Fit the diagram on screen"
-          title="Fit the diagram on screen"
+          title="Fit the diagram on screen (Shift+1)"
           onClick={() => {
             handoff.current = { from: 'fit', at: performance.now() };
             onFit();

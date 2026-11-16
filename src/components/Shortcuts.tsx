@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react';
+import { shortcutLabel } from '../modKey';
 import { createPortal } from 'react-dom';
 import { usePresence } from './presence';
 import './Shortcuts.css';
+import { CloseButton } from './CloseButton';
 
 /* ==========================================================================
    The keyboard shortcuts dialog.
@@ -44,6 +46,7 @@ const GROUPS: Group[] = [
     rows: [
       { keys: ['Space'], does: 'Play or pause' },
       { keys: ['S'], does: 'Step one tick (pauses first)' },
+      { keys: ['[', ']'], does: 'Play slower or faster' },
       { keys: ['F'], does: 'Can you break it?' },
     ],
   },
@@ -51,11 +54,22 @@ const GROUPS: Group[] = [
     title: 'Build',
     rows: [
       { keys: ['Drag a port'], does: 'Connect two components' },
-      { keys: ['Click a port'], does: 'Arm a link; click the target to finish' },
+      {
+        keys: ['Click a port'],
+        does: 'Start a connection; click the target to finish',
+      },
+      {
+        keys: ['L'],
+        does: 'Connect the selected component; arrows pick, Enter connects',
+      },
       { keys: ['Double-click'], does: 'Rename a component in place' },
       { keys: ['Ctrl+D'], does: 'Duplicate the selection' },
       { keys: ['Alt+drag'], does: 'Drag out a copy' },
       { keys: ['Delete', 'Backspace'], does: 'Delete the selection' },
+      {
+        keys: ['Right-click', 'Press and hold'],
+        does: 'More actions for a component, a connection or the canvas',
+      },
     ],
   },
   {
@@ -107,8 +121,21 @@ const GROUPS: Group[] = [
       { keys: ['C'], does: 'Components rail' },
       { keys: ['M'], does: 'Charts strip' },
       { keys: ['I'], does: 'Inspector, while something is selected' },
-      { keys: ['?'], does: 'Glossary' },
+      { keys: ['?'], does: 'Glossary, or what the focused component is' },
+      { keys: ['F6', 'Shift+F6'], does: 'Next or previous area: bar, diagram, panels' },
+      { keys: ['Up', 'Down'], does: 'Move through the components rail' },
       { keys: ['Ctrl+/'], does: 'This dialog' },
+    ],
+  },
+  {
+    title: 'Search and present',
+    rows: [
+      { keys: ['Ctrl+K'], does: 'Search every action by name' },
+      { keys: ['Shift+P'], does: 'Start or stop presenting' },
+      {
+        keys: ['X', 'W', 'R'],
+        does: 'While presenting: crash, slow or fix the part in hand',
+      },
     ],
   },
 ];
@@ -163,45 +190,33 @@ export function Shortcuts({ open, onClose }: ShortcutsProps) {
             onClose();
             return;
           }
-          /* Focus trap. The dialog holds exactly one focusable control, so
-             the trap is simply "Tab goes to it, and from it back". */
+          /* Focus trap over the two stops: the close button and the list,
+             which takes focus so the arrow keys and Page Down scroll it. */
           if (e.key === 'Tab') {
             e.preventDefault();
-            const btn = cardRef.current?.querySelector<HTMLElement>('button');
-            if (document.activeElement === btn) cardRef.current?.focus();
-            else btn?.focus();
+            const stops = [
+              cardRef.current?.querySelector<HTMLElement>('button'),
+              cardRef.current?.querySelector<HTMLElement>('.sc-body'),
+            ].filter((el): el is HTMLElement => el != null);
+            const at = stops.indexOf(document.activeElement as HTMLElement);
+            const n = stops.length;
+            const next =
+              at < 0 ? (e.shiftKey ? n - 1 : 0) : (at + (e.shiftKey ? n - 1 : 1)) % n;
+            stops[next]?.focus();
           }
         }}
         onAnimationEnd={(e) => {
           if (closing && e.target === e.currentTarget) unmount();
         }}
       >
-        <header className="sc-head">
+        <div className="sc-head">
           <h2 id="sc-title" className="sc-title">
             Keyboard shortcuts
           </h2>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm btn-icon"
-            onClick={onClose}
-            aria-label="Close keyboard shortcuts"
-          >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              aria-hidden="true"
-            >
-              <path d="M18 6 6 18M6 6l12 12" />
-            </svg>
-          </button>
-        </header>
+          <CloseButton onClick={onClose} />
+        </div>
 
-        <div className="sc-body">
+        <div className="sc-body" tabIndex={0} role="region" aria-label="Shortcuts list">
           {GROUPS.map((g) => (
             <section key={g.title} className="sc-group">
               <h3 className="sc-group-title">{g.title}</h3>
@@ -212,7 +227,9 @@ export function Shortcuts({ open, onClose }: ShortcutsProps) {
                       {row.keys.map((k, i) => (
                         <span key={k} className="sc-alt">
                           {i > 0 && <span className="sc-or">or</span>}
-                          <kbd className="sc-kbd">{k}</kbd>
+                          <kbd className="sc-kbd">
+                            {k === 'Ctrl+wheel' ? k : shortcutLabel(k)}
+                          </kbd>
                         </span>
                       ))}
                     </dt>

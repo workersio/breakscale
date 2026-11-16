@@ -109,7 +109,7 @@ describe('an empty canvas', () => {
     expect(c?.closest('.cv-surface')).toBeNull();
     const labels = [...(c?.querySelectorAll('button') ?? [])].map((b) => b.textContent);
     expect(labels).toEqual([
-      'Start with one server',
+      'Start with one service',
       'Browse examples',
       'Try a challenge',
     ]);
@@ -117,7 +117,7 @@ describe('an empty canvas', () => {
 
   it('starts with one server as one undoable step', () => {
     mount();
-    press(must('Start with one server'));
+    press(must('Start with one service'));
     const simple = PRESETS.find((p) => p.id === 'single-server')!;
     expect(nodeIds()).toEqual(simple.topology.nodes.map((n) => n.id));
     expect(card()).toBeNull();

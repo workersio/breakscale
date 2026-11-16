@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PRESETS } from '../sim/presets';
 import { CHALLENGES } from '../sim/challenges';
+import { INCIDENTS } from '../sim/incidents';
 import { LEARNING_PATH } from './learningPath';
 
 const steps = LEARNING_PATH.flatMap((t) => t.steps);
@@ -14,6 +15,14 @@ describe('the learning path', () => {
   it('has every challenge exactly once', () => {
     const ids = steps.filter((s) => s.kind === 'challenge').map((s) => s.id);
     expect([...ids].sort()).toEqual(CHALLENGES.map((c) => c.id).sort());
+  });
+
+  it('has every real outage exactly once, after every challenge', () => {
+    const ids = steps.filter((s) => s.kind === 'incident').map((s) => s.id);
+    expect([...ids].sort()).toEqual(INCIDENTS.map((i) => i.id).sort());
+    const lastBrief = steps.findLastIndex((s) => s.kind === 'challenge');
+    const firstOutage = steps.findIndex((s) => s.kind === 'incident');
+    expect(firstOutage).toBeGreaterThan(lastBrief);
   });
 
   /* A brief is set in an example's system. Meeting the system first is the

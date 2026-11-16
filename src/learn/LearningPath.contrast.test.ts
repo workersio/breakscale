@@ -4,8 +4,8 @@ import { ratio } from '../theme/contrast';
 import { readTokens, resolve } from '../theme/tokens';
 
 describe('learning path colours', () => {
-  /* Every text colour the dialog uses, on both surfaces a step can sit on:
-     the card, and the hover fill. The done mark's ring is a non-text mark. */
+  /* Every text colour the dialog uses, on both surfaces it sits on: the card,
+     and the Up next box. The done mark's ring is a non-text mark. */
   const css = readFileSync(new URL('../index.css', import.meta.url), 'utf8');
   const themes = [
     ['light', readTokens(css, ':root')],
@@ -37,5 +37,11 @@ describe('learning path colours', () => {
         `--accent on ${bg}`,
       ).toBeGreaterThanOrEqual(3);
     }
+    // The Current badge: its word on its own fill. Done is --ok with no fill,
+    // checked on both surfaces above.
+    expect(
+      ratio(get('--accent-ink'), get('--accent-soft')),
+      'Current badge',
+    ).toBeGreaterThanOrEqual(4.5);
   });
 });

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import App from './App';
+import { PHONE_QUERY } from './phoneQuery';
 import { CHALLENGES_KEY } from './challengeWorkspace';
 import { saveDesign } from './savedDesigns';
 import { buildDesignFile } from './designFile';
@@ -194,6 +195,20 @@ describe('starting a challenge', () => {
     mount();
     startChallenge(hold.name);
     expect(document.activeElement).toBe(panel()?.querySelector('h2'));
+  });
+
+  it('says why F does nothing, instead of doing nothing', () => {
+    mount();
+    startChallenge(hold.name);
+    act(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'f', bubbles: true }),
+      );
+    });
+    expect(document.querySelector('.app-toast')?.textContent).toBe(
+      'Can you break it? is off during a challenge.',
+    );
+    expect(document.querySelector('.chal.brk')).toBeNull();
   });
 
   it('holds the load still, and hides the suggested fix', () => {
@@ -414,18 +429,20 @@ describe('across a reload', () => {
     expect(canvasIds()).toEqual(['mine-client', 'mine-svc']);
   });
 
-  it('opens a brief from a challenge link, and takes the link off the URL', () => {
+  it('opens a brief from a challenge link, which stays on the URL while it is open', () => {
     window.history.replaceState(null, '', '/?challenge=keep-it-warm');
     mount();
     expect(panel()?.textContent).toContain(challengeById('keep-it-warm')!.name);
     advance(10);
-    expect(window.location.search).toBe('');
+    expect(window.location.search).toBe('?challenge=keep-it-warm');
     // Boot moved the reader out of their own design, so it says so.
     expect(document.querySelector('.app-toast')?.textContent).toBe(
       'Your design is set aside. It comes back when you leave.',
     );
     press(must('Back to my design'));
     expect(canvasIds()).toEqual(['mine-client', 'mine-svc']);
+    // Left, the address no longer names it, so a reload does not reopen it.
+    expect(window.location.search).toBe('');
   });
 
   it('lets a share link open over a brief without touching the reader design', async () => {
@@ -512,7 +529,10 @@ describe('the check', () => {
     startChallenge(hold.name);
     expect(document.querySelector('.chal-chip')?.textContent).toBe('Not checked yet');
     settleCheck();
-    expect(document.querySelector('.chal-chip')?.textContent).toBe('Not yet');
+    // The design is still the one the brief starts from, so its miss is
+    // the problem as set, not a failed attempt.
+    expect(document.querySelector('.chal-chip')?.textContent).toBe('As it starts');
+    expect(document.querySelector('.chal-verdict')?.className).toContain('is-base');
     expect(panel()?.textContent).not.toContain(hold.lesson);
     press(must('Details'));
     expect(byName('Watch run 1')).not.toBeNull();
@@ -538,9 +558,14 @@ describe('the check', () => {
       set.call(input, String(start + 4));
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
+    // Folded beside the inspector while the reader works.
+    expect(document.querySelector<HTMLElement>('.chal-body')?.hidden).toBe(true);
     settleCheck();
     expect(document.querySelector('.chal-chip')?.textContent).toBe('Passed');
     expect(panel()?.textContent).toContain(hold.lesson);
+    // The inspector is open beside the brief, and the pass still opens it.
+    expect(document.querySelector('.ins')).not.toBeNull();
+    expect(document.querySelector<HTMLElement>('.chal-body')?.hidden).toBe(false);
     expect(storedChallenges().progress[hold.id]?.version).toBe(hold.version);
 
     // Watching the run keeps the pass: the design is the same one.
@@ -555,5 +580,46 @@ describe('the check', () => {
     press(must('Back to my design'));
     openMenu('Challenges');
     expect(must(hold.name).textContent).toContain('Passed');
+  });
+
+  it('on a phone, takes the inspector sheet down so the pass can be seen', () => {
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) =>
+        ({
+          matches: query === PHONE_QUERY,
+          media: query,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          addListener: () => {},
+          removeListener: () => {},
+        }) as unknown as MediaQueryList,
+    );
+    mount();
+    startChallenge(hold.name);
+    press(document.querySelector('[data-hit="node"][data-kind="db"]')!);
+    const inspecting = () =>
+      document.querySelector('.app-body')?.classList.contains('has-inspector');
+    expect(inspecting()).toBe(true);
+    const label = [...document.querySelectorAll('.ins label')].find(
+      (l) => l.textContent?.trim() === 'Slots per instance',
+    );
+    const input = document.getElementById(
+      label!.getAttribute('for')!,
+    ) as HTMLInputElement;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(
+        input,
+        String(Number(input.value) + 4),
+      );
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    settleCheck();
+    expect(document.querySelector('.chal-chip')?.textContent).toBe('Passed');
+    expect(inspecting()).toBe(false);
+    expect(document.querySelector<HTMLElement>('.chal-body')?.hidden).toBe(false);
+    // The part is still selected; tapping it brings its settings back.
+    press(document.querySelector('[data-hit="node"][data-kind="db"]')!);
+    expect(inspecting()).toBe(true);
   });
 });

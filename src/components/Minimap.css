@@ -37,7 +37,7 @@
 .mm-view {
   position: absolute;
   border: 1.5px solid var(--accent);
-  border-radius: 2px;
+  border-radius: var(--r-mark);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   pointer-events: none;
 }

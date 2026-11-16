@@ -1,0 +1,108 @@
+/* The pinned-run row across the top of the charts strip. One line where it
+   fits, wrapping to two on a phone; never a panel of its own, because what it
+   says belongs beside the charts it compares. */
+
+.mx-pin {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-4);
+  min-width: 0;
+}
+
+.mx-pin-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.mx-pin-hint {
+  min-width: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+}
+
+.mx-pin-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* The same dotted rule the charts draw the pin with, so the key and the
+   line are read as one thing. */
+.mx-pin-swatch {
+  width: 14px;
+  height: 0;
+  border-top: 2px dotted var(--text-faint);
+}
+
+.mx-pin-rows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.mx-pin-row {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+.mx-pin-name {
+  color: var(--text-dim);
+}
+
+.mx-pin-then {
+  color: var(--text-dim);
+}
+
+.mx-pin-arrow {
+  color: var(--text-faint);
+}
+
+.mx-pin-now {
+  color: var(--text);
+  font-weight: var(--fw-num);
+}
+
+.mx-pin-now.is-ok {
+  color: var(--ok);
+}
+
+.mx-pin-now.is-danger {
+  color: var(--danger);
+}
+
+.mx-pin-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: auto;
+}
+
+/* A phone: the buttons stay on the label's line and the three readings take
+   the line under it, rather than the buttons getting a row of their own. */
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
+  .mx-pin-hint {
+    flex-basis: 100%;
+  }
+
+  .mx-pin-actions {
+    order: 1;
+  }
+
+  .mx-pin-rows {
+    order: 2;
+    flex-basis: 100%;
+  }
+}

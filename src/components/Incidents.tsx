@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import type { Incident } from '../sim/incidents';
 import './Incidents.css';
+import { CloseButton } from './CloseButton';
 
 /* ==========================================================================
    A real incident, beside the canvas.
@@ -24,6 +25,18 @@ export interface IncidentPanelProps {
   focusSignal: number;
   foldOnStart?: boolean;
   onSheetResize?: (height: number | null, shut: boolean) => void;
+}
+
+/** "20s: S3 stops answering." as a dated line: the time set apart in figures. */
+function captionParts(caption: string) {
+  const at = caption.indexOf(': ');
+  if (at <= 0) return caption;
+  return (
+    <>
+      <span className="inc-caption-at num">{caption.slice(0, at)}</span>
+      <span className="inc-caption-text">{caption.slice(at + 2)}</span>
+    </>
+  );
 }
 
 export function IncidentPanel({
@@ -88,6 +101,8 @@ export function IncidentPanel({
     onWatch();
   };
 
+  const watched = caption !== null;
+
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     if (e.key !== 'Escape') return;
     e.stopPropagation();
@@ -112,7 +127,7 @@ export function IncidentPanel({
         </div>
         <button
           type="button"
-          className="btn btn-sm btn-icon chal-collapse"
+          className="btn btn-ghost btn-sm btn-icon chal-collapse"
           aria-expanded={!collapsed}
           aria-controls={bodyId}
           aria-label={collapsed ? 'Show the panel' : 'Fold the panel'}
@@ -120,8 +135,8 @@ export function IncidentPanel({
           onClick={() => setCollapsed((c) => !c)}
         >
           <svg
-            width="14"
-            height="14"
+            width="16"
+            height="16"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -133,26 +148,7 @@ export function IncidentPanel({
             <path d={collapsed ? 'm6 9 6 6 6-6' : 'm18 15-6-6-6 6'} />
           </svg>
         </button>
-        <button
-          type="button"
-          className="btn btn-sm btn-icon"
-          aria-label="Close"
-          title="Close"
-          onClick={onClose}
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            aria-hidden="true"
-          >
-            <path d="M18 6 6 18M6 6l12 12" />
-          </svg>
-        </button>
+        <CloseButton onClick={onClose} className="btn-sm" />
       </header>
 
       {/* Readable with the panel folded, so the replay can be watched with
@@ -160,7 +156,7 @@ export function IncidentPanel({
           appears with its first text is often not announced. */}
       {caption !== null ? (
         <p className="inc-caption" aria-hidden="true">
-          {caption}
+          {captionParts(caption)}
         </p>
       ) : null}
       <p className="sr-only" aria-live="polite">
@@ -179,11 +175,21 @@ export function IncidentPanel({
             {incident.source.title}
           </a>
         </p>
+        {/* Watching comes first: the brief makes sense once the outage has
+            been seen. After that, fixing it is the thing to press. */}
         <div className="chal-foot">
-          <button type="button" className="btn btn-sm" onClick={watch}>
-            {caption !== null ? 'Watch again' : 'Watch it happen'}
+          <button
+            type="button"
+            className={`btn btn-sm${watched ? '' : ' btn-primary'}`}
+            onClick={watch}
+          >
+            {watched ? 'Watch again' : 'Watch it happen'}
           </button>
-          <button type="button" className="btn btn-sm btn-primary" onClick={onFix}>
+          <button
+            type="button"
+            className={`btn btn-sm${watched ? ' btn-primary' : ''}`}
+            onClick={onFix}
+          >
             Fix it
           </button>
         </div>

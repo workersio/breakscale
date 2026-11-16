@@ -29,14 +29,14 @@ function cells(topology: Topology, id: string, stats: NodeStats) {
 }
 
 describe('p99 on a box before anything is measured', () => {
-  it('reads n/a on every box before the run starts', () => {
+  it('reads none yet on every box before the run starts', () => {
     const t = preset('single-server');
     const stats = statsAfter(t, 0);
     for (const id of ['api', 'db']) {
       const nodeStats = stats[id];
       if (!nodeStats) throw new Error(`no stats for ${id}`);
       const p99 = cells(t, id, nodeStats).find((c) => c.label === 'p99');
-      expect(p99?.value).toBe('n/a');
+      expect(p99?.value).toBe('none yet');
     }
   });
 
@@ -57,12 +57,12 @@ describe('p99 on a box before anything is measured', () => {
     expect(p99?.value).toBe('0ms');
   });
 
-  it('reads n/a on a standby region that gets no traffic', () => {
+  it('reads none yet on a standby region that gets no traffic', () => {
     const t = preset('multi-region');
     const eu = statsAfter(t, 10_000)['eu-api'];
     if (!eu) throw new Error('no eu-api stats');
     expect(eu.throughput).toBe(0);
     const p99 = cells(t, 'eu-api', eu).find((c) => c.label === 'p99');
-    expect(p99?.value).toBe('n/a');
+    expect(p99?.value).toBe('none yet');
   });
 });

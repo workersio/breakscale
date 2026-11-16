@@ -397,7 +397,349 @@ const AWS21: Incident = {
   },
 };
 
-export const INCIDENTS: readonly Incident[] = [S3, CLOUDFLARE, AWS21];
+/* ---------------- Coinbase, 7 May 2026 ---------------- */
+
+const CB26_SCENE_FAULTS: readonly FaultEvent[] = [
+  { atMs: 20_000, action: 'inject', nodeId: 'engine', kind: 'crash' },
+  { atMs: 50_000, action: 'clear', nodeId: 'engine' },
+];
+
+// In the brief the zone never comes back, so only a failover can pass.
+const CB26_BRIEF_FAULTS: readonly FaultEvent[] = [
+  { atMs: 20_000, action: 'inject', nodeId: 'engine', kind: 'crash' },
+];
+
+const ENGINE: Partial<NodeConfig> = {
+  capacity: 16,
+  serviceMs: 25,
+  serviceCv: 0.5,
+  queueLimit: 128,
+};
+
+const COINBASE26: Incident = {
+  id: 'incident-coinbase-2026',
+  name: 'An exchange loses its only zone',
+  date: '7 May 2026',
+  tagline: 'No automatic way to fail over',
+  source: {
+    title: 'A postmortem of our May 7, 2026 outage',
+    url: 'https://www.coinbase.com/blog/a-postmortem-of-our-may-7-2026-outage',
+  },
+  // From the postmortem, in order: "multiple chiller units failed
+  // simultaneously in a single data hall" and "a thermal-safety shutdown of
+  // the affected racks"; the engine "runs as a Raft-based replicated cluster
+  // inside an AWS Cluster Placement Group", which "cannot tolerate
+  // inter-zone network hops between voting cluster members"; "nearly all
+  // trading on Coinbase halted" at 7:48 PM, then "three of five
+  // matching-engine nodes went down and we lost quorum"; "we lacked an
+  // automated ability to fail over to another availability zone" and an
+  // "emergency code change ... to remove a startup assumption that all five
+  // cluster nodes were resolvable"; "first cancel-only, then auction mode,
+  // and finally full trading", full at 3:49 AM; "warm cross-zone standby
+  // design" and "production failover exercises on a regular cadence".
+  story: [
+    'Several chiller units failed at once in one AWS data hall, and the servers there shut down to protect themselves.',
+    "Coinbase's matching engine ran as a five-node cluster kept together in that one zone, on purpose, because its nodes could not afford the delay of talking across zones.",
+    'Nearly all trading stopped. Then three of the five nodes went down, and the cluster lost quorum, so the two left could not carry on.',
+    'There was no automated way to fail over to another zone, and restarting took an emergency code change, because the engine assumed at startup it could find all five nodes.',
+    'Markets reopened in stages, first only for cancelling orders, and full trading was back at 3:49 AM.',
+    'Coinbase is improving warm standbys in other zones and will run failover exercises in production on a regular schedule.',
+  ],
+  simNote:
+    'Here the five nodes are one box, and losing quorum is drawn as it stopping at 20s. Trading was halted from 7:48 PM to 3:49 AM. A separate Kafka problem that blocked quotes is left out.',
+  scene: {
+    // The engine comes first: a part the reader adds takes the brief's
+    // locked speed from the first part of its kind, and a standby has to
+    // work as slowly as the engine it stands in for, not as fast as the API.
+    nodes: [
+      node('engine', 'service', 'Matching engine', 560, 190, ENGINE),
+      node('traders', 'client', 'Traders', 40, 190, { rps: 400, timeoutMs: 2000 }),
+      node('api', 'service', 'Exchange API', 300, 190, {
+        capacity: 64,
+        serviceMs: 5,
+        serviceCv: 0.4,
+        queueLimit: 256,
+      }),
+    ],
+    edges: [edge('traders', 'api'), edge('api', 'engine')],
+    faults: [...CB26_SCENE_FAULTS],
+  },
+  captions: [
+    {
+      atMs: 0,
+      text: 'A normal day. Every order goes to one matching engine, in one zone.',
+    },
+    { atMs: 20_000, text: 'The building loses cooling, and the engine stops.' },
+    {
+      atMs: 25_000,
+      text: 'Every order fails. Nothing sends them anywhere else.',
+    },
+    {
+      atMs: 50_000,
+      text: 'The model brings the engine back. The real one took hours.',
+    },
+  ],
+  brief: {
+    id: 'incident-coinbase-2026',
+    version: 1,
+    name: 'Fail over on its own',
+    brief:
+      'At 20s, the zone holding the matching engine goes dark, and this time it stays dark. Keep trading going without anyone stepping in. Lose no more than 15 in 100 orders, and keep the slowest 1 in 100 within 300ms. You can add up to 20 slots.',
+    presetId: 'incident-coinbase-2026',
+    loadRps: 400,
+    budget: 20,
+    faults: CB26_BRIEF_FAULTS,
+    // A switch that moves traffic instantly would hide the cost of failing
+    // over, as in the S3 brief.
+    locks: [{ kind: 'region', field: 'failoverMs' }],
+    goals: [
+      { metric: 'errorRate', max: 15 },
+      { metric: 'p99', max: 300 },
+    ],
+    hints: [
+      'A bigger engine, or more copies of it, does not help when the whole zone it runs in is dark.',
+      'Look for the component that sends requests to another region when the first one stops answering. A zone works the same way here.',
+      'When the switch happens, the standby takes every order the engine was taking. Is it big enough for that?',
+    ],
+    lesson:
+      'Orders reached the standby because something switched to it on its own, and it kept up because it was as big as the engine it replaced. A standby that is too small, or that someone has to start by hand, fails just when it is needed. The orders lost were the few seconds the switch takes. The only way to know a failover works is to cause the fault and watch, which is what this check did, and what Coinbase now plans to do in production on a regular schedule.',
+  },
+};
+
+/* ---------------- Discord, 6 November 2023 ---------------- */
+
+const DC23_FAULTS: readonly FaultEvent[] = [
+  { atMs: 20_000, action: 'inject', nodeId: 'sessions', kind: 'crash-instance' },
+  { atMs: 45_000, action: 'clear', nodeId: 'sessions' },
+];
+
+const DISCORD23: Incident = {
+  id: 'incident-discord-2023',
+  name: 'Typing crowds out sign-in',
+  date: '6 November 2023',
+  tagline: 'Too little room, and nothing chose who got it',
+  source: {
+    title: '25% or 6 to 4: The 11/6/23 Authentication Outage',
+    url: 'https://discord.com/blog/authentication-outage',
+  },
+  // From the postmortem, in order: "an authentication cluster,
+  // [scylla-authentication], which holds information about user sessions";
+  // an OS upgrade done "by taking one zone at a time offline", and "the
+  // script drained all connections from zone [c]" at 10:52 AM; "One of the
+  // NVMe Local SSDs attached to [scylla-authentication-b-2] was degraded";
+  // "The cluster was underprovisioned"; availability "plummeted to
+  // approximately 25%", with users unable to be "connecting, logging in,
+  // reading and sending messages"; "we exacerbated the problem by creating a
+  // retry storm"; "To lessen load on the authentication cluster, we turned
+  // off sending typing events and marking messages as read at 11:05 AM",
+  // which "restored authentication functionality to approximately 50% of
+  // users"; "At 11:43 AM, the system had recovered"; "we expanded the
+  // [scylla-authentication] cluster, doubling it in size" and rebuilt the
+  // node "with new, non-degraded disks".
+  story: [
+    'Discord kept information about user sessions in one database cluster, used to sign people in.',
+    'During a routine upgrade, one zone of that cluster was taken offline, while a node in another zone had a failing disk.',
+    "The cluster was too small to cope. Discord's availability fell to about 25%, and people could not log in, connect or send messages.",
+    'Failed sign-ins were retried, and the retries piled more load on the cluster.',
+    'Thirteen minutes in, engineers turned off typing events and read markers to take load off the cluster, and about half of users could get back in.',
+    'The cluster recovered at 11:43 AM, about 50 minutes after it began. Discord then doubled its size and rebuilt the node with the bad disk.',
+  ],
+  simNote:
+    "The real outage lasted about 50 minutes. Here one of the store's three nodes is down from 20s to 45s, and the failing disk is left out.",
+  scene: {
+    nodes: [
+      node('signins', 'client', 'Sign-ins', 40, 60, {
+        rps: 200,
+        timeoutMs: 2000,
+      }),
+      node('typing', 'client', 'Typing events', 40, 320, {
+        rps: 200,
+        timeoutMs: 2000,
+      }),
+      node('auth', 'service', 'Auth service', 300, 190, {
+        capacity: 128,
+        serviceMs: 2,
+        serviceCv: 0.4,
+        queueLimit: 256,
+        timeoutMs: 250,
+        retries: 2,
+      }),
+      node('sessions', 'db', 'Session store', 560, 190, {
+        capacity: 2,
+        instances: 3,
+        serviceMs: 12,
+        serviceCv: 0.5,
+        queueLimit: 64,
+        readFraction: 1,
+        lockMs: 0,
+      }),
+    ],
+    edges: [edge('signins', 'auth'), edge('typing', 'auth'), edge('auth', 'sessions')],
+    faults: [...DC23_FAULTS],
+  },
+  captions: [
+    {
+      atMs: 0,
+      text: 'A normal day. Sign-ins and typing events both go through auth to the session store.',
+    },
+    {
+      atMs: 20_000,
+      text: "One of the store's three nodes goes offline. The two left are not enough.",
+    },
+    {
+      atMs: 25_000,
+      text: 'Sign-ins fail about as often as typing events. Nothing decides which matters more.',
+    },
+    { atMs: 45_000, text: 'The node is back, and the store works through the line.' },
+  ],
+  brief: {
+    id: 'incident-discord-2023',
+    version: 1,
+    name: 'Choose who gets the room',
+    brief:
+      "At 20s, one of the session store's three nodes goes offline until 45s. There is no time to grow the store in the middle of an outage, so you can't add slots. Signing in is what matters. Lose no more than 5 in 100 sign-ins, and keep the slowest 1 in 100 within 500ms. Typing events can wait.",
+    presetId: 'incident-discord-2023',
+    loadRps: 400,
+    budget: 0,
+    faults: DC23_FAULTS,
+    goals: [
+      { metric: 'errorRate', max: 5, route: 'signins' },
+      { metric: 'p99', max: 500, route: 'signins' },
+    ],
+    hints: [
+      'Growing the store is not an option today. Look at what is asking it for work.',
+      'Sign-ins and typing events share the auth service and the store. Which one could people live without for a while?',
+      'Look for a component that turns traffic away before it reaches auth, and put it on the typing path only.',
+    ],
+    lesson:
+      'With typing events held back, the store had room for sign-ins again. When there is not enough capacity for everything, choosing what gets it is part of the design, and choosing nothing means everything fails together. A limiter in front of everyone fails here, because it turns sign-ins away as readily as typing. Discord did the same in the real outage: turning off typing events and read markers brought about half of users back, and the cluster was doubled afterwards.',
+  },
+};
+
+/* ---------------- Coinbase, 29 January 2021 ---------------- */
+
+const CB21_FAULTS: readonly FaultEvent[] = [
+  { atMs: 20_000, action: 'cut', edgeId: 'lookup->memcached' },
+  { atMs: 30_000, action: 'restore', edgeId: 'lookup->memcached' },
+];
+
+const COINBASE21: Incident = {
+  id: 'incident-coinbase-2021',
+  name: 'A cache reboot swamps its database',
+  date: '29 January 2021',
+  tagline: 'Sized for the misses, not for all of it',
+  source: {
+    title: 'Incident Post Mortem: January 29, 2021',
+    url: 'https://www.coinbase.com/blog/incident-post-mortem-january-29-2021',
+  },
+  // From the postmortem, in order: "a Redis cluster used to store spot rates
+  // for currency conversions"; "A Memcached node reboots" and "a brief spike
+  // in cache misses"; "The application code fell through to Redis to load
+  // this data because of the Memcached misses"; "a 50x increase in the
+  // number of Redis connections", "CPU utilization jumped to 100% and it
+  // stopped being able to respond to queries within a 1 second timeout",
+  // "the error rate on our price data API endpoints was around 90%"; "These
+  // timeouts prevented memcached from replenishing its cache"; buying,
+  // selling and trading "were intermittently available" from 4:25am to
+  // 9:31am PST; "provision a new, much larger Redis cluster"; "The Redis
+  // cluster was underprovisioned" and "We were not making use of read-only
+  // replicas on this cluster". Chosen over Slack's 2022 cache outage, whose
+  // fix was letting the cache refill slowly, which the engine cannot show.
+  story: [
+    'Coinbase kept the exchange rates it uses for currency conversions in Redis, and read them through Memcached.',
+    'A Memcached node rebooted, and for a moment many reads missed the cache and fell through to Redis.',
+    'Serving them took about 50 times as many Redis connections. Redis hit full CPU and stopped answering within its 1 second timeout, and about 90% of requests for price data failed.',
+    'The timeouts kept Memcached from refilling, so the load on Redis never let up. For about five hours, buying, selling and trading in the app worked only some of the time.',
+    'Coinbase brought up a new, much larger Redis cluster and pointed a fresh deployment at it.',
+    'The postmortem says the old cluster was underprovisioned and was not using read-only replicas, and Coinbase is looking at reading from replicas more widely.',
+  ],
+  simNote:
+    "The real outage lasted about five hours, because the cache could not refill. This model's cache cannot go cold, so here Memcached is out of reach from 20s to 30s, and everything recovers when it is back. Price lookup only uses its line to Redis while Memcached cannot be reached.",
+  scene: {
+    nodes: [
+      node('readers', 'client', 'Price readers', 40, 190, {
+        rps: 300,
+        timeoutMs: 2000,
+      }),
+      node('app', 'service', 'App servers', 300, 190, {
+        capacity: 64,
+        serviceMs: 5,
+        serviceCv: 0.4,
+        queueLimit: 256,
+        timeoutMs: 1000,
+      }),
+      node('lookup', 'lb', 'Price lookup', 560, 190),
+      node('memcached', 'cache', 'Memcached', 820, 60, { hitRate: 0.95, serviceMs: 1 }),
+      node('redis', 'db', 'Redis', 820, 320, {
+        capacity: 2,
+        serviceMs: 10,
+        serviceCv: 0.5,
+        queueLimit: 256,
+        readFraction: 1,
+        lockMs: 0,
+      }),
+    ],
+    edges: [
+      edge('readers', 'app'),
+      edge('app', 'lookup'),
+      // Every read tries Memcached. The lookup only uses its line to Redis
+      // when Memcached cannot be reached, which is what weight 0 means here.
+      edge('lookup', 'memcached'),
+      { ...edge('lookup', 'redis'), weight: 0 },
+      edge('memcached', 'redis'),
+    ],
+    faults: [...CB21_FAULTS],
+  },
+  captions: [
+    {
+      atMs: 0,
+      text: 'A normal day. Reads go to Memcached, and only the few it misses reach Redis.',
+    },
+    {
+      atMs: 20_000,
+      text: 'A Memcached node reboots. Every read now falls through to Redis.',
+    },
+    {
+      atMs: 25_000,
+      text: 'Redis cannot keep up. Reads pile up at the app servers, which start turning new ones away.',
+    },
+    {
+      atMs: 30_000,
+      text: 'Memcached is back here, and Redis works through the line. In the real outage the cache could not refill, and it lasted hours.',
+    },
+  ],
+  brief: {
+    id: 'incident-coinbase-2021',
+    version: 1,
+    name: 'Ready for an empty cache',
+    brief:
+      'At 20s, a Memcached node reboots, and for 10 seconds every read goes straight to Redis. Keep the app working through it. Lose no more than 2 in 100 reads, and keep the slowest 1 in 100 within 300ms. You can add up to 16 slots.',
+    presetId: 'incident-coinbase-2021',
+    loadRps: 300,
+    budget: 16,
+    faults: CB21_FAULTS,
+    goals: [
+      { metric: 'errorRate', max: 2 },
+      { metric: 'p99', max: 300 },
+    ],
+    hints: [
+      'A better hit rate does not help while Memcached is out of reach.',
+      'Compare how many reads a second reach Redis while Memcached is away with how many Redis can answer.',
+      'Look at Redis. How many reads can it work on at once, and could copies of it share them?',
+    ],
+    lesson:
+      'Redis had room for the reads Memcached missed, not for all of them. When the cache went away, the full load landed on it at once. A bigger Redis, or copies that share the reads, gives it room for the moment the cache is not there. Coinbase replaced the cluster with a much larger one and is looking at reading from its replicas. In the real outage the timeouts also kept the cache from refilling, which is why it lasted hours, and this model does not show that part.',
+  },
+};
+
+export const INCIDENTS: readonly Incident[] = [
+  S3,
+  CLOUDFLARE,
+  AWS21,
+  COINBASE26,
+  DISCORD23,
+  COINBASE21,
+];
 
 /** The briefs, for the challenge store and lookup by id. */
 export const INCIDENT_BRIEFS: readonly Challenge[] = INCIDENTS.map((i) => i.brief);

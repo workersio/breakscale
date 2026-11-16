@@ -56,55 +56,115 @@
    -------------------------------------------------------------------------- */
 
 .ins-head {
+  /* Pinned: the name stays in view while the panel scrolls, so a student
+     ten fields down still knows which component they are changing. The
+     negative margins reach over the scroll area's padding so content
+     passes under an opaque band rather than showing through its edges. */
+  position: sticky;
+  z-index: 4;
+  top: calc(var(--sp-5) * -1);
   display: flex;
   flex-direction: column;
   gap: var(--sp-1);
-  /* Reserves the space the input's own focus ring needs, so focusing the
-     title does not shove the blurb below it. */
-  margin-bottom: var(--sp-4);
+  margin: calc(var(--sp-5) * -1) calc(var(--sp-5) * -1) var(--sp-3);
+  padding: var(--sp-5) var(--sp-5) var(--sp-2);
+  border-bottom: var(--bw) solid transparent;
+  background: var(--surface);
+  /* A hairline fades in under the band once the panel has scrolled, so the
+     fields passing beneath it have an edge to pass under. Where scroll-driven
+     animation is not supported the band simply has no line. */
+  animation: ins-head-edge linear both;
+  animation-timeline: scroll(nearest block);
+  animation-range: 0 var(--sp-4);
+}
+
+@keyframes ins-head-edge {
+  to {
+    border-bottom-color: var(--border);
+  }
 }
 
 /* The title does not look like a field until you reach for it. Renaming is
    a normal thing to do here, but a permanently boxed input would make the
    whole panel read as a form to be filled in rather than a thing to read.
 
+   Scoped under .ins-head so it outranks the global input[type='text'] rule,
+   which otherwise drew a box round it at rest.
+
    Negative left margin cancels the padding, so the title's first glyph sits
    on exactly the same axis as every label below it. The padding has to
    exist for the hover and focus states to have room. */
-.ins-title {
+.ins-head .ins-title {
   width: calc(100% + var(--sp-2) * 2);
-  height: 32px;
+  height: 36px;
   margin-left: calc(var(--sp-2) * -1);
   padding: 0 var(--sp-2);
   border: var(--bw) solid transparent;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-btn);
   background: transparent;
+  box-shadow: none;
   color: var(--text);
-  font-size: var(--fs-num);
-  font-weight: var(--fw-num);
-  letter-spacing: var(--tr-num);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-med);
+  line-height: var(--lh-num);
+  letter-spacing: var(--tr-lg);
+  text-overflow: ellipsis;
 }
 
-.ins-title:hover:not(:focus) {
+.ins-head .ins-title:hover:not(:focus) {
   background: var(--surface-2);
   border-color: var(--border);
 }
 
-.ins-title:focus {
+.ins-head .ins-title:focus {
   background: var(--surface);
   border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-ring);
 }
 
 /* Pressed, but only while it is not already being edited: once focused the
    field is a text input and a press inside it is a caret placement, not a
    button press. */
-.ins-title:active:not(:focus) {
+.ins-head .ins-title:active:not(:focus) {
   background: var(--surface-3);
   border-color: var(--border-strong);
 }
 
 .ins-kind {
   color: var(--text-faint);
+}
+
+/* What the kind is, from the glossary, under the name. Quiet: --text-dim at
+   the small step, the same ink as .ins-blurb below it. The link is the
+   tooltip's "see also" treatment, underlined so it is not colour alone. */
+.ins-what {
+  margin: 0 0 var(--sp-2);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  text-wrap: pretty;
+}
+
+.ins-learn {
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--accent-ink);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.ins-learn:hover {
+  color: var(--accent);
+}
+
+.ins-learn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* The one-line explanation of what this kind does. Real prose: it is the
@@ -145,8 +205,8 @@
 }
 
 /* The words printed on the node's box, defined. A key rather than a
-   readout, so it stays one step quieter than the stats: label-size caps in
-   the box's own register on the left, the definition in dim prose beside it.
+   readout, so it stays one step quieter than the stats: the word as the box
+   prints it on the left, the definition in dim prose beside it.
    --text-dim on --surface is 7.06:1 light and 7.01:1 dark. */
 .ins-box-key {
   margin-bottom: var(--sp-5);
@@ -168,12 +228,11 @@
   display: contents;
 }
 
+/* The word as the box prints it, lower case: "busy", "p99", "waiting". */
 .ins-box-key dt {
-  font-size: var(--fs-label);
-  font-weight: var(--fw-num);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-med);
   line-height: var(--lh-sm);
-  letter-spacing: var(--tr-label);
-  text-transform: uppercase;
   color: var(--text-dim);
 }
 
@@ -298,13 +357,27 @@
   gap: var(--sp-1);
 }
 
+.ins-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 32px;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+
+.ins-toggle input {
+  flex: none;
+  margin: 0;
+}
+
 .ins-hint {
   /* One line of plain English under a knob whose name is ambiguous next to
      its neighbour (instances vs capacity, shardCount vs shardCapacity).
      Dim and small on purpose: it is there for the first read and must not
      compete with the value once the student knows what the field means. */
   margin: 0;
-  font-size: var(--fs-label);
+  font-size: var(--fs-sm);
   line-height: var(--lh-sm);
   /* Resolves through --status-ink so `.ins-hint.is-warn` actually turns
      warm — see the status block in index.css for why this indirection
@@ -343,12 +416,174 @@
   gap: var(--sp-2);
 }
 
-/* 84px holds five digits plus the caret at 14px mono with room to spare —
-   the "4-digit number where 2 were expected" case, which must not clip. */
+/* A label that scrubs: drag it sideways to walk the value. pan-y leaves a
+   vertical swipe to the panel's scroll on touch. */
+.ins-scrub {
+  cursor: ew-resize;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* The stepper: minus, the figure, plus, in one box. Same height, border and
+   radius as every other input, so a number field and a select line up, and
+   the figure keeps the mono, tabular setting of the slider readouts. */
+.ins-stepper {
+  display: inline-flex;
+  flex: none;
+  align-items: stretch;
+  height: 32px;
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-btn);
+  background: var(--surface);
+  overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.ins-stepper:hover:not([data-disabled]) {
+  border-color: var(--line-2);
+}
+
+.ins-stepper:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-ring);
+}
+
+.ins-stepper[data-disabled] {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.ins-step {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.ins-step:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.ins-step:active:not(:disabled) {
+  background: var(--surface-3);
+}
+
+.ins-step:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+
+/* The figure inside the stepper carries no box of its own. Six digit widths
+   hold 20000 and the caret without clipping. */
+.ins-stepper .ins-number {
+  width: calc(6ch + var(--sp-3));
+  height: auto;
+  padding: 0 var(--sp-1);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  text-align: center;
+}
+
+.ins-stepper .ins-number:hover:not(:disabled),
+.ins-stepper .ins-number:focus,
+.ins-stepper .ins-number:focus-visible {
+  border: 0;
+  box-shadow: none;
+}
+
+/* The figure box beside a select or elsewhere outside a stepper. */
 .ins-number {
   flex: none;
   width: 84px;
   height: 32px;
+}
+
+/* The rest of a long hint, shown on hover or focus of its info mark. It
+   floats under the row, the row's own width, so it never pushes the panel
+   sideways or reflows the fields below it. */
+.ins-field,
+.ins-field-row {
+  position: relative;
+}
+
+.ins-more {
+  white-space: nowrap;
+}
+
+.ins-more-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--text-faint);
+  vertical-align: -3px;
+  cursor: help;
+}
+
+.ins-more-btn:hover,
+.ins-more-btn:focus-visible {
+  color: var(--text);
+}
+
+.ins-more-pop {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + var(--sp-1));
+  left: 0;
+  right: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  text-wrap: pretty;
+  white-space: normal;
+  visibility: hidden;
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    visibility 0s linear var(--dur-fast);
+}
+
+.ins-more:hover > .ins-more-pop,
+.ins-more-btn:focus + .ins-more-pop {
+  visibility: visible;
+  opacity: 1;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+/* A choice worded in a phrase ("Before it answers") rather than a number
+   takes the width of its longest option instead of clipping it. */
+.ins-number.is-phrase {
+  width: auto;
+  max-width: 100%;
+}
+
+/* A select holds a word, not a figure: wide enough for "Thundering herd". */
+select.ins-number {
+  width: auto;
+  min-width: 84px;
+  max-width: 100%;
 }
 
 /* A mixed multi-selection shows a placeholder rather than one node's value
@@ -364,6 +599,7 @@
 .ins-unit {
   flex: 1 1 auto;
   min-width: 0;
+  text-wrap: balance;
   text-transform: none;
   letter-spacing: 0;
   font-size: var(--fs-sm);
@@ -484,19 +720,18 @@
 /* --------------------------------------------------------------------------
    Footer
 
-   Pinned below the scroll area so the destructive action never scrolls out
-   of reach, and never drifts up under the last field either.
+   The last thing in the scroll area, after every reading. It used to be
+   pinned under it, always in view, and covered Fix and Cut cable as the
+   panel scrolled; a delete is rare and one undo brings it back.
    -------------------------------------------------------------------------- */
 
-/* The footer's right padding has to clear the SCROLLBAR the body above it
-   reserves, or the one full-width control in the panel is the only thing
-   that does not share the content column's right edge. Measured: every value
-   row ended at 1965.6 and the delete button at 1973.6, exactly 8px past —
-   and it is the destructive action, so that is where the eye goes. */
 .ins-foot {
-  flex: none;
-  padding: var(--sp-3) calc(var(--sp-5) + var(--scrollbar-w)) var(--sp-3) var(--sp-5);
-  background: var(--surface);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-7);
+  padding-top: var(--sp-4);
+  border-top: var(--bw) solid var(--border);
 }
 
 /* Destructive, and QUIET until wanted.
@@ -511,8 +746,11 @@
    and focus, at the moment the student has actually reached for it. */
 .ins-delete {
   align-self: flex-start;
+  /* Apart from Duplicate and Copy, so a slip does not land on it. */
+  margin-left: auto;
   border-color: transparent;
   background: transparent;
+  box-shadow: none;
   color: var(--text-dim);
 }
 
@@ -614,10 +852,143 @@
   min-width: 52px;
 }
 
+/* The one-step buttons beside the number, touch only. 32px drawn, 44px to a
+   finger: the extra is an invisible margin of the button itself. */
+.traffic-nudge {
+  position: relative;
+  align-self: center;
+}
+
+.traffic-nudge {
+  min-width: 32px;
+  min-height: 32px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.traffic-nudge::before {
+  content: '';
+  position: absolute;
+  inset: -6px;
+}
+
+/* Phone landscape folds the readout into a narrow column with no room for
+   them; the tappable scale marks still give a finger exact values there. */
+@media (pointer: coarse) and (max-height: 500px) {
+  .traffic-nudge {
+    display: none;
+  }
+}
+
 .traffic-load-unit {
   color: var(--text-faint);
   text-transform: none;
   letter-spacing: 0;
+}
+
+/* What clients really sent while a traffic shape moves the rate around the
+   base, with the word "base" that says what the big figure is. Kept at
+   every width, unlike the unit: it is a measurement. */
+.traffic-load-now {
+  color: var(--text-dim);
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+/* Wide enough for the longest rate ("250k/s"), so the chip after it stays
+   put while a spike or a herd moves the figure. */
+.traffic-load-now .num {
+  display: inline-block;
+  min-width: 6ch;
+  color: var(--text);
+}
+
+/* The load as a multiple of the design's 1x. Sized to sit on the numeral's
+   line without growing the bar; the hit area is widened by ::after so it
+   still meets the touch floor. */
+.traffic-multiple-wrap {
+  position: relative;
+  align-self: center;
+  margin-left: var(--sp-1);
+}
+
+.traffic-multiple {
+  position: relative;
+  height: 22px;
+  padding: 0 var(--sp-1);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+button.traffic-multiple {
+  background: var(--surface-2);
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+button.traffic-multiple::after {
+  content: '';
+  position: absolute;
+  inset: -11px -4px;
+}
+
+button.traffic-multiple:hover,
+button.traffic-multiple[aria-expanded='true'] {
+  background: var(--surface-3);
+}
+
+.traffic-multiple.is-static {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-dim);
+}
+
+.traffic-multiple-panel {
+  position: absolute;
+  top: calc(100% + var(--sp-2));
+  /* Centred under the chip, so on a phone, where the chip sits mid-row, the
+     panel stays on screen on both sides. */
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  width: 15rem;
+  max-width: calc(100vw - 32px);
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  background: var(--surface);
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+}
+
+.traffic-multiple-text {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.traffic-multiple-text .num {
+  color: var(--text);
+}
+
+.traffic-multiple-quick {
+  display: flex;
+  gap: var(--sp-1);
+}
+
+.traffic-multiple-quick .btn {
+  flex: 1 1 0;
+}
+
+.traffic-multiple-reset {
+  justify-content: center;
 }
 
 .traffic-load-track {
@@ -659,6 +1030,14 @@
   white-space: nowrap;
 }
 
+.traffic-no-replies {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  /* The hero's line box, so the bar keeps its height when this stands in. */
+  line-height: calc(var(--fs-hero) * var(--lh-hero));
+  white-space: nowrap;
+}
+
 .traffic-scale-note {
   position: absolute;
   inset: auto 0 0;
@@ -671,6 +1050,31 @@
   font-size: var(--fs-sm);
   line-height: 12px;
   white-space: nowrap;
+}
+
+/* Tappable marks: the scale takes the pointer, and each mark gets a 44px
+   wide target that reaches down under the bar's edge, away from the
+   slider's own hit area above it. */
+.traffic-scale.is-tap {
+  pointer-events: auto;
+}
+
+.traffic-scale.is-tap .traffic-scale-mark {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: var(--mono);
+  cursor: pointer;
+}
+
+.traffic-scale.is-tap .traffic-scale-mark::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: -2px;
+  width: 44px;
+  height: 32px;
+  transform: translateX(-50%);
 }
 
 .traffic-scale-mark {
@@ -717,6 +1121,13 @@
   min-width: 0;
 }
 
+/* With nothing to measure the slot holds a sentence, not fixed-width
+   figures, so it may give up width and wrap rather than push the bar onto
+   two rows the moment the canvas is cleared. */
+.traffic-headline:has(> .traffic-empty) {
+  flex: 0 1 auto;
+}
+
 /* No components on the canvas: one quiet sentence where the numbers go. */
 .traffic-empty {
   margin: 0;
@@ -748,7 +1159,9 @@
    "117ms". Same rationale as .traffic-load-readout .num-lg. Desktop only:
    on phone the metric is a row (label beside value) and a fixed column
    width clips it; the slider is on its own line there anyway. */
-@media (min-width: 721px) {
+@media (min-width: 721px) and (min-height: 501px),
+  (min-width: 721px) and (pointer: fine),
+  (min-width: 721px) and (pointer: none) {
   .traffic-headline > .traffic-metric:first-child {
     flex: none;
     width: 98px;
@@ -818,6 +1231,21 @@
   color: var(--accent);
 }
 
+/* Play speed. A width, for the same reason as the toggle: "0.5×" and "2×"
+   must not move the buttons beside them. 36px, the icon buttons' width,
+   holds "0.5×" at this size; 48 pushed the bar onto two rows at 1280. */
+.traffic-actions .transport-speed {
+  width: 36px;
+  padding: 0;
+  font-size: var(--fs-sm);
+  letter-spacing: -0.02em;
+}
+
+/* Asked for more than this machine manages, and saying the real figure. */
+.traffic-actions .transport-speed.is-short {
+  color: var(--warn);
+}
+
 /* The optical-centre nudge for the play triangle (see the JSX comment). */
 .transport-play {
   transform: translateX(1px);
@@ -843,8 +1271,8 @@
           keeping three more figures would crush the one control the
           student drives, so the figures go and the slider springs back.
           The charts strip still carries every one of these numbers.
-     620  the slider's floor comes down to 260 and the headline tightens.
-     560  the "requests / sec" unit and the spacer gap go to zero, and the
+     620  the slider's floor comes down to 232 and the headline tightens.
+     560  the "requests a second" unit and the spacer gap go to zero, and the
           slider may reach 220. The slider's aria-valuetext still says the
           unit, and this fires only in sub-900px windows where the p99
           hero, the slider and the transport are worth more than a word.
@@ -852,8 +1280,36 @@
    Never dropped: the load slider, the p99 hero, the transport.
    -------------------------------------------------------------------------- */
 
+/* The failing figure that stands in for the whole group once it is hidden. */
+.traffic-failing {
+  display: none;
+}
+
+.traffic-unit-short {
+  display: none;
+}
+
+/* The top bar's captions are names, not section headings, so they are
+   sentence case: "System p99", "Offered load". */
+.traffic-load-head > .label,
+.traffic-metric .label {
+  font-size: var(--fs-sm);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 @container traffic (max-width: 860px) {
   .traffic-metric-group {
+    display: none;
+  }
+
+  .traffic-failing {
+    display: flex;
+  }
+
+  /* The empty canvas says the same thing in its own middle, and here the
+     sentence wrapped to four lines in a 56px island. */
+  .traffic-empty {
     display: none;
   }
 
@@ -863,8 +1319,10 @@
 }
 
 @container traffic (max-width: 620px) {
+  /* 232, not 260: the speed button took 35px of the transport, and at 260
+     the bar fell to two rows between 1280 and 1300 wide. */
   .traffic-load {
-    min-width: 260px;
+    min-width: 232px;
   }
 }
 
@@ -901,7 +1359,7 @@
    supply, and the gap between them is enough separation.
    -------------------------------------------------------------------------- */
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   /* Two rows, not three.
 
      The load control is the only thing in the phone header besides the
@@ -1041,9 +1499,10 @@
 /* --------------------------------------------------------------------------
    Fault controls ("Break it on purpose")
 
-   The buttons use the shared .btn-danger outline, so breaking a component
-   reads as a deliberate, destructive act and never as the happy path. Fix
-   is the plain .btn, because it is the way back.
+   Calm at rest: every fault is undoable, so the buttons are the plain .btn
+   until one is in force, when it takes the pressed danger look below. Fix
+   is the primary button while something is broken, because it is the way
+   back.
    -------------------------------------------------------------------------- */
 
 .ins-fault {
@@ -1061,10 +1520,97 @@
 }
 
 .ins-fault-row {
+  /* Anchors the hint's info popover (.ins-more-pop) to the row. */
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: var(--sp-1);
+}
+
+/* The faults on offer, as one segmented row. The track and the picked
+   segment are the Settings theme switch's: --surface-2 track, the picked one
+   lifted onto --surface with a hairline. --text-dim and --text on both
+   surfaces are measured in theme.contrast.test.ts. It wraps rather than
+   squeezing when a kind offers six. */
+.ins-seg {
+  /* Contains the .sr-only legend, which would otherwise anchor far up the
+     tree and stretch the panel's scroll box. */
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  padding: 2px;
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-btn);
+  background: var(--surface-2);
+}
+
+.ins-seg-opt {
+  position: relative;
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 var(--sp-2);
+  border: var(--bw) solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-med);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.ins-seg-opt:hover:not(.is-active) {
+  color: var(--text);
+}
+
+.ins-seg-opt.is-active {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+/* The radio itself is invisible but still the focusable control; the label
+   draws its ring. */
+.ins-seg-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.ins-seg-opt:has(.ins-seg-input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The fault in force, marked on its segment as well as in the status line:
+   a danger dot, a non-text mark at 3:1 or better on both segment fills. */
+.ins-seg-opt.is-live::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  margin-left: var(--sp-1);
+  border-radius: var(--r-pill);
+  background: var(--danger);
+}
+
+@media (pointer: coarse) {
+  .ins-seg-opt {
+    height: 44px;
+  }
 }
 
 .ins-fault-row .row-k {
@@ -1094,10 +1640,53 @@
 
 .ins-fault-cable {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-2);
   min-width: 0;
+}
+
+/* Cut, and the "⋯" for the rarer cable faults, at the row's end. */
+.ins-fault-cable-acts {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: auto;
+}
+
+.ins-cable-more {
+  position: relative;
+  display: inline-flex;
+}
+
+.ins-cable-more-btn {
+  padding-inline: var(--sp-2);
+}
+
+/* The menu: the tooltip's surface, under its button, right-aligned so it
+   stays inside the panel. */
+.ins-cable-menu {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + var(--sp-1));
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-2);
+  width: 220px;
+  padding: var(--sp-2);
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.ins-cable-menu-note {
+  display: block;
+  margin: 0;
 }
 
 .ins-fault-cable .row-k {
@@ -1128,4 +1717,50 @@
   box-shadow: none;
   cursor: not-allowed;
   transform: none;
+}
+
+/* The fault in force: pressed, not unavailable. Danger ink on the soft
+   danger fill (4.88:1 light, 5.24:1 dark) with a full danger border. */
+.ins-fault .btn[aria-pressed='true'],
+.ins-fault .btn[aria-pressed='true']:hover,
+.ins-fault .btn[aria-pressed='true']:active {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+  box-shadow: none;
+  cursor: default;
+  transform: none;
+}
+
+/* At the narrowest phones the step buttons need the room "requests" took;
+   the unit still reads "/s" and its definition is one tap away. */
+@media (max-width: 409px) and (pointer: coarse) {
+  .traffic-unit-long {
+    display: none;
+  }
+
+  .traffic-unit-short {
+    display: inline;
+  }
+}
+
+/* Touch targets: the name field, number boxes and fault selects were 32 to
+   36px tall. */
+@media (pointer: coarse) {
+  .ins-title,
+  .ins-number,
+  .ins-stepper {
+    min-height: 44px;
+  }
+
+  .ins-step {
+    width: 44px;
+  }
+}
+
+/* On a phone the hero is set at --fs-lg, the same size as "no replies". */
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
+  .traffic-no-replies {
+    line-height: var(--lh-hero);
+  }
 }

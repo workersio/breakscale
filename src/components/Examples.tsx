@@ -3,8 +3,11 @@ import { createPortal } from 'react-dom';
 import type { Incident } from '../sim/incidents';
 import type { Preset } from '../sim/presets';
 import { usePresence } from './presence';
+import { isCoarsePointer } from '../useCoarsePointer';
 import './Examples.css';
 import './Incidents.css';
+import { CloseButton } from './CloseButton';
+import { trapTab } from './trapTab';
 
 /* ==========================================================================
    The examples gallery.
@@ -65,7 +68,10 @@ export function Examples({
     const opener =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const card = cardRef.current;
-    searchRef.current?.focus();
+    // Not on a touch screen, where focusing the field raises the keyboard
+    // over the very list the reader opened this to look at.
+    if (isCoarsePointer()) card?.focus();
+    else searchRef.current?.focus();
     return () => {
       const active = document.activeElement;
       const inside = card?.contains(active as Node) ?? false;
@@ -123,6 +129,7 @@ export function Examples({
       <div
         ref={cardRef}
         className="ex-card"
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="ex-title"
@@ -131,13 +138,15 @@ export function Examples({
             e.preventDefault();
             e.stopPropagation();
             onClose();
+            return;
           }
+          trapTab(e, cardRef.current);
         }}
         onAnimationEnd={(e) => {
           if (closing && e.target === e.currentTarget) unmount();
         }}
       >
-        <header className="ex-head">
+        <div className="ex-head">
           <div>
             <h2 id="ex-title" className="ex-title">
               Examples
@@ -171,11 +180,9 @@ export function Examples({
                 Learning path
               </button>
             ) : null}
-            <button type="button" className="btn" onClick={onClose}>
-              Close
-            </button>
+            <CloseButton onClick={onClose} />
           </div>
-        </header>
+        </div>
 
         <input
           ref={searchRef}

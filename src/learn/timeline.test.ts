@@ -81,7 +81,7 @@ function snapAt(r: Run, ms: number): SimSnapshot {
   return s;
 }
 
-describe('timeline: Single server, Database slowed 5x', () => {
+describe('timeline: Single server, Database slowed 5×', () => {
   const top = preset('single-server');
   const db = idOf(top, 'db');
   const r = run(top, 20, (e, _t, ms) => {
@@ -91,19 +91,19 @@ describe('timeline: Single server, Database slowed 5x', () => {
 
   it('tells the story in order, cause first', () => {
     const order = [
-      'Database slowed down 5x.',
+      'Database slowed down 5×.',
       'Database: all 6 slots busy',
       'Database started turning away',
       'The fault on Database was cleared.',
       'Database is keeping up again.',
     ].map((s) => r.lines.indexOf(line(r.lines, s)));
     expect(order).toEqual([...order].sort((a, b) => a - b));
-    expect(r.lines[0]?.text).toBe('Database slowed down 5x.');
+    expect(r.lines[0]?.text).toBe('Database slowed down 5×.');
     expect(r.lines[0]?.tone).toBe('cause');
   });
 
   it("stamps the fault with the engine's own injection time", () => {
-    const fault = line(r.lines, 'Database slowed down 5x.');
+    const fault = line(r.lines, 'Database slowed down 5×.');
     const snap = snapAt(r, 3000);
     expect(snap.activeFailures[0]?.sinceMs).toBe(fault.atMs);
   });
@@ -124,7 +124,7 @@ describe('timeline: Single server, Database slowed 5x', () => {
 
   it('holds a condition for a second before it is a line', () => {
     const full = line(r.lines, 'Database: all 6 slots busy');
-    const fault = line(r.lines, 'Database slowed down 5x.');
+    const fault = line(r.lines, 'Database slowed down 5×.');
     expect(full.atMs - fault.atMs).toBeGreaterThanOrEqual(1000);
   });
 
@@ -227,5 +227,93 @@ describe('wantsAttention', () => {
   it('ignores what was already seen', () => {
     expect(wantsAttention([ev(1, 'cause'), ev(2, 'trouble', true)], 2)).toBe(false);
     expect(wantsAttention([ev(1, 'cause'), ev(2, 'better')], 1)).toBe(false);
+  });
+});
+
+describe('timeline: a connection delivering twice', () => {
+  it('says when a link starts delivering twice and when it stops', () => {
+    const top = preset('circuit-breaker');
+    const r = run(top, 4, (engine, _t, ms) => {
+      if (ms === 1000) engine.duplicateEdge('breaker->payments', 0.05);
+      if (ms === 2500) engine.undupEdge('breaker->payments');
+    });
+    const on = line(r.lines, 'The link from Circuit Breaker to Payments API started');
+    expect(on.text).toBe(
+      'The link from Circuit Breaker to Payments API started delivering 5% of requests twice.',
+    );
+    // `act` runs before the step, so the engine was at 900ms.
+    expect(on.atMs).toBe(900);
+    expect(
+      line(r.lines, 'The link from Circuit Breaker to Payments API delivers').text,
+    ).toBe(
+      'The link from Circuit Breaker to Payments API delivers each request once again.',
+    );
+  });
+});
+
+describe('timeline: a pause and lost answers', () => {
+  it('says when a part pauses and when it carries on by itself', () => {
+    const top = preset('circuit-breaker');
+    const r = run(top, 4, (engine, _t, ms) => {
+      if (ms === 1000) engine.injectFailure('payments', 'pause', { pauseMs: 1000 });
+    });
+    expect(line(r.lines, 'Payments API stalled').text).toBe(
+      'Payments API stalled for 1s.',
+    );
+    expect(line(r.lines, 'Payments API carries on').text).toBe(
+      'Payments API carries on.',
+    );
+  });
+
+  it('says when a link starts losing its answers and when it carries them again', () => {
+    const top = preset('circuit-breaker');
+    const r = run(top, 4, (engine, _t, ms) => {
+      if (ms === 1000) engine.cutReplies('breaker->payments');
+      if (ms === 2500) engine.restoreReplies('breaker->payments');
+    });
+    expect(
+      line(r.lines, 'The link from Circuit Breaker to Payments API started').text,
+    ).toBe(
+      'The link from Circuit Breaker to Payments API started losing the answers coming back.',
+    );
+    // The breaker has no timeout, so the calls that lost an answer still wait.
+    expect(
+      line(r.lines, 'The link from Circuit Breaker to Payments API carries').text,
+    ).toMatch(
+      /^The link from Circuit Breaker to Payments API carries answers back again, but \d+ calls are still waiting for answers it lost\.$/,
+    );
+  });
+
+  it('calls the link mended when its caller gives up on lost answers by itself', () => {
+    const top = preset('checkout');
+    const wire = top.edges.find((e) => e.from === 'api');
+    if (!wire) throw new Error('no api cable');
+    const r = run(top, 4, (engine, _t, ms) => {
+      if (ms === 1000) engine.cutReplies(wire.id);
+      if (ms === 2500) engine.restoreReplies(wire.id);
+    });
+    const restored = r.lines.find((l) => l.text.includes('carries answers back again'));
+    if (!restored) throw new Error('no restore line');
+    expect(restored.text).toMatch(
+      /^The link from Checkout API to .+ carries answers back again\.$/,
+    );
+    expect(restored.tone).toBe('better');
+  });
+
+  it('does not call the link mended while a caller with no timeout still waits', () => {
+    const top = preset('single-server');
+    const api = top.nodes.find((n) => n.kind === 'service');
+    const wire = top.edges.find((e) => e.from === api?.id);
+    if (!api || !wire) throw new Error('no api cable');
+    expect(api.config.timeoutMs ?? 0).toBe(0);
+    const r = run(top, 4, (engine, _t, ms) => {
+      if (ms === 1000) engine.cutReplies(wire.id);
+      if (ms === 2500) engine.restoreReplies(wire.id);
+    });
+    const restored = r.lines.find((l) => l.text.includes('carries answers back again'));
+    expect(restored?.text).toMatch(
+      /^The link from .+ carries answers back again, but \d+ calls are still waiting for answers it lost\.$/,
+    );
+    expect(restored?.tone).toBe('trouble');
   });
 });

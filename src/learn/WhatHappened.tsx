@@ -47,9 +47,13 @@ export function WhatHappened({ topology, snapshot }: WhatHappenedProps) {
      that opened it is read out from a status that is always mounted, before
      there is anything to say, or its first message would be missed. */
   const alert = firstAttention(lines, seenId);
+  /* What is read out is the newest line, not the one that opened the panel:
+     after Fix, "Database crashed." is history, and repeating it as the
+     current news told the reader the opposite of the truth. */
+  const latest = alert ? lines.reduce((a, e) => (e.id > a.id ? e : a), alert) : null;
   const status = (
     <div className="sr-only" role="status">
-      {alert ? <span key={alert.id}>What just happened: {alert.text}</span> : null}
+      {latest ? <span key={latest.id}>What just happened: {latest.text}</span> : null}
     </div>
   );
   // Nothing worth a look yet: no button, no panel. A healthy run stays quiet.
@@ -81,7 +85,7 @@ export function WhatHappened({ topology, snapshot }: WhatHappenedProps) {
             aria-expanded="false"
             onClick={() => setUserOpen(true)}
           >
-            <History size={16} strokeWidth={1.75} aria-hidden="true" />
+            <History size={16} strokeWidth={2} aria-hidden="true" />
             What just happened
           </button>
         </div>
@@ -94,15 +98,15 @@ export function WhatHappened({ topology, snapshot }: WhatHappenedProps) {
       {status}
       <div className="wh" data-chrome="what-happened">
         <section
-          className="wh-panel"
+          className="card-float wh-panel"
           data-spot-avoid
           aria-label="What just happened"
           onKeyDown={(e) => {
             if (e.key === 'Escape') close();
           }}
         >
-          <header className="wh-head">
-            <h2 className="wh-title">What just happened</h2>
+          <header className="card-float-head">
+            <h2 className="card-float-title">What just happened</h2>
             <button
               type="button"
               className="btn btn-sm btn-ghost btn-icon wh-close"
@@ -110,7 +114,7 @@ export function WhatHappened({ topology, snapshot }: WhatHappenedProps) {
               title="Close (Esc)"
               onClick={close}
             >
-              <X size={16} strokeWidth={1.75} aria-hidden="true" />
+              <X size={16} strokeWidth={2} aria-hidden="true" />
             </button>
           </header>
           {earlier > 0 ? (
@@ -121,7 +125,7 @@ export function WhatHappened({ topology, snapshot }: WhatHappenedProps) {
           <ol className="wh-list">
             {shown.map((e) => (
               <li key={e.id} className={`wh-line is-${e.tone}`}>
-                <span className="wh-at">{formatAt(e.atMs)}</span>
+                <span className="wh-at num">{formatAt(e.atMs)}</span>
                 <span className="wh-text">{e.text}</span>
               </li>
             ))}

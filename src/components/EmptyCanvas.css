@@ -5,7 +5,7 @@
   display: none;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   .cv-empty-wide {
     display: none;
   }
@@ -32,7 +32,9 @@
 /* The card is sized for the sentence, which is narrower than the three
    buttons. On a desktop they stay on one row and spill evenly past both
    sides of it; a phone lets them wrap. */
-@media (min-width: 721px) {
+@media (min-width: 721px) and (min-height: 501px),
+  (min-width: 721px) and (pointer: fine),
+  (min-width: 721px) and (pointer: none) {
   .cv-empty-actions {
     flex-wrap: nowrap;
   }

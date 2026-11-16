@@ -21,6 +21,7 @@
   align-items: flex-end;
   pointer-events: none;
   transition:
+    left var(--dur-base) var(--ease),
     right var(--dur-base) var(--ease),
     bottom var(--dur-base) var(--ease);
 }
@@ -36,9 +37,25 @@
 /* "Can you break it?" takes the right-hand column under the bar, the way a
    brief does (this panel is hidden in a brief), so this sits beside it. On
    a phone the break panel is a bottom sheet; see the phone block below. */
-@media (min-width: 721px) {
+@media (min-width: 721px) and (min-height: 501px),
+  (min-width: 721px) and (pointer: fine),
+  (min-width: 721px) and (pointer: none) {
   .app-body.has-challenge:not(.has-inspector) .wh {
     right: calc(var(--chal-w) + var(--sp-3) * 2);
+  }
+
+  /* Its left edge is the open rail's, so a narrow window shrinks the panel
+     rather than sliding its title under the rail. */
+  .wh {
+    left: var(--sp-3);
+  }
+
+  .app-body.has-library .wh {
+    left: calc(var(--rail-w) + var(--sp-3) * 2);
+  }
+
+  .wh-panel {
+    max-width: 100%;
   }
 }
 
@@ -51,42 +68,25 @@
 }
 
 .wh-panel {
-  display: flex;
-  flex-direction: column;
   width: min(380px, calc(100vw - var(--sp-4) * 2));
-  max-height: min(320px, 45vh);
-  background: var(--surface);
-  border: var(--bw) solid var(--border-strong);
-  border-radius: var(--r-btn);
-  box-shadow: var(--shadow-lg);
-}
-
-.wh-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  max-height: min(340px, 45vh);
+  /* The list scrolls inside the card's padding, not the card itself. */
   gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-2) 0 var(--sp-3);
-}
-
-.wh-title {
-  margin: 0;
-  font-size: var(--fs-base);
-  font-weight: var(--fw-med);
-  line-height: var(--lh-base);
-  color: var(--text);
+  padding-bottom: var(--sp-2);
 }
 
 .wh-earlier {
   margin: 0;
-  padding: 0 var(--sp-3);
   font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
   color: var(--text-dim);
 }
 
 .wh-list {
-  margin: 0;
-  padding: var(--sp-1) var(--sp-3) var(--sp-3);
+  /* Bleeds to the card's edge so the scrollbar sits there, not over text. */
+  margin: 0 calc(var(--sp-4) * -1);
+  padding: 0 var(--sp-4) var(--sp-2);
+  min-height: 0;
   list-style: none;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -96,23 +96,25 @@
   display: grid;
   /* Wide enough for "59.9s" and "1m 05s" in the mono stack. */
   grid-template-columns: 6ch 1fr;
-  gap: var(--sp-2);
-  padding: var(--sp-1) 0;
+  gap: var(--sp-3);
+  padding: 6px 0;
   font-size: var(--fs-sm);
-  line-height: var(--lh-base);
+  line-height: var(--lh-sm);
   color: var(--text);
 }
 
+.wh-line + .wh-line {
+  border-top: var(--bw) solid var(--border);
+}
+
+/* Left-aligned with the title above; tabular figures keep the column even. */
 .wh-at {
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: 'tnum' 1;
   color: var(--text-dim);
-  text-align: right;
 }
 
 .wh-text {
   text-wrap: pretty;
+  font-variant-numeric: tabular-nums;
 }
 
 /* What was done to the system gets weight as well as its words, so the
@@ -121,7 +123,7 @@
   font-weight: var(--fw-med);
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   .wh,
   .app-body.has-inspector .wh,
   .app-body.has-metrics .wh {

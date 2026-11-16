@@ -65,6 +65,11 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--sp-4);
+  /* The banded head every dialog shares: reaches the card's edges, with a
+     hairline under it. */
+  margin: calc(var(--sp-5) * -1) calc(var(--sp-5) * -1) 0;
+  padding: var(--sp-4) var(--sp-5) var(--sp-3);
+  border-bottom: var(--bw) solid var(--border);
 }
 
 .ex-head-actions {
@@ -79,7 +84,8 @@
   margin: 0;
   font-size: var(--fs-lg);
   font-weight: var(--fw-med);
-  line-height: var(--lh-sm);
+  line-height: var(--lh-num);
+  letter-spacing: var(--tr-lg);
   color: var(--text);
 }
 
@@ -201,13 +207,17 @@
   text-wrap: pretty;
 }
 
+/* The loaded example's tag: the shared "this is the one" look, a sentence-
+   case word on the accent-soft fill. */
 .ex-item-active {
+  align-self: flex-start;
   margin-top: auto;
-  padding-top: var(--sp-2);
-  font-size: var(--fs-label);
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  font-size: var(--fs-sm);
   font-weight: var(--fw-med);
-  letter-spacing: var(--tr-label);
-  text-transform: uppercase;
+  line-height: var(--lh-sm);
   color: var(--accent-ink);
 }
 
@@ -268,7 +278,7 @@
    Settings. Only the list scrolls. The header wraps its buttons under the
    title once both no longer fit on one line, so the title never wraps
    beside them. app-sheet-in / app-sheet-out are declared in App.css. */
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   .ex-root {
     place-items: end stretch;
     padding: 0;
@@ -311,4 +321,9 @@
   .ex-item {
     transition: none;
   }
+}
+
+/* Focused as a whole on a touch screen instead of its search field. */
+.ex-card:focus {
+  outline: none;
 }

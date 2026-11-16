@@ -1,23 +1,27 @@
 /* ==========================================================================
    The learning path.
 
-   Every example and every challenge, in an order a student can follow. The
-   Examples gallery is a flat grid and the challenges are grouped by
-   difficulty; neither says what to open first, or what a challenge builds
-   on. Here each track pairs the examples that show an idea with the
+   Every example, challenge and real incident, in an order a student can
+   follow. The Examples gallery is a flat grid and the challenges are grouped
+   by difficulty; neither says what to open first, or what a challenge
+   builds on. Here each track pairs the examples that show an idea with the
    challenges that make the student use it, so a brief arrives after the
-   system it is set in.
+   system it is set in. The real outages come last, once the student has
+   met every idea they turn on.
 
    Each id appears exactly once across the path. learningPath.test.ts holds
-   that against PRESETS and CHALLENGES, so a new example or brief fails the
-   suite until it is given a place here.
+   that against PRESETS, CHALLENGES and INCIDENTS, so a new example, brief
+   or outage fails the suite until it is given a place here.
    ========================================================================== */
 
-export type StepKind = 'example' | 'challenge';
+export type StepKind = 'example' | 'challenge' | 'incident';
 
 export interface PathStep {
   readonly kind: StepKind;
-  /** A preset id for an example, a challenge id for a challenge. */
+  /**
+   * A preset id for an example, a challenge id for a challenge, an incident
+   * id for a real outage. An outage is done when its brief is passed.
+   */
   readonly id: string;
   /** What the student will learn, in one line. */
   readonly learn: string;
@@ -33,6 +37,7 @@ export interface PathTrack {
 
 const ex = (id: string, learn: string): PathStep => ({ kind: 'example', id, learn });
 const ch = (id: string, learn: string): PathStep => ({ kind: 'challenge', id, learn });
+const inc = (id: string, learn: string): PathStep => ({ kind: 'incident', id, learn });
 
 export const LEARNING_PATH: readonly PathTrack[] = [
   {
@@ -120,6 +125,25 @@ export const LEARNING_PATH: readonly PathTrack[] = [
     ],
   },
   {
+    id: 'verification',
+    title: 'Checking correctness',
+    about: 'Fast and up is not enough. Check what happened to the data.',
+    steps: [
+      ex('checkout', 'Run Can you break it? and watch it find a double charge.'),
+      ch('charged-twice', 'See why a retry after a timeout can charge a card twice.'),
+      ch('lost-on-the-way-back', 'Make a retry safe when only the answer was lost.'),
+      ch('sent-twice', 'Catch a request the network delivered twice.'),
+      ch(
+        'saved-then-gone',
+        'See what "saved" means when a store answers before its disk.',
+      ),
+      ch(
+        'read-your-own-write',
+        'Give people their own writes back from copies that lag.',
+      ),
+    ],
+  },
+  {
     id: 'real-systems',
     title: 'Real systems',
     about: 'Put it all together, then take apart systems you have heard of.',
@@ -133,6 +157,34 @@ export const LEARNING_PATH: readonly PathTrack[] = [
       ex('spotify', 'Watch a batch job make the slowest requests rise and fall.'),
       ex('twitter', 'See one celebrity post turn into a flood of writes.'),
       ex('stripe', 'See why a payment system refuses work rather than charge twice.'),
+    ],
+  },
+  {
+    id: 'outages',
+    title: 'Real outages',
+    about: 'Six real outages, rebuilt small. Watch each one, then fix it.',
+    steps: [
+      inc(
+        'incident-s3-2017',
+        'See a status page go down with the thing it reports on.',
+      ),
+      inc(
+        'incident-cloudflare-2019',
+        'Roll a change out in stages, so a bad one hits only part.',
+      ),
+      inc('incident-aws-2021', 'See retries that never back off keep a network down.'),
+      inc(
+        'incident-coinbase-2021',
+        'See what a database sized for misses does when the cache empties.',
+      ),
+      inc(
+        'incident-discord-2023',
+        'Choose which work gets the room when there is not enough.',
+      ),
+      inc(
+        'incident-coinbase-2026',
+        'Make a failover happen with nobody there to press the button.',
+      ),
     ],
   },
 ];

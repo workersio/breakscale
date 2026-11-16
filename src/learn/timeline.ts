@@ -6,7 +6,7 @@ import {
   formatPct,
   formatRateBare,
 } from '../components/format';
-import { formatFactor } from '../components/faultWiring';
+import { formatDownFor, formatFactor } from '../components/faultWiring';
 import {
   FULL,
   MIN_RATE,
@@ -130,6 +130,10 @@ export class Timeline {
   private configs = new Map<string, NodeConfig>();
   private faults = new Map<string, string>();
   private cuts = new Set<string>();
+  /** Links delivering some requests twice, by edge id, with the share. */
+  private dups = new Map<string, number>();
+  /** Links losing their answers, by edge id. */
+  private replyCuts = new Set<string>();
   private load = 0;
   private loadEdit: OpenEdit | null = null;
   private fieldEdits = new Map<string, OpenEdit>();
@@ -192,6 +196,8 @@ export class Timeline {
     this.dropped = 0;
     this.faults.clear();
     this.cuts.clear();
+    this.dups.clear();
+    this.replyCuts.clear();
     this.parts.clear();
     this.fieldEdits.clear();
     this.loadEdit = null;
@@ -358,9 +364,15 @@ export class Timeline {
       const f = byNode.get(id);
       if (f) this.push(f.sinceMs, faultText(f, this.name(id)), 'cause');
     }
-    for (const id of this.faults.keys()) {
+    for (const [id, key] of this.faults) {
       if (!now.has(id) && this.nodeIds.has(id)) {
-        this.push(t, `The fault on ${this.name(id)} was cleared.`, 'better');
+        // A restart and a pause end by themselves; nobody cleared them.
+        const text = key.startsWith('restart|')
+          ? `${this.name(id)} is back up.`
+          : key.startsWith('pause|')
+            ? `${this.name(id)} carries on.`
+            : `The fault on ${this.name(id)} was cleared.`;
+        this.push(t, text, 'better');
       }
     }
     this.faults = now;
@@ -380,6 +392,66 @@ export class Timeline {
       }
     }
     this.cuts = cuts;
+
+    // Links delivering twice. Absent from the snapshot while none is.
+    const dups = new Map<string, number>();
+    for (const d of snapshot.duplicating ?? []) {
+      dups.set(d.edgeId, d.rate);
+      if (this.dups.get(d.edgeId) !== d.rate) {
+        this.push(
+          d.sinceMs,
+          `The link ${this.link(d.edgeId)} started delivering ${formatPct(d.rate)} of requests twice.`,
+          'cause',
+        );
+      }
+    }
+    for (const id of this.dups.keys()) {
+      if (!dups.has(id) && id in snapshot.edgeState) {
+        this.push(
+          t,
+          `The link ${this.link(id)} delivers each request once again.`,
+          'better',
+        );
+      }
+    }
+    this.dups = dups;
+
+    // Links losing their answers, absent the same way.
+    const replyCuts = new Set<string>();
+    for (const r of snapshot.repliesCut ?? []) {
+      replyCuts.add(r.edgeId);
+      if (!this.replyCuts.has(r.edgeId)) {
+        this.push(
+          r.sinceMs,
+          `The link ${this.link(r.edgeId)} started losing the answers coming back.`,
+          'cause',
+        );
+      }
+    }
+    for (const id of this.replyCuts) {
+      if (!replyCuts.has(id) && id in snapshot.edgeState) {
+        // A caller with no timeout is still waiting on what was lost, so
+        // the link is mended but the caller is not.
+        const waiting =
+          snapshot.repliesStranded?.find((r) => r.edgeId === id)?.waiting ?? 0;
+        if (waiting > 0) {
+          const calls =
+            waiting === 1 ? '1 call is' : `${formatCount(waiting)} calls are`;
+          this.push(
+            t,
+            `The link ${this.link(id)} carries answers back again, but ${calls} still waiting for answers it lost.`,
+            'trouble',
+          );
+        } else {
+          this.push(
+            t,
+            `The link ${this.link(id)} carries answers back again.`,
+            'better',
+          );
+        }
+      }
+    }
+    this.replyCuts = replyCuts;
   }
 
   private edgeEnds = new Map<string, [string, string]>();
@@ -582,6 +654,10 @@ function faultText(f: ActiveFailure, name: string): string {
       return `${name} crashed.`;
     case 'crash-instance':
       return `One of ${name}'s machines crashed.`;
+    case 'restart':
+      return `${name} restarted.`;
+    case 'pause':
+      return `${name} stalled for ${formatDownFor(f.pauseMs ?? 0)}.`;
     case 'slow':
       return `${name} slowed down ${formatFactor(f.factor ?? 1)}.`;
     case 'errors':

@@ -132,7 +132,7 @@ describe('findBottleneck', () => {
     });
     expect(problemAt(slowed)).toBe(idOf(slowed.topology, 'Database'));
     expect(slowed.verdict.text).toMatch(
-      /^Database: you slowed it 5x\. Now all 6 slots busy/,
+      /^Database: you slowed it 5×\. Now all 6 slots busy/,
     );
 
     const crashed = runFor(preset('single-server'), 6, {

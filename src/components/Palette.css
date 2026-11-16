@@ -256,7 +256,6 @@
 .pal-row.is-armed {
   background: var(--accent-soft);
   color: var(--accent-ink);
-  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .pal-row.is-armed .pal-glyph {
@@ -292,69 +291,13 @@
    -------------------------------------------------------------------------- */
 
 /* --------------------------------------------------------------------------
-   A component row and its explain mark.
-
-   The <li> becomes the flex line so the mark can sit beside the button
-   without being inside it. The button still takes all the width it can, so
-   the click and drag target is unchanged from when it was the only child.
+   A component row. The button takes the full width of its line, so the click
+   and drag target is the whole row.
    -------------------------------------------------------------------------- */
 
 .pal-item {
   display: flex;
   align-items: center;
-}
-
-/* The mark is quiet until the row is engaged. Thirty-three permanent question
-   marks down a 224px rail would read as clutter and compete with the names
-   they annotate; revealed on hover or focus they are exactly as discoverable
-   as they need to be, and a keyboard user reaches one by tabbing.
-
-   `opacity`, not `display`, so the space is always reserved: the names must
-   not shift sideways when a row is hovered. */
-.pal-explain {
-  flex: none;
-  display: grid;
-  place-items: center;
-  /* CONTAINING BLOCK FOR THE .sr-only LABEL INSIDE IT.
-
-     .sr-only is `position: absolute` with a 1px box. Absolute positioning
-     resolves against the nearest POSITIONED ancestor, and without this line
-     there is none until far up the tree, so all 33 labels anchored to a
-     distant ancestor and were laid out at their own document offsets rather
-     than here. Individually invisible, collectively they extended the
-     document's scroll box by 638px, and the whole fixed-viewport app could
-     be scrolled off the top of the window.
-
-     Measured, not theorised: documentElement.scrollHeight was 1639 against a
-     1001px viewport, and window.scrollTo(0, 900) moved the app. Verified
-     back to a non-scrolling page after this rule. */
-  position: relative;
-  /* 24px: the minimum comfortable pointer target. It was 20px wide — under
-     the guideline, on a mark whose entire job is to be aimed at. */
-  width: 24px;
-  height: 24px;
-  margin-right: var(--sp-2);
-  border-radius: var(--r-sm);
-  color: var(--text-faint);
-  font-size: var(--fs-label);
-  font-weight: var(--fw-med);
-  line-height: 1;
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease);
-}
-
-.pal-item:hover .pal-explain,
-.pal-explain:focus-visible,
-.pal-explain[data-open='true'] {
-  opacity: 1;
-}
-
-/* Engaged, it takes the same accent treatment every other .term does; the
-   shared rules in Tooltip.css supply the tint, this only raises the ink so
-   the glyph itself is legible rather than staying at --text-faint. */
-.pal-explain:hover,
-.pal-explain[data-open='true'] {
-  color: var(--accent-ink);
 }
 
 .pal-row {
@@ -374,6 +317,10 @@
   letter-spacing: var(--tr-base);
   text-align: left;
   cursor: grab;
+  /* A long press opens the row's card. Without these the same press would
+     also select the name and raise the system's callout over it. */
+  -webkit-touch-callout: none;
+  user-select: none;
   transition: background-color var(--dur-fast) var(--ease);
 }
 
@@ -427,12 +374,6 @@
   background: var(--k-fill, var(--surface-2));
   color: var(--k-ink, var(--text-dim));
   transition: transform var(--dur-fast) var(--ease);
-}
-
-/* The chip lifts very slightly on hover — enough to say "this is the thing
-   you are about to drag", not enough to read as motion. */
-.pal-row:hover .pal-glyph {
-  transform: scale(1.06);
 }
 
 /* The carry: what the pointer holds once a row is picked up. Three layers,
@@ -670,4 +611,37 @@
   font-size: var(--fs-sm);
   line-height: var(--lh-sm);
   color: var(--text-dim);
+}
+
+/* --------------------------------------------------------------------------
+   The row's card (PaletteCard.tsx). It is a .tip, so surface, border, radius,
+   shadow and the "Learn more" link are the tooltip's own; this adds only the
+   three lines the card carries. --text on --surface is the same pairing as
+   .tip-why, and --text-dim is .tip-short's, both measured in
+   theme.contrast.test.ts.
+   -------------------------------------------------------------------------- */
+
+.pal-card-what {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  color: var(--text);
+  text-wrap: pretty;
+}
+
+.pal-card-line {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  color: var(--text);
+  text-wrap: pretty;
+}
+
+.pal-card-k {
+  font-weight: var(--fw-med);
+  color: var(--text-dim);
+}
+
+.pal-card-more {
+  margin: var(--sp-2) 0 0;
 }

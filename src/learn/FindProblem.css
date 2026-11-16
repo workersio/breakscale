@@ -3,7 +3,8 @@
 
    Canvas chrome in the top-left corner, stacked under the components toggle
    so it follows that toggle past an open rail and never meets the centred
-   gesture hint. The answer hangs below the button.
+   gesture hint. The answer hangs below the button, in the floating card's
+   frame (.card-float in index.css).
    -------------------------------------------------------------------------- */
 
 .fp {
@@ -33,49 +34,79 @@
 }
 
 .fp-answer {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: start;
-  gap: var(--sp-2) var(--sp-2);
   width: min(340px, calc(100vw - var(--sp-4) * 2));
-  padding: var(--sp-3);
-  background: var(--surface);
-  border: var(--bw) solid var(--border-strong);
-  border-radius: var(--r-btn);
-  box-shadow: var(--shadow-lg);
 }
 
-/* A problem gets a danger edge as well as its words, never the colour alone. */
-.fp-answer:has(.is-problem) {
-  border-left: 3px solid var(--danger-mark);
+/* The headline and the close button share a row; the button's own padding
+   lines its glyph up with the card's corner. */
+.fp-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin: calc(var(--sp-1) * -1) calc(var(--sp-2) * -1) 0 0;
+}
+
+.fp-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  padding-top: var(--sp-1);
+}
+
+/* A mark, not text, so it takes the brighter mark colour: red for a
+   problem, neutral otherwise. The headline says which in words. */
+.fp-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+.fp-answer[data-verdict='problem'] .fp-dot {
+  background: var(--danger-mark);
+}
+
+.fp-answer[data-verdict='healthy'] .fp-dot {
+  background: var(--ok-mark);
 }
 
 .fp-text {
-  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: calc(var(--sp-1) * -1);
+}
+
+.fp-text p {
   margin: 0;
   font-size: var(--fs-base);
   line-height: var(--lh-base);
-  color: var(--text);
   text-wrap: pretty;
+  font-variant-numeric: tabular-nums;
 }
 
-/* The close button rides the first line's corner; the action sits under
-   the sentence it acts on. */
-.fp-close {
-  margin: calc(var(--sp-1) * -1) calc(var(--sp-1) * -1) 0 0;
+.fp-lead {
+  color: var(--text);
 }
 
-.fp-select {
-  grid-column: 1;
-  justify-self: start;
+.fp-more {
+  color: var(--text-dim);
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   .fp,
   .app-body.has-library .fp {
     /* The stage already sits below the phone header. */
     top: var(--sp-3);
     left: var(--sp-4);
+  }
+
+  .fp-text p {
+    font-size: var(--fs-sm);
+    line-height: var(--lh-sm);
   }
 }
 

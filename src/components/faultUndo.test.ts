@@ -143,7 +143,7 @@ describe('undoing a fault control', () => {
     expect(nodeFault(r.engine, 'svc')).toBeNull();
   });
 
-  it('restores a cut cable, and redo cuts it again', () => {
+  it('restores a cut connection, and redo cuts it again', () => {
     const r = rig();
     r.run(1000);
     r.actions.onCut('client->svc');

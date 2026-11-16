@@ -1,11 +1,26 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { isCorrectnessGoal } from '../sim/challenge';
 import type { Challenge, ChallengeResult, Goal, GoalMetric } from '../sim/challenge';
-import { CHECK_SEEDS, DEFAULT_WARMUP_S, DEFAULT_WINDOW_S } from '../sim/judge';
+import {
+  CHECK_SEEDS,
+  CORRECTNESS_SETTLE_MS,
+  DEFAULT_WARMUP_S,
+  DEFAULT_WINDOW_S,
+} from '../sim/judge';
 import type { BudgetUse, RunResult, Unjudgeable, Verdict } from '../sim/judge';
 import type { FailureReason } from '../sim/types';
 import type { CheckView } from '../useChallengeCheck';
-import { formatCount, formatGoalMs, formatGoalPct, formatShareDown } from './format';
+import { evidenceSentence } from './breakCopy';
+import {
+  formatCount,
+  formatGoalMs,
+  formatGoalPct,
+  formatMs,
+  formatPct,
+  formatShareDown,
+} from './format';
 import { KIND_NAME } from './nodeVisuals';
+import { briefTrouble, troubleCountdown } from './briefTrouble';
 import './Challenge.css';
 
 /**
@@ -44,7 +59,14 @@ export interface ChallengePanelProps {
   onStartOver: (() => void) | null;
   /** Null for the last brief. */
   onNext: (() => void) | null;
+  /**
+   * What the Next button says: "Next: Cache aside" for a step on the
+   * learning path, where it goes to the step after this one.
+   */
+  nextLabel?: string;
   onLeave: () => void;
+  /** Copy a link that opens this brief. Absent, the button is not shown. */
+  onCopyLink?: () => void;
   /** Moves focus to the brief each time it changes from 0, for a new start. */
   focusSignal: number;
   /** A node's name in the start design, for saying which one a fault hits. */
@@ -67,6 +89,13 @@ export interface ChallengePanelProps {
    * what is left above it.
    */
   onSheetResize?: (height: number | null, shut: boolean) => void;
+  /**
+   * The design is still the one the brief starts from. A miss then is the
+   * problem as set, not a failed attempt, and reads as a starting point.
+   */
+  fresh?: boolean;
+  /** The live run's clock in ms, or null before the first snapshot. */
+  liveMs?: number | null;
 }
 
 /** A goal's name in its row. The percentile names are taught, not assumed. */
@@ -77,6 +106,9 @@ const LABEL: Record<GoalMetric, string> = {
   lostWrites: 'Saves that never reached the database',
   lostJobs: 'Accepted jobs that failed later',
   queueDepth: 'Jobs still waiting in the queue',
+  doubleCharges: 'Payments charged more than once',
+  lostAckedWrites: 'Saved writes that never reached storage',
+  staleReads: 'Reads that missed their own saved write',
 };
 
 /**
@@ -94,6 +126,9 @@ const COUNTED: ReadonlySet<GoalMetric> = new Set([
   'lostWrites',
   'lostJobs',
   'queueDepth',
+  'doubleCharges',
+  'lostAckedWrites',
+  'staleReads',
 ]);
 
 /** A reading against a goal, rounded toward failing it. See format.ts. */
@@ -104,10 +139,30 @@ function formatGoal(metric: GoalMetric, value: number | null): string {
     case 'lostWrites':
     case 'lostJobs':
     case 'queueDepth':
+    case 'doubleCharges':
+    case 'lostAckedWrites':
+    case 'staleReads':
       return formatCount(value);
     case 'p99':
     case 'p95':
       return formatGoalMs(value);
+  }
+}
+
+/**
+ * A live reading, rounded the way the bar rounds it, so the two never show
+ * different figures for the same number. Only the checked figure rounds
+ * toward failing: it is the one held against the line.
+ */
+function formatLive(metric: GoalMetric, value: number): string {
+  switch (metric) {
+    case 'errorRate':
+      return formatPct(value / 100);
+    case 'p99':
+    case 'p95':
+      return formatMs(value);
+    default:
+      return formatCount(value);
   }
 }
 
@@ -142,6 +197,12 @@ function missLine(
       return `${a} accepted ${one ? 'job' : 'jobs'} failed later, ${end}`;
     case 'queueDepth':
       return `${a} ${one ? 'job was' : 'jobs were'} still waiting in the queue at the end, ${end}`;
+    case 'doubleCharges':
+      return `${a} ${one ? 'payment was' : 'payments were'} charged more than once, ${end}`;
+    case 'lostAckedWrites':
+      return `${a} ${one ? 'save' : 'saves'} the client heard succeed never reached storage, ${end}`;
+    case 'staleReads':
+      return `${a} ${one ? 'read' : 'reads'} missed a write the same client heard succeed, ${end}`;
   }
 }
 
@@ -197,7 +258,18 @@ function runName(run: RunResult): string {
   return `run ${i >= 0 ? i + 1 : run.seed}`;
 }
 
-type VerdictTone = 'ok' | 'danger' | 'warn';
+/**
+ * How long after a change the live percentiles can still hold requests from
+ * before it: the engine's 5s latency window, plus as long again for a queue
+ * that formed before the change to drain. Only decides which note shows;
+ * never displayed as a figure.
+ */
+const SETTLE_MS = 10_000;
+
+/** Room left above the verdict when a pass scrolls it to the top, in px. */
+const PASS_SCROLL_PAD = 12;
+
+type VerdictTone = 'ok' | 'danger' | 'warn' | 'base';
 
 /** A verdict as one word and one sentence on why. */
 interface VerdictLine {
@@ -249,10 +321,35 @@ function verdictLine(verdict: Verdict, nameOf: (id: string) => string): VerdictL
   }
 }
 
-/** The verdict as it is announced. */
-function headline(verdict: Verdict, nameOf: (id: string) => string): string {
-  const { word, why } = verdictLine(verdict, nameOf);
-  return `${word}. ${why}`;
+/** A check that measured a miss, as opposed to one it could not run. */
+function missed(verdict: Verdict): boolean {
+  return (
+    verdict.status === 'goal-missed' ||
+    verdict.status === 'nothing-completed' ||
+    verdict.status === 'falling-behind'
+  );
+}
+
+/**
+ * A miss by the design the brief starts from. The check has already run it
+ * through the brief's trouble, which the live run may not have reached, so
+ * the line says when that happens and reads as the problem rather than as a
+ * failure: nothing has been tried yet.
+ */
+function baselineLine(
+  verdict: Verdict,
+  challenge: Challenge,
+  nameOf: (id: string) => string,
+): VerdictLine {
+  const { why } = verdictLine(verdict, nameOf);
+  const trouble = briefTrouble(challenge, nameOf);
+  return {
+    word: 'As it starts',
+    why: trouble
+      ? `When ${trouble.what} at ${trouble.atMs / 1000}s, ${why.charAt(0).toLowerCase()}${why.slice(1)}`
+      : why,
+    tone: 'base',
+  };
 }
 
 function unjudgeableLine(why: Unjudgeable, nameOf: (id: string) => string): string {
@@ -275,13 +372,16 @@ function unjudgeableLine(why: Unjudgeable, nameOf: (id: string) => string): stri
         : `A new ${KIND_NAME[why.kind].toLowerCase()} would answer requests before the work behind it is done, and this brief does not allow one. Take it out.`;
     case 'dead-end-added':
       return `${nameOf(why.nodeId)} answers requests without passing them on, so they never reach the rest of the system. Connect it onward or take it out.`;
+    case 'standby-first':
+      return `${nameOf(why.regionId)} serves from ${nameOf(why.activeId)} from the start, so its requests skip ${nameOf(why.nodeId)} and the fault in the brief never touches them. Have ${nameOf(why.regionId)} serve from ${nameOf(why.nodeId)} first.`;
   }
 }
 
-type Tone = 'stale' | 'checking' | 'passed' | 'failed' | 'warn';
+type Tone = 'stale' | 'checking' | 'passed' | 'failed' | 'warn' | 'base';
 
-function toneOf(view: CheckView): Tone {
+function toneOf(view: CheckView, fresh: boolean): Tone {
   if (view.status !== 'verdict') return view.status;
+  if (fresh && missed(view.verdict)) return 'base';
   switch (view.verdict.status) {
     case 'passed':
       return 'passed';
@@ -295,9 +395,10 @@ function toneOf(view: CheckView): Tone {
   }
 }
 
-function chipOf(view: CheckView): string {
+function chipOf(view: CheckView, fresh: boolean): string {
   if (view.status === 'stale') return view.hadVerdict ? 'Changed' : 'Not checked yet';
   if (view.status === 'checking') return 'Checking';
+  if (fresh && missed(view.verdict)) return 'As it starts';
   switch (view.verdict.status) {
     case 'passed':
       return 'Passed';
@@ -309,7 +410,7 @@ function chipOf(view: CheckView): string {
     case 'over-budget':
       return 'Over budget';
     case 'unjudgeable':
-      return 'Cannot check';
+      return 'Cannot check yet';
   }
 }
 
@@ -322,16 +423,22 @@ function GoalList({
   challenge,
   check,
   deciding,
+  live,
+  titleId,
   nameOf,
 }: {
   challenge: Challenge;
   check: CheckView;
   deciding: RunResult | null;
+  /** The live reading, or null when nothing is getting through. */
+  live: ChallengeResult | null;
+  /** The heading the list is named by. */
+  titleId: string;
   nameOf: (id: string) => string;
 }) {
   const pending = check.status === 'checking' ? 'Checking' : 'Not checked yet';
   return (
-    <ul className="chal-goals">
+    <ul className="chal-goals" aria-labelledby={titleId}>
       {challenge.goals.map((goal, i) => {
         // By position: two goals can share a metric when one is on a route.
         const at = deciding?.goals[i];
@@ -340,6 +447,13 @@ function GoalList({
             ? at
             : undefined;
         const state = row ? (row.met ? 'is-met' : 'is-unmet') : 'is-pending';
+        // The bar's figure for the same goal, said to be live so it is never
+        // read as the checked one. By metric and route: the live reading
+        // leaves out goals it cannot measure while running.
+        const now = live?.goals.find(
+          (g) => g.goal.metric === goal.metric && g.goal.route === goal.route,
+        );
+        const nowShown = now !== undefined && Number.isFinite(now.actual);
         return (
           <li key={i} className={`chal-goal ${state}`}>
             <span className="chal-goal-name">{goalName(goal, nameOf)}</span>
@@ -350,6 +464,12 @@ function GoalList({
             <span className="chal-goal-state">
               {row ? (row.met ? 'Met' : 'Not met') : pending}
             </span>
+            {nowShown ? (
+              <span className="chal-goal-now">
+                Right now{' '}
+                <span className="num">{formatLive(goal.metric, now.actual)}</span>
+              </span>
+            ) : null}
           </li>
         );
       })}
@@ -382,8 +502,8 @@ function LiveRows({
 function Chevron({ open }: { open: boolean }) {
   return (
     <svg
-      width="14"
-      height="14"
+      width="16"
+      height="16"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -409,19 +529,25 @@ export function ChallengePanel({
   onWatch,
   onStartOver,
   onNext,
+  nextLabel = 'Next challenge',
   onLeave,
+  onCopyLink,
   focusSignal,
   nameOf,
   besideInspector = false,
   foldOnStart = false,
   onSheetResize,
+  fresh = false,
+  liveMs = null,
 }: ChallengePanelProps) {
   const headingId = useId();
   const bodyId = useId();
   const detailsId = useId();
+  const goalsId = useId();
   const headingRef = useRef<HTMLHeadingElement | null>(null);
   const lastHintRef = useRef<HTMLParagraphElement | null>(null);
   const footRef = useRef<HTMLDivElement | null>(null);
+  const verdictRef = useRef<HTMLParagraphElement | null>(null);
   const sectionRef = useRef<HTMLElement | null>(null);
   /* The reader's own choice, and a second one for while the inspector is
      open, which starts folded each time it opens. Kept apart so closing the
@@ -441,10 +567,35 @@ export function ChallengePanel({
     setCollapsed(foldOnStart);
     setDetailsOpen(false);
   }
+  const verdict = check.status === 'verdict' ? check.verdict : null;
+  const passed = verdict?.status === 'passed';
+  const passKey = passed ? verdict.designKey : null;
   const [seenBeside, setSeenBeside] = useState(besideInspector);
   if (seenBeside !== besideInspector) {
     setSeenBeside(besideInspector);
-    if (besideInspector) setFolded(true);
+    // A pass is not folded away: it is what the reader was working for.
+    if (besideInspector) setFolded(!passed);
+  }
+  /* A pass opens the brief, folded or not, so the lesson and the way on are
+     seen as the pass lands. Only as it lands: folding it again afterwards
+     is the reader's choice and stays. */
+  const [seenPass, setSeenPass] = useState(passKey);
+  if (seenPass !== passKey) {
+    setSeenPass(passKey);
+    if (passKey !== null) {
+      setFolded(false);
+      setCollapsed(false);
+    }
+  }
+  /* The live clock when the design last changed, to tell a live reading
+     still carrying requests from before the change from one that has had
+     time to settle. Taken as the check's key changes, during render. */
+  const [changedAt, setChangedAt] = useState<{ key: string | null; ms: number | null }>(
+    { key: verdict?.designKey ?? null, ms: liveMs },
+  );
+  const keyNow = verdict?.designKey ?? null;
+  if (keyNow !== null && changedAt.key !== keyNow) {
+    setChangedAt({ key: keyNow, ms: liveMs });
   }
 
   /* Report the panel's size to the shell. Observed rather than computed:
@@ -478,22 +629,27 @@ export function ChallengePanel({
     if (focusSignal > 0) headingRef.current?.focus();
   }, [focusSignal]);
 
-  const tone = toneOf(check);
-  const verdict = check.status === 'verdict' ? check.verdict : null;
-  const passed = verdict?.status === 'passed';
+  const tone = toneOf(check, fresh);
 
   /* A pass brings the lesson and the way on, at the foot of the panel.
      Scrolled to once, as the pass lands, and not again when the panel
-     re-renders with the same verdict. The panel's scroll position is outside
-     React, which is why this is an effect. */
-  const passKey = passed ? verdict.designKey : null;
+     re-renders with the same verdict. As far as the foot when the verdict
+     still shows with it; on a short phone sheet that cannot hold both, the
+     verdict goes to the top, because "Passed" is the news and the buttons
+     are a scroll away. Only the panel scrolls: scrollIntoView would move
+     the app behind it too. The panel's scroll position is outside React,
+     which is why this is an effect. */
   useEffect(() => {
-    if (passKey === null) return;
+    const box = sectionRef.current;
+    const said = verdictRef.current;
+    const foot = footRef.current;
+    if (passKey === null || !box || !said || !foot) return;
+    const frame = box.getBoundingClientRect().top - box.scrollTop;
+    const top = said.getBoundingClientRect().top - frame - PASS_SCROLL_PAD;
+    const bottom = foot.getBoundingClientRect().bottom - frame;
+    const to = Math.max(0, Math.min(top, bottom - box.clientHeight));
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    footRef.current?.scrollIntoView?.({
-      block: 'nearest',
-      behavior: reduce ? 'auto' : 'smooth',
-    });
+    box.scrollTo?.({ top: to, behavior: reduce ? 'auto' : 'smooth' });
   }, [passKey]);
 
   /* The last hint takes its button with it, so focus goes to the hint it
@@ -505,9 +661,36 @@ export function ChallengePanel({
     lastHintRef.current?.focus();
   }, [hintsShown]);
   const deciding = verdict && 'deciding' in verdict ? verdict.deciding : null;
-  const line = verdict ? verdictLine(verdict, nameOf) : null;
+  const baseline = fresh && verdict !== null && missed(verdict);
+  const line = verdict
+    ? baseline
+      ? baselineLine(verdict, challenge, nameOf)
+      : verdictLine(verdict, nameOf)
+    : null;
+  const countdown = baseline
+    ? troubleCountdown(briefTrouble(challenge, nameOf), liveMs)
+    : null;
+  const liveNow = live && liveFlowing ? live : null;
+  /* The check and the bar can disagree after a pass: the check plays the
+     design from the start, the bar's percentiles cover the last few seconds
+     of a run that began before the change. Said only when they do. */
+  const liveOver =
+    passed && liveNow !== null && liveNow.goals.some((g) => g.actual > g.goal.max);
+  const settling =
+    liveOver &&
+    liveMs !== null &&
+    changedAt.ms !== null &&
+    liveMs >= changedAt.ms &&
+    liveMs - changedAt.ms < SETTLE_MS;
+  // A missed correctness goal is about the data, not lost requests, so the
+  // line under the verdict names the first request it went wrong for.
+  const evidence = deciding?.evidence;
   const reason =
-    verdict && verdict.status !== 'passed' && deciding ? reasonLine(deciding) : null;
+    verdict && verdict.status !== 'passed' && deciding
+      ? evidence !== undefined
+        ? evidenceSentence(evidence, { node: nameOf, edge: nameOf })
+        : reasonLine(deciding)
+      : null;
   const shown = challenge.hints.slice(0, hintsShown);
   const warmS = challenge.warmupS ?? DEFAULT_WARMUP_S;
   const endS = warmS + (challenge.windowS ?? DEFAULT_WINDOW_S);
@@ -527,10 +710,10 @@ export function ChallengePanel({
           </h2>
         </div>
         {/* Only while folded: open, the verdict line says the same. */}
-        <span className={`label chal-chip is-${tone}`}>{chipOf(check)}</span>
+        <span className={`label chal-chip is-${tone}`}>{chipOf(check, fresh)}</span>
         <button
           type="button"
-          className="btn btn-sm btn-icon chal-collapse"
+          className="btn btn-ghost btn-sm btn-icon chal-collapse"
           aria-expanded={!shut}
           aria-controls={bodyId}
           aria-label={shut ? 'Show the brief' : 'Hide the brief'}
@@ -548,21 +731,33 @@ export function ChallengePanel({
           needs to hear that it did. Polite, so it waits for whatever they
           were doing. */}
       <p className="sr-only" role="status">
-        {verdict ? headline(verdict, nameOf) : ''}
+        {line ? `${line.word}. ${line.why}` : ''}
       </p>
 
       <div id={bodyId} className="chal-body" hidden={shut}>
         <p className="chal-brief">{challenge.brief}</p>
 
+        <p id={goalsId} className="label chal-goals-title">
+          In the {CHECK_SEEDS.length} test runs ({warmS}s to {endS}s)
+        </p>
         <GoalList
           challenge={challenge}
           check={check}
           deciding={deciding}
+          live={liveNow}
+          titleId={goalsId}
           nameOf={nameOf}
         />
+        {liveOver ? (
+          <p className="chal-note">
+            {settling
+              ? 'Live numbers still include requests from before your change.'
+              : 'Live numbers move with the run on screen. The test runs decide the pass.'}
+          </p>
+        ) : null}
 
         {line ? (
-          <p className={`chal-verdict is-${line.tone}`}>
+          <p ref={verdictRef} className={`chal-verdict is-${line.tone}`}>
             <strong className="chal-verdict-word">{line.word}.</strong> {line.why}
           </p>
         ) : (
@@ -575,10 +770,16 @@ export function ChallengePanel({
           </p>
         )}
 
+        {countdown ? (
+          <p className="chal-countdown">
+            {countdown.noun} in <span className="num">{countdown.seconds}s</span>
+          </p>
+        ) : null}
+
         {budget ? (
           <p className={`chal-budget${budget.used > budget.allowed ? ' is-over' : ''}`}>
             {budget.allowed === 0
-              ? "You can't add any slots here."
+              ? 'You cannot add any slots here.'
               : `You can add up to ${budget.allowed} more ${budget.allowed === 1 ? 'slot' : 'slots'}.`}{' '}
             Used: <span className="num">{budget.used}</span>.
           </p>
@@ -589,7 +790,10 @@ export function ChallengePanel({
              the design on the canvas: the check view is a verdict only while
              its key is current. Shown from the start it is the answer, and
              the brief stops being one. */
-          <p className="chal-lesson">{challenge.lesson}</p>
+          <div className="chal-lesson">
+            <h3 className="chal-lesson-title">What you learned</h3>
+            <p className="chal-lesson-text">{challenge.lesson}</p>
+          </div>
         ) : (
           <div className="chal-help">
             {shown.map((text, i) => (
@@ -662,6 +866,9 @@ export function ChallengePanel({
                 The check plays your design {CHECK_SEEDS.length} times, each with
                 slightly different random traffic. It counts from {warmS}s to {endS}s of
                 each run.
+                {challenge.goals.some(isCorrectnessGoal)
+                  ? ` Then it plays ${CORRECTNESS_SETTLE_MS / 1000}s more, so a try still running can finish before it checks the data.`
+                  : null}
               </p>
               {check.status === 'checking' ? (
                 <>
@@ -727,12 +934,17 @@ export function ChallengePanel({
         <div ref={footRef} className="chal-foot">
           {passed && onNext ? (
             <button type="button" className="btn btn-sm btn-primary" onClick={onNext}>
-              Next challenge
+              {nextLabel}
             </button>
           ) : null}
           <button type="button" className="btn btn-sm" onClick={onLeave}>
             Back to my design
           </button>
+          {onCopyLink ? (
+            <button type="button" className="btn btn-sm btn-ghost" onClick={onCopyLink}>
+              Copy link
+            </button>
+          ) : null}
           {onStartOver ? (
             <button
               type="button"

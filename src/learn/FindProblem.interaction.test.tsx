@@ -156,11 +156,11 @@ describe('Find the problem', () => {
     expect(status()?.textContent).toBe('');
   });
 
-  it('works from a touch tap, and Select it hands over the node', () => {
+  it('works from a touch tap, and its Select button hands over the node', () => {
     const run = loaded('single-server', 5.4, 10);
     act(() => root.render(<Harness {...run} />));
     press(button('Find the problem'), 'touch');
-    press(button('Select it'), 'touch');
+    press(button('Select Database'), 'touch');
     const db = run.topology.nodes.find((n) => n.kind === 'db')?.id;
     expect(selected).toEqual([db]);
     // Pressing an action in the answer must not dismiss it.
@@ -208,7 +208,7 @@ describe('Find the problem', () => {
     const run = loaded('single-server', 5.4, 10);
     act(() => root.render(<Harness {...run} />));
     press(button('Find the problem'));
-    const select = button('Select it');
+    const select = button('Select Database');
     act(() => select.focus());
     act(() => {
       window.dispatchEvent(

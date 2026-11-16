@@ -10,6 +10,7 @@ import {
 } from 'react';
 import type {
   CSSProperties,
+  MouseEvent as ReactMouseEvent,
   MutableRefObject,
   PointerEvent as ReactPointerEvent,
   RefObject,
@@ -45,7 +46,6 @@ import {
   formatMs,
   formatPct,
   formatRate,
-  NA,
   healthOfErr,
   healthOfLatency,
   healthOfLoad,
@@ -66,8 +66,11 @@ import {
   pinchFrame,
   pressAction,
   snapsToGrid,
+  longPressable,
+  startLongPress,
 } from './pointerInput';
-import type { PinchState, TouchMap } from './pointerInput';
+import type { LongPress, PinchState, TouchMap } from './pointerInput';
+import type { CanvasMenuRequest, MenuTarget } from './contextMenuItems';
 import {
   ANN_DND_MIME,
   NEW_NOTE_TEXT,
@@ -96,16 +99,35 @@ import {
 import type { Annotation, AnnotationFont, Note, Section } from '../sim/annotations';
 import { usePreference } from '../content/preferences';
 import { Minimap } from './Minimap';
-import { DETAIL_ZOOM, MINIMAL_ZOOM, fitViewport } from './fit';
+import {
+  DETAIL_ZOOM,
+  FIT_MIN_EXPLICIT,
+  MINIMAL_ZOOM,
+  clearOfChrome,
+  detailBand,
+  fitClips,
+  fitViewport,
+} from './fit';
+import type { FitRect } from './fit';
+import { REVEAL_PAD, revealPan } from './reveal';
+import type { RevealBox, RevealPan } from './reveal';
 import { TITLE_GAP, keepsInView, titleClearPan } from './titleClear';
 import type { Box } from './titleClear';
 import { EmptyCanvas } from './EmptyCanvas';
 import { EdgeCues } from './EdgeCues';
 import type { EmptyCanvasProps } from './EmptyCanvas';
-import { glanceLayout, glanceScale } from './glance';
+import { glanceLayout, glanceScale, nodeHitPad } from './glance';
 import type { GlanceLayout } from './glance';
 import { useSettledHealthMap } from './settledHealth';
 import { serialiseSvg } from '../imageExport';
+import { TrafficDots, TrafficKey, type DotWire } from './TrafficDots';
+import { markOffset, midLeg, type MidLeg } from './edgeMarks';
+import { EDGE_OUTCOME_SLOTS, EO_FIRST, EO_LOST, EO_RETRY } from '../sim/edgeOutcomes';
+import { rawLine, useLineStates, type LineState } from './lineHold';
+import { useReducedMotion } from '../useReducedMotion';
+import { useKeyboardConnect } from './useKeyboardConnect';
+import { shortcutLabel } from '../modKey';
+import { useLedgerFit } from './useLedgerFit';
 import './Canvas.css';
 
 /* ------------------------------------------------------------------ *
@@ -136,6 +158,8 @@ const NODE_R = 6;
 const SPOT_PAD = 8;
 const SPOT_TAG_W = 48;
 const SPOT_TAG_H = 22;
+/** Room the violation label takes above its ring, in world px. */
+const VIOLATION_LABEL_H = 22;
 /**
  * Gap between the node's outline and the selection ring drawn around it.
  *
@@ -315,7 +339,11 @@ const PORT_R = 5;
 const PORT_HIT_R = 15;
 const PORT_CY = NODE_H / 2;
 
-const MIN_ZOOM = 0.4;
+/* As far out as a fit the reader asks for may go, so the zoom buttons can
+   always step on from where Fit left them. */
+const MIN_ZOOM = FIT_MIN_EXPLICIT;
+/** A panel's slide (--dur-base) plus a frame, before a reveal measures. */
+const REVEAL_DELAY_MS = 220;
 const MAX_ZOOM = 2.5;
 /** One keyboard or button zoom step. Shared so the two cannot drift. */
 const ZOOM_STEP = 1.25;
@@ -354,6 +382,11 @@ export interface CanvasProps {
   snapshot: SimSnapshot | null;
   /** Each client's own figures, from `Engine.routes()`, for the client cards. */
   routes?: readonly RouteStats[];
+  /**
+   * Copies one edge's outcome rates into `out`; `Engine.readEdgeOutcomes`.
+   * Omitted, or returning false, means no traffic dots.
+   */
+  readOutcomes?: (edgeId: string, out: Float64Array) => boolean;
   /**
    * Ids of every selected node AND edge. Node ids and edge ids share one
    * namespace here; an edge id is `from->to`, which can never collide with a
@@ -524,13 +557,68 @@ export interface CanvasProps {
    * faults of a break it found, drawn as numbered badges.
    */
   breakMarks?: ReadonlyMap<string, number>;
+  /**
+   * During a replay of a correctness break, the part where the checked
+   * request went wrong, by node id, with the words for it: "Charged twice:
+   * request 1019". Drawn as a solid ring and a label.
+   */
+  violationMarks?: ReadonlyMap<string, string>;
   /** The starting points an empty canvas offers. Omitted, it offers none. */
   emptyActions?: EmptyCanvasProps['actions'];
   /**
-   * A brief is on screen. A fit may then zoom out past the usual floor
-   * rather than leave a box under the brief's panel; see FIT_MIN_TIGHT.
+   * The shell is in its phone layout, so fits take the phone's floor and
+   * margin. Omitted, a surface no wider than 720px counts as a phone; a
+   * phone held sideways is wider than that, which is why the shell says.
    */
-  fitTight?: boolean;
+  narrowFit?: boolean;
+  /**
+   * Changes when the shell's bar changes height. A camera the reader has
+   * not moved since the last fit is fitted again: the first fit runs before
+   * the bar is measured, and framed the diagram under the bar's second row.
+   */
+  frameKey?: number | null;
+  /**
+   * An automatic fit (a design opened or restored) still ran past the
+   * uncovered canvas at its lowest zoom. The shell can make room and send
+   * `fitSignal` again.
+   */
+  onFitClipped?: () => void;
+  /**
+   * Parts to keep in view: when `key` changes the camera pans, keeping the
+   * zoom, by the least that puts them in the uncovered canvas and clear of
+   * any [data-spot-avoid] card. Waits out a panel's slide first, so the
+   * room is measured where the panel lands. With `fit`, parts too far apart
+   * to show at this zoom are fitted instead, as a design opens. With
+   * `content`, the whole diagram and its notes are kept in instead of `ids`.
+   * See reveal.ts.
+   */
+  reveal?: {
+    ids: readonly string[];
+    key: string;
+    fit?: boolean;
+    content?: boolean;
+    /** Keep every part on screen, down to MINIMAL_ZOOM (see revealTarget.ts). */
+    whole?: boolean;
+  } | null;
+  /**
+   * A plain click or tap on what is already the whole selection. Selecting
+   * it again changes nothing, so the shell hears it here, to bring back an
+   * inspector the reader had put away.
+   */
+  onReselect?: () => void;
+  /**
+   * A right-click, a press and hold on a touch screen, or the menu key on a
+   * focused part asks for the context menu. Null means a held press turned
+   * into a drag, so a menu it opened should close. The shell owns the menu.
+   */
+  onContextMenu?: (req: CanvasMenuRequest | null) => void;
+  /**
+   * Ctrl+C or Ctrl+X put this on the system clipboard. The shell keeps its
+   * own copy, which is what Paste here pastes on a touch screen.
+   */
+  onClipboardWrite?: (text: string) => void;
+  /** Filled by the canvas with what the context menu asks of it. */
+  menuApiRef?: MutableRefObject<CanvasMenuApi | null>;
   /**
    * A node to point at: a ring and a "Here" tag around it, drawn above the
    * nodes and never hit-tested. Set by the shell's "Find the problem", and
@@ -611,13 +699,26 @@ function frac(n: number, d: number): number {
 }
 
 /**
- * A node's p99, or n/a until it has finished a request. A box that has served
- * nothing has no slowest request, and "0ms" would read as instant. Same rule
- * as the latency chart's n/a.
+ * A node's p99, or "none yet" until it has finished a request. A box that has
+ * served nothing has no slowest request, and "0ms" would read as instant.
  */
 function p99Cell(s: NodeStats, label = 'p99'): Cell {
   const measured = s.p99 > 0 || s.throughput > 0;
-  return { value: measured ? formatMs(s.p99) : NA, label };
+  return { value: measured ? formatMs(s.p99) : 'none yet', label };
+}
+
+/**
+ * What a crashed node shows: one word in place of its three cells. Its
+ * busy share reads near zero and its p99 has nothing to measure, and the
+ * three together looked like an idle, healthy box.
+ */
+function downReadout(r: Readout): Readout {
+  return {
+    ...r,
+    primary: { value: 'Down', label: '' },
+    a: { value: '', label: '' },
+    b: { value: '', label: '' },
+  };
 }
 
 /**
@@ -882,7 +983,7 @@ export function readoutFor(
       const phase = s.scalePhase ?? 'idle';
       return {
         primary: { value: formatPct(watched), label: 'watching' },
-        a: { value: `${have}/${want}`, label: 'pods' },
+        a: { value: `${have}/${want}`, label: 'running' },
         b: { value: '', label: phase },
         load: drift,
         health: healthOfLoad(drift),
@@ -917,7 +1018,7 @@ export function readoutFor(
         primary: { value: formatPct(util), label: 'busy' },
         a: p99Cell(s),
         b: contended
-          ? { value: formatMs(lockWait), label: 'lock' }
+          ? { value: formatMs(lockWait), label: 'lock wait' }
           : { value: formatCount(s.queued), label: 'waiting' },
         load: util,
         health:
@@ -1028,7 +1129,7 @@ export function readoutFor(
       const burst = cfg.burst ?? cfg.rateLimitRps ?? 1;
       return {
         primary: { value: formatRate(throttled), label: 'refused' },
-        a: { value: formatRate(admitted), label: 'passed' },
+        a: { value: formatRate(admitted), label: 'admitted' },
         b: { value: formatCount(s.tokens), label: 'tokens' },
         // A drained bucket is a limiter working hard; a full one is idle.
         load: 1 - frac(s.tokens ?? 0, burst),
@@ -1159,7 +1260,7 @@ export function readoutFor(
         primary: { value: formatCount(lag), label: 'lag' },
         a:
           dropRate > 0
-            ? { value: formatRate(dropRate), label: 'lost' }
+            ? { value: formatRate(dropRate), label: 'expired' }
             : { value: formatRate(s.deliveryRate), label: 'deliver' },
         b: { value: formatRate(s.throughput), label: 'publish' },
         load: fill,
@@ -1215,9 +1316,9 @@ export function readoutFor(
       const badAuth = s.authRejectRate ?? 0;
       const burst = cfg.burst ?? cfg.rateLimitRps ?? 1;
       return {
-        primary: { value: formatRate(admitted), label: 'passed' },
-        a: { value: formatRate(throttled), label: 'limited' },
-        b: { value: formatRate(badAuth), label: 'denied' },
+        primary: { value: formatRate(admitted), label: 'admitted' },
+        a: { value: formatRate(throttled), label: 'refused' },
+        b: { value: formatRate(badAuth), label: 'bad auth' },
         load: 1 - frac(s.tokens ?? 0, burst),
         health: throttled > admitted ? 'danger' : throttled > 0 ? 'warn' : 'ok',
         spark: admitted,
@@ -1394,11 +1495,11 @@ export function readoutFor(
       const highIn = s.highAdmittedRate ?? 0;
       const burst = cfg.burst ?? cfg.rateLimitRps ?? 1;
       return {
-        primary: { value: formatRate(lowShed), label: 'shed low' },
+        primary: { value: formatRate(lowShed), label: 'low cut' },
         a: { value: formatRate(highIn), label: 'high in' },
         b:
           highShed > 0
-            ? { value: formatRate(highShed), label: 'shed high' }
+            ? { value: formatRate(highShed), label: 'high cut' }
             : { value: formatCount(s.tokens), label: 'tokens' },
         load: 1 - frac(s.tokens ?? 0, burst),
         health: highShed > 0 ? 'danger' : lowShed > 0 ? 'warn' : 'ok',
@@ -1710,6 +1811,140 @@ function edgeWidth(f: number): number {
   return f <= 0 ? 1 : clamp(1 + Math.log10(1 + f) * 0.85, 1, 4.5);
 }
 
+/** What a severed wire's hover tooltip says, by why it is severed. */
+const SEVERED_HINT: Readonly<Record<'cut' | 'blocked', string>> = {
+  cut: 'Network split. Calls fail at the caller.',
+  blocked: 'The caller is holding calls back for now.',
+};
+
+/**
+ * A horizontal mid leg must be this long for "+240/s tried again". A shorter
+ * one says "+240/s retries", never the bare number, which on its own reads as
+ * a second rate for the wire.
+ */
+const RETRY_LONG_LEG = 160;
+
+/**
+ * Calls coming back to be sent again: a small hook bending off the wire and
+ * pointing back at the caller, toward the caller from the label point. At
+ * the label zoom it carries the measured rate of retries. On a horizontal leg
+ * both captions sit under the label point, retries first, since a short leg
+ * leaves no room for them either side of the middle.
+ */
+const RetryMark = memo(function RetryMark({
+  leg,
+  x,
+  y,
+  rate,
+  showLabel,
+}: {
+  leg: MidLeg;
+  x: number;
+  y: number;
+  rate: number;
+  showLabel: boolean;
+}) {
+  const { ux, uy, nx, ny } = leg;
+  const off = markOffset(leg.back);
+  const bx = x - ux * off;
+  const by = y - uy * off;
+  // Leaves the wire ahead, bows out to the side, lands behind.
+  const sx = bx + ux * 7 + nx * 2;
+  const sy = by + uy * 7 + ny * 2;
+  const cx = bx + nx * 15;
+  const cy = by + ny * 15;
+  const ex = bx - ux * 7 + nx * 2;
+  const ey = by - uy * 7 + ny * 2;
+  // Arrowhead along the curve's end tangent, which runs from the control
+  // point to the end.
+  const tl = Math.hypot(ex - cx, ey - cy) || 1;
+  const tx = (ex - cx) / tl;
+  const ty = (ey - cy) / tl;
+  const head = `M${f1(ex + tx * 1.5)},${f1(ey + ty * 1.5)} L${f1(ex - tx * 4 - ty * 3)},${f1(
+    ey - ty * 4 + tx * 3,
+  )} L${f1(ex - tx * 4 + ty * 3)},${f1(ey - ty * 4 - tx * 3)}Z`;
+  const horizontal = ny !== 0;
+  const long = !horizontal || leg.back + leg.ahead >= RETRY_LONG_LEG;
+  const text = `+${formatRate(rate)} ${long ? 'tried again' : 'retries'}`;
+  return (
+    <g className="cv-edge-retry" aria-hidden="true">
+      <path
+        className="cv-edge-retry-loop"
+        d={`M${f1(sx)},${f1(sy)} Q${f1(cx)},${f1(cy)} ${f1(ex)},${f1(ey)}`}
+      />
+      <path className="cv-edge-retry-head" d={head} />
+      {showLabel && (
+        <text
+          className="cv-edge-label is-retry"
+          x={horizontal ? x : bx + 18}
+          y={horizontal ? y + 26 : by + 4}
+          textAnchor={horizontal ? 'middle' : 'start'}
+        >
+          {text}
+        </text>
+      )}
+    </g>
+  );
+});
+
+/**
+ * A link that drops calls: two short slashes across the wire, toward the
+ * target from the label point. Faint until a drop has actually been
+ * measured, then in the lost colour, with the measured share at the label
+ * zoom.
+ */
+const LossMark = memo(function LossMark({
+  leg,
+  x,
+  y,
+  share,
+  showLabel,
+  below,
+}: {
+  leg: MidLeg;
+  x: number;
+  y: number;
+  share: number | null;
+  showLabel: boolean;
+  /** True when a retry caption takes the first row under the wire. */
+  below: boolean;
+}) {
+  const { ux, uy, nx, ny } = leg;
+  const off = markOffset(leg.ahead);
+  const px = x + ux * off;
+  const py = y + uy * off;
+  let d = '';
+  for (const k of [-2.5, 2.5]) {
+    const qx = px + ux * k;
+    const qy = py + uy * k;
+    d += `M${f1(qx - nx * 4.5 + ux * 1.5)},${f1(qy - ny * 4.5 + uy * 1.5)} L${f1(
+      qx + nx * 4.5 - ux * 1.5,
+    )},${f1(qy + ny * 4.5 - uy * 1.5)}`;
+  }
+  const measured = share !== null && share > 0;
+  const horizontal = ny !== 0;
+  return (
+    <g className={`cv-edge-loss${measured ? ' is-dropping' : ''}`} aria-hidden="true">
+      <path className="cv-edge-loss-tick" d={d} />
+      {showLabel && measured && (
+        <text
+          className="cv-edge-label"
+          x={horizontal ? x : px + 12}
+          y={horizontal ? y + (below ? 40 : 26) : py + 4}
+          textAnchor={horizontal ? 'middle' : 'start'}
+        >
+          {`${formatPct(share)} lost`}
+        </text>
+      )}
+    </g>
+  );
+});
+
+/** One decimal: path data at 10Hz stays short and stable. */
+function f1(v: number): string {
+  return v.toFixed(1);
+}
+
 interface EdgeViewProps {
   edge: SimEdge;
   /** Top-left of the SOURCE node's box; the router picks its own anchors. */
@@ -1757,6 +1992,16 @@ interface EdgeViewProps {
   labelDy: number;
   /** See `CanvasProps.breakMarks`. Undefined when the edge is not a target. */
   breakMark?: number;
+  /**
+   * Calls per second sent across this edge again after a failure, from the
+   * engine's per-edge tally. 0 when there are none or no tally to read.
+   */
+  retryRate?: number;
+  /**
+   * Measured share of crossings this link dropped, or null when it has no
+   * lossRate or nothing has crossed yet.
+   */
+  lostShare?: number | null;
 }
 
 const EdgeView = memo(function EdgeView({
@@ -1774,6 +2019,8 @@ const EdgeView = memo(function EdgeView({
   showLabel,
   labelDy,
   breakMark,
+  retryRate = 0,
+  lostShare = null,
 }: EdgeViewProps) {
   // The router arrives axis-aligned from whichever side it picked, so the
   // arrowhead is one of four fixed triangles and needs no trigonometry.
@@ -1850,6 +2097,16 @@ const EdgeView = memo(function EdgeView({
   const midX = route.label.x;
   const midY = route.label.y;
 
+  /* The marks for what goes wrong in transit: a loop where calls come back
+     to be sent again, and ticks where the link drops them. Both come from
+     the engine's tally, never from the configured rates. */
+  const lossy = !control && (edge.lossRate ?? 0) > 0;
+  const retrying = !control && retryRate > 0;
+  const leg = useMemo(
+    () => (lossy || retrying ? midLeg(route.points, route.label) : null),
+    [lossy, retrying, route],
+  );
+
   return (
     <g
       className={`cv-edge${selected ? ' is-selected' : ''}${
@@ -1866,7 +2123,13 @@ const EdgeView = memo(function EdgeView({
           data-* attributes are what the surface's pointerdown router reads;
           no handler is attached here, so nothing can be swallowed before the
           router sees it. */}
-      <path d={d} className="cv-edge-hit" data-hit="edge" data-id={edge.id} />
+      <path d={d} className="cv-edge-hit" data-hit="edge" data-id={edge.id}>
+        {severed ? (
+          <title>{SEVERED_HINT[state]}</title>
+        ) : (
+          retrying && <title>{`+${formatRate(retryRate)} tried again`}</title>
+        )}
+      </path>
       <path d={d} className="cv-edge-line" strokeWidth={width} />
       {active && (
         <path d={d} className="cv-edge-flow" strokeWidth={width * 0.75} style={style} />
@@ -1898,6 +2161,27 @@ const EdgeView = memo(function EdgeView({
             d="M-4.5,-5 L-1.5,0 L-4.5,5 M4.5,-5 L1.5,0 L4.5,5"
           />
         </g>
+      )}
+      {/* The break says what it is in a word, at the zoom the rate labels
+          use. Above the mark, which takes the wire's own label point. */}
+      {showLabel && severed && (
+        <text className="cv-edge-label is-severed" x={midX} y={midY - 11 + labelDy}>
+          {state === 'cut' ? 'cut' : 'held back'}
+        </text>
+      )}
+
+      {leg && lossy && !severed && (
+        <LossMark
+          leg={leg}
+          x={midX}
+          y={midY}
+          share={lostShare}
+          showLabel={showLabel}
+          below={retrying}
+        />
+      )}
+      {leg && retrying && (
+        <RetryMark leg={leg} x={midX} y={midY} rate={retryRate} showLabel={showLabel} />
       )}
 
       {/*
@@ -1998,6 +2282,10 @@ const NOTE_HANDLES = [
 const SEC_LABEL_STYLE: TextStyle = { size: 12, weight: 550, family: 'sans' };
 const SEC_LABEL_PAD_X = 10;
 const SEC_LABEL_H = 24;
+
+/** Controls floating over the canvas that a fit keeps the diagram clear of
+ *  (see clearOfChrome in fit.ts). */
+const FIT_CLEAR = '.stage-toggle, .cv-hint-idle, .cv-ledger, .cv-zoom, .fp > button';
 /** Minimum plate width, so an empty label still leaves a grab tab. */
 const SEC_LABEL_MIN_W = 28;
 
@@ -2044,7 +2332,16 @@ interface SectionViewProps {
   dropTarget: boolean;
   /** See NoteViewProps.metricsEpoch. */
   metricsEpoch: number;
+  /**
+   * Grows the label plate on a fitted phone diagram. Capped by
+   * SEC_LABEL_MAX_SCALE, so the plate still fits the gutter between stacked
+   * sections rather than covering the row above.
+   */
+  labelScale: number;
 }
+
+/** The most a plate can grow and stay inside a 42px row gutter. */
+const SEC_LABEL_MAX_SCALE = 1.4;
 
 /**
  * The back-layer body of one section. Memoised: its props only change when
@@ -2059,7 +2356,10 @@ const SectionView = memo(function SectionView({
   // Read for nothing but the re-render its change forces: the label is
   // truncated against a measurement, and this is what invalidates it.
   metricsEpoch: _metricsEpoch,
+  labelScale,
 }: SectionViewProps) {
+  // Unscaled while renaming, where the in-place editor sits over the plate.
+  const ls = editingLabel ? 1 : Math.min(Math.max(labelScale, 1), SEC_LABEL_MAX_SCALE);
   return (
     <g
       className={`cv-section${selected ? ' is-selected' : ''}${
@@ -2123,22 +2423,31 @@ const SectionView = memo(function SectionView({
           convention every diagramming tool settled on for the same reason.
           Still grabbable: it is the section's handle for anyone who finds a
           1.5px border too precise a target. */}
-      <g className="cv-section-label" data-hit="section" data-id={s.id}>
+      <g
+        className="cv-section-label"
+        data-hit="section"
+        data-id={s.id}
+        transform={ls === 1 ? undefined : `translate(${s.x} ${s.y}) scale(${ls})`}
+      >
         <rect
           className="cv-section-label-bg"
-          x={s.x}
-          y={s.y - SEC_LABEL_H - 4}
-          width={Math.min(sectionLabelWidth(s.label), s.width)}
+          x={ls === 1 ? s.x : 0}
+          y={(ls === 1 ? s.y : 0) - SEC_LABEL_H - 4}
+          width={Math.min(sectionLabelWidth(s.label), s.width / ls)}
           height={SEC_LABEL_H}
           rx={6}
         />
         {!editingLabel && s.label && (
           <text
             className="cv-section-label-text"
-            x={s.x + SEC_LABEL_PAD_X}
-            y={s.y - SEC_LABEL_H / 2 - 4}
+            x={(ls === 1 ? s.x : 0) + SEC_LABEL_PAD_X}
+            y={(ls === 1 ? s.y : 0) - SEC_LABEL_H / 2 - 4}
           >
-            {truncateToWidth(s.label, s.width - SEC_LABEL_PAD_X * 2, SEC_LABEL_STYLE)}
+            {truncateToWidth(
+              s.label,
+              s.width / ls - SEC_LABEL_PAD_X * 2,
+              SEC_LABEL_STYLE,
+            )}
           </text>
         )}
       </g>
@@ -2161,6 +2470,12 @@ interface NoteViewProps {
    * the wrap is redone once in the face that is actually painted.
    */
   metricsEpoch: number;
+  /**
+   * World px per screen px when a finger is reading a fitted diagram, else 0.
+   * A note whose text lands under NOTE_READ_PX on screen gets a "Tap to
+   * read" tag, and the canvas shows its text at a readable size once tapped.
+   */
+  readScale: number;
 }
 
 /**
@@ -2174,6 +2489,7 @@ const NoteView = memo(function NoteView({
   selected,
   editing,
   metricsEpoch,
+  readScale,
 }: NoteViewProps) {
   const layout = useMemo(
     () => layoutNoteOf(note, note.text),
@@ -2231,9 +2547,128 @@ const NoteView = memo(function NoteView({
           ))}
         </text>
       )}
+      {!editing && noteTooSmall(layout.font, readScale) && (
+        <g
+          className="cv-note-tag"
+          data-hit="note"
+          data-id={note.id}
+          transform={`scale(${readScale})`}
+          aria-hidden="true"
+        >
+          <rect width={NOTE_TAG_W} height={NOTE_TAG_H} rx={NOTE_TAG_H / 2} />
+          <text x={NOTE_TAG_W / 2} y={NOTE_TAG_H / 2}>
+            Tap to read
+          </text>
+        </g>
+      )}
     </g>
   );
 });
+
+/**
+ * The pan that keeps the whole diagram, notes included, inside `room` when
+ * the charts strip rises over the canvas. Null when nothing needs to move.
+ * Too big for the room with its notes, the nodes alone are kept in; too big
+ * even then, the view is left as the reader had it.
+ */
+function contentPan(
+  nodes: readonly SimNode[],
+  annotations: readonly Annotation[],
+  v: { x: number; y: number; k: number },
+  surface: { left: number; top: number },
+  room: RevealBox,
+): RevealPan | null {
+  if (nodes.length === 0) return null;
+  const toBox = (x0: number, y0: number, x1: number, y1: number): RevealBox => ({
+    left: surface.left + x0 * v.k + v.x,
+    top: surface.top + y0 * v.k + v.y,
+    right: surface.left + x1 * v.k + v.x,
+    bottom: surface.top + y1 * v.k + v.y,
+  });
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const n of nodes) {
+    minX = Math.min(minX, n.x);
+    minY = Math.min(minY, n.y);
+    maxX = Math.max(maxX, n.x + NODE_W);
+    maxY = Math.max(maxY, n.y + NODE_H);
+  }
+  const nodeBox = toBox(minX, minY, maxX, maxY);
+  for (const a of annotations) {
+    if (!isNote(a)) continue;
+    const l = layoutNoteOf(a, a.text);
+    minX = Math.min(minX, a.x);
+    minY = Math.min(minY, a.y);
+    maxX = Math.max(maxX, a.x + l.width);
+    maxY = Math.max(maxY, a.y + l.height);
+  }
+  const allBox = toBox(minX, minY, maxX, maxY);
+  const fits = (b: RevealBox) =>
+    b.right - b.left <= room.right - room.left - REVEAL_PAD * 2 &&
+    b.bottom - b.top <= room.bottom - room.top - REVEAL_PAD * 2;
+  const target = fits(allBox) ? allBox : fits(nodeBox) ? nodeBox : null;
+  if (!target) return null;
+  const pan = revealPan(target, room);
+  return pan.dx === 0 && pan.dy === 0 ? null : pan;
+}
+
+/** The nodes' bounds in world px. */
+function nodeBounds(nodes: readonly SimNode[]) {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const n of nodes) {
+    minX = Math.min(minX, n.x);
+    minY = Math.min(minY, n.y);
+    maxX = Math.max(maxX, n.x + NODE_W);
+    maxY = Math.max(maxY, n.y + NODE_H);
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/**
+ * Whether a panel opening over a diagram that was all on screen should keep
+ * it all on screen: 'pan' when it fits beside the panel at this zoom, 'fit'
+ * when it would need a smaller one, null when it was not all on screen to
+ * begin with. "Before" is the room with its right edge at the surface's,
+ * which is where the inspector opens.
+ */
+function keepWhole(
+  nodes: readonly SimNode[],
+  annotations: readonly Annotation[],
+  v: { x: number; y: number; k: number },
+  surface: { left: number; top: number; right: number },
+  room: RevealBox & { width: number; height: number },
+): 'pan' | 'fit' | null {
+  if (nodes.length === 0) return null;
+  const b = nodeBounds(nodes);
+  const left = surface.left + b.minX * v.k + v.x;
+  const right = surface.left + b.maxX * v.k + v.x;
+  const top = surface.top + b.minY * v.k + v.y;
+  const bottom = surface.top + b.maxY * v.k + v.y;
+  const slack = 0.5;
+  const wasWhole =
+    left >= room.left - slack &&
+    right <= surface.right + slack &&
+    top >= room.top - slack &&
+    bottom <= room.bottom + slack;
+  if (!wasWhole) return null;
+  if (right <= room.right - REVEAL_PAD) return null;
+  return contentPan(nodes, annotations, v, surface, room) ? 'pan' : 'fit';
+}
+
+/** Smallest note text a phone shows as text, in screen px. */
+const NOTE_READ_PX = 11;
+const NOTE_TAG_W = 84;
+const NOTE_TAG_H = 22;
+
+/** Whether a note's text renders too small to read at this fitted zoom. */
+function noteTooSmall(font: number, readScale: number): boolean {
+  return readScale > 0 && font / readScale < NOTE_READ_PX;
+}
 
 /**
  * Selection chrome for one section: the ring and the eight resize handles.
@@ -2682,6 +3117,52 @@ const QueueVessel = memo(function QueueVessel({
   );
 });
 
+/** The waiting-line bar's band: under the secondary row, over the meter. */
+const LINE_Y = METER_Y - 6;
+const LINE_H = 3;
+
+/**
+ * How full a node's waiting line is, as a thin bar over the meter.
+ *
+ * The meter shows how busy the node is, and the waiting count is a number in
+ * one cell, which a database replaces with its lock wait once writes contend.
+ * So a database 63 deep in a 64 line read "9.4ms lock" and nothing else on
+ * its card. This bar is that line against its limit, at every detail level.
+ * At the limit, turning calls away, the brim takes the danger colour and
+ * flashes once as it starts; the flash is the only motion, and reduced
+ * motion drops it.
+ */
+const WaitingLine = memo(function WaitingLine({
+  queued,
+  limit,
+  refusing,
+}: {
+  queued: number;
+  limit: number;
+  refusing: boolean;
+}) {
+  const fill = clamp(queued / limit, 0, 1);
+  const fw = fill > 0 ? Math.max(2, fill * METER_W) : 0;
+  return (
+    <g
+      className={`cv-line${refusing ? ' is-refusing' : ''}`}
+      transform={`translate(${PAD_X},${LINE_Y})`}
+    >
+      <rect className="cv-line-track" width={METER_W} height={LINE_H} rx={1.5}>
+        <title>{`${queued} of ${limit} waiting in line`}</title>
+      </rect>
+      {fw > 0 && <rect className="cv-line-fill" width={fw} height={LINE_H} rx={1.5} />}
+      <rect
+        className="cv-line-brim"
+        x={METER_W - 1.5}
+        y={-1.5}
+        width={1.5}
+        height={LINE_H + 3}
+      />
+    </g>
+  );
+});
+
 /* ------------------------------------------------------------------ *
  * Node
  * ------------------------------------------------------------------ */
@@ -2725,7 +3206,7 @@ interface NodeViewProps {
   settledHealth?: Health;
   /**
    * World px per screen px for the glance line (glance.ts), or 0 for none.
-   * Non-zero only below DETAIL_ZOOM on a touch screen.
+   * Non-zero only below DETAIL_ZOOM.
    */
   glance: number;
   onActivate: (id: string, additive: boolean) => void;
@@ -2739,6 +3220,13 @@ interface NodeViewProps {
   entering: boolean;
   /** See `CanvasProps.breakMarks`. Undefined when the node is not a target. */
   breakMark?: number;
+  /** See `CanvasProps.violationMarks`. */
+  violationMark?: string;
+  /**
+   * The waiting line after its display hold (lineHold.ts), from the parent.
+   * Absent or 'none' draws no line bar.
+   */
+  line?: LineState;
 }
 
 /**
@@ -2773,10 +3261,11 @@ export const NodeView = memo(function NodeView({
   onNudge,
   entering,
   breakMark,
+  violationMark,
+  line = 'none',
 }: NodeViewProps) {
-  const readout = stats
-    ? readoutFor(node.kind, stats, node.config, backlog, route)
-    : null;
+  const live = stats ? readoutFor(node.kind, stats, node.config, backlog, route) : null;
+  const readout = live && fault === 'crash' ? downReadout(live) : live;
   // A faulted node is never reported as healthy, whatever its metrics say.
   const health: Health = fault
     ? 'danger'
@@ -2822,6 +3311,15 @@ export const NodeView = memo(function NodeView({
           : pending > 0
             ? 'stack'
             : 'none';
+
+  /* The waiting line, for a node whose card has no picture of it already:
+     the vessel is one, and a strip's cells are each partition's own. */
+  const showLine =
+    line !== 'none' &&
+    stats !== null &&
+    stats.queueLimit > 0 &&
+    structure !== 'strip' &&
+    structure !== 'vessel';
 
   const handleKey = useCallback(
     (e: React.KeyboardEvent<SVGGElement>) => {
@@ -2878,6 +3376,7 @@ export const NodeView = memo(function NodeView({
   // are both unreadable at the zooms it is drawn at.
   const gl = glance > 0 && !full ? glanceLayout(glance) : null;
   const showHeader = detail >= 1 && !gl;
+  const hitPad = gl ? nodeHitPad(glance, NODE_H) : 0;
   // The status mark survives the glance line, counter-scaled to the same
   // screen size and level with its name: it is the shape channel for health,
   // and a phone at fit zoom must not lose it. The unit badge does not, since
@@ -2946,6 +3445,11 @@ export const NodeView = memo(function NodeView({
               : `${stats?.instances} instances`
           : null,
         pending > 0 ? `${pending} warming up` : null,
+        showLine && stats
+          ? `${stats.queued} of ${stats.queueLimit} waiting in line${
+              line === 'refusing' ? ', turning calls away' : ''
+            }`
+          : null,
         // The fault is announced, not just drawn: a screen-reader user has
         // no access to the square mark in the corner.
         fault ? `faulted: ${fault}` : null,
@@ -2954,6 +3458,7 @@ export const NodeView = memo(function NodeView({
           : breakMark > 0
             ? `fault ${breakMark} of the break`
             : 'being tested for a break',
+        violationMark ?? null,
       ]
         .filter(Boolean)
         .join(', ')}
@@ -2970,6 +3475,17 @@ export const NodeView = memo(function NodeView({
           card of the stack rather than an object sitting on top of one. */}
       {structure === 'stack' && showCorner && (
         <InstanceStack live={units?.length ?? 1} pending={pending} />
+      )}
+
+      {/* A fitted card on a phone is about 34px tall, under the 44px a
+          finger needs. This invisible strip grows the target, not the card. */}
+      {hitPad > 0 && (
+        <rect
+          className="cv-node-hitpad"
+          y={-hitPad}
+          width={NODE_W}
+          height={NODE_H + hitPad * 2}
+        />
       )}
 
       {/* Body. One surface. No header band fill, no card-in-card. */}
@@ -3027,6 +3543,22 @@ export const NodeView = memo(function NodeView({
       )}
       {breakMark !== undefined && breakMark > 0 && (
         <BreakBadge x={0} y={0} n={breakMark} />
+      )}
+      {violationMark !== undefined && (
+        <g className="cv-violation" aria-hidden="true">
+          <rect
+            className="cv-violation-ring"
+            x={-RING_GAP * 3}
+            y={-RING_GAP * 3}
+            width={NODE_W + RING_GAP * 6}
+            height={NODE_H + RING_GAP * 6}
+            rx={NODE_R + RING_GAP * 3}
+            ry={NODE_R + RING_GAP * 3}
+          />
+          <text className="cv-violation-text" x={0} y={-RING_GAP * 3 - 6}>
+            {violationMark}
+          </text>
+        </g>
       )}
 
       {/* No kind rule along the top edge. It used to sit at y=0, but the body
@@ -3339,6 +3871,14 @@ export const NodeView = memo(function NodeView({
           rx={1.5}
         />
       )}
+      {showLine && stats && (
+        <WaitingLine
+          queued={stats.queued}
+          limit={stats.queueLimit}
+          refusing={line === 'refusing'}
+        />
+      )}
+
       {/* Threshold tick. A fixed landmark at the warn line, so a bar can be
           read against WHERE trouble starts, not just against its own length. */}
       <rect
@@ -3448,9 +3988,45 @@ const BACKGROUND_HIT: Hit = {
   fontName: null,
 };
 
+/**
+ * What a context menu on this hit is about. A port belongs to its part and
+ * the cable's delete badge to its cable. A note or a section frame gets the
+ * canvas menu, and their own small controls get none.
+ */
+function menuTargetOf(hit: Hit): MenuTarget | null {
+  switch (hit.kind) {
+    case 'node':
+    case 'port-in':
+    case 'port-out':
+      return hit.id ? { kind: 'node', id: hit.id } : null;
+    case 'edge':
+    case 'edge-delete':
+      return hit.id ? { kind: 'edge', id: hit.id } : null;
+    case 'background':
+    case 'note':
+    case 'section':
+      return { kind: 'canvas' };
+    default:
+      return null;
+  }
+}
+
+/** What the context menu asks of the canvas. */
+export interface CanvasMenuApi {
+  /** The Fit button: the whole diagram. */
+  fitAll: () => void;
+  /** Start a link from a part: the click-link, or keyboard connect. */
+  startLink: (id: string, keyboard: boolean) => void;
+}
+
 interface Pending {
   pointerId: number;
   hit: Hit;
+  /**
+   * The press was held long enough to open the context menu. Its lift then
+   * selects nothing; moving on from the hold still drags, and closes the menu.
+   */
+  held: boolean;
   /**
    * Drag-promotion threshold in screen px, latched from the pointer type at
    * press time: 4 for a mouse, 10 for a finger or a pen (see pointerInput).
@@ -3527,10 +4103,14 @@ interface LinkState {
  * Canvas
  * ------------------------------------------------------------------ */
 
+/** Below this zoom the traffic dots give way to the dashes. */
+const DOT_MIN_ZOOM = 0.3;
+
 export default function Canvas({
   topology,
   snapshot,
   routes,
+  readOutcomes,
   selectedIds,
   onSelectionChange,
   onMoveNode,
@@ -3559,12 +4139,20 @@ export default function Canvas({
   exportSvgRef,
   onToolChange,
   fitSignal = 0,
+  frameKey = null,
   visibleRef,
   breakMarks,
+  violationMarks,
   emptyActions,
-  fitTight = false,
+  narrowFit,
+  onFitClipped,
+  reveal = null,
+  onReselect,
   spotlightId = null,
   spotlightKey = null,
+  onContextMenu,
+  onClipboardWrite,
+  menuApiRef,
 }: CanvasProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
@@ -3592,6 +4180,18 @@ export default function Canvas({
    * an inch off the board would lock out their other hand entirely.
    */
   const penDownRef = useRef(false);
+  /** The armed long-press timer for the press in progress, if any. */
+  const longPressRef = useRef<LongPress | null>(null);
+  /**
+   * When a held finger last opened the menu, so Android's own contextmenu
+   * event for the same hold, which can land after the lift, does not open
+   * it a second time.
+   */
+  const menuAtRef = useRef(-Infinity);
+  const onContextMenuRef = useRef(onContextMenu);
+  useLayoutEffect(() => {
+    onContextMenuRef.current = onContextMenu;
+  }, [onContextMenu]);
 
   const [view, setView] = useState<Viewport>({ x: 0, y: 0, k: 1 });
 
@@ -3607,6 +4207,8 @@ export default function Canvas({
    * trackpad and no deal at all on a touchscreen.
    */
   const snapOn = usePreference('snapToGrid');
+  const dotsOn = usePreference('trafficDots');
+  const reducedMotion = useReducedMotion();
 
   /**
    * The surface's size in screen px, for the minimap's viewport rectangle.
@@ -3957,6 +4559,8 @@ export default function Canvas({
   const selectOne = useCallback(
     (id: string, additive: boolean) => {
       if (!additive) {
+        const cur = selRef.current;
+        if (cur.size === 1 && cur.has(id)) onReselect?.();
         setSelection(new Set([id]));
         return;
       }
@@ -3965,7 +4569,7 @@ export default function Canvas({
       else next.add(id);
       setSelection(next);
     },
-    [setSelection],
+    [setSelection, onReselect],
   );
 
   const clearSelection = useCallback(() => {
@@ -3987,6 +4591,41 @@ export default function Canvas({
     return !t.edges.some((e) => e.from === from && e.to === to);
   }, []);
 
+  /* L, then arrows and Enter: a link made from the keyboard (see
+     useKeyboardConnect). */
+  const clearTool = useCallback(() => setTool(null), []);
+  const beginKeyLinkRef = useRef<((id: string) => void) | null>(null);
+  /* What a link made from the keyboard says once it is made. The hint that
+     guided it goes as the link lands, and it went in silence. */
+  const [keyLinkSaid, setKeyLinkSaid] = useState('');
+  const onKeyConnect = useCallback(
+    (from: string, to: string) => {
+      onConnect(from, to);
+      const name = (id: string) =>
+        topoRef.current.nodes.find((n) => n.id === id)?.label ?? id;
+      setKeyLinkSaid(`Connected ${name(from)} to ${name(to)}.`);
+    },
+    [onConnect],
+  );
+  const keyLink = useKeyboardConnect({
+    hostRef,
+    topoRef,
+    viewRef,
+    setView,
+    visibleRect,
+    nodes: topology.nodes,
+    selectedIds,
+    pendingLink,
+    setPendingLink,
+    canLink,
+    onConnect: onKeyConnect,
+    clearTool,
+    isTypingTarget,
+    nodeW: NODE_W,
+    nodeH: NODE_H,
+    beginRef: beginKeyLinkRef,
+  });
+
   /** World-space hit test against node rects. Topmost (last drawn) wins. */
   const nodeAt = useCallback((wx: number, wy: number): string | null => {
     const nodes = topoRef.current.nodes;
@@ -4002,6 +4641,8 @@ export default function Canvas({
   /* ---------------- gesture teardown ---------------- */
 
   const cancelGesture = useCallback(() => {
+    longPressRef.current?.cancel();
+    longPressRef.current = null;
     const p = pendingRef.current;
     if (p) {
       const el = surfaceRef.current;
@@ -4063,6 +4704,25 @@ export default function Canvas({
       tone: found.getAttribute('data-tone'),
       fontName: found.getAttribute('data-font-name'),
     };
+  }, []);
+
+  /**
+   * Open the menu for a press that was held still, at the point it was
+   * pressed. Marks the press, so its lift selects nothing.
+   */
+  const openHeldMenu = useCallback((p: Pending) => {
+    const target = menuTargetOf(p.hit);
+    const open = onContextMenuRef.current;
+    if (!target || !open || p.held) return;
+    p.held = true;
+    menuAtRef.current = performance.now();
+    open({
+      target,
+      x: p.screenX,
+      y: p.screenY,
+      world: { x: p.worldX, y: p.worldY },
+      via: 'touch',
+    });
   }, []);
 
   const onSurfaceDown = useCallback(
@@ -4163,7 +4823,29 @@ export default function Canvas({
         annRect: null,
         noteWrap: 0,
         tool: armedTool,
+        held: false,
       };
+
+      // A finger or pen resting in place opens the context menu. Not while a
+      // tool is armed or a pan is forced, where the press already has a job.
+      longPressRef.current?.cancel();
+      longPressRef.current = null;
+      if (
+        longPressable(e.pointerType) &&
+        onContextMenuRef.current &&
+        !armedTool &&
+        !spaceRef.current &&
+        !middle
+      ) {
+        const id = e.pointerId;
+        longPressRef.current = startLongPress(id, () => {
+          longPressRef.current = null;
+          const p = pendingRef.current;
+          if (!p || p.pointerId !== id || p.active || pinchRef.current) return;
+          if (touchesRef.current.size > 1) return;
+          openHeldMenu(p);
+        });
+      }
 
       // (B) NO setPointerCapture here. That single line was the whole bug:
       // capturing on press retargets the subsequent pointerup to this
@@ -4172,7 +4854,7 @@ export default function Canvas({
       // happens at promotion, in onSurfaceMove, once the gesture is known to
       // be a drag.
     },
-    [hitTest, toWorld, cancelGesture, onMoveNode],
+    [hitTest, toWorld, cancelGesture, onMoveNode, openHeldMenu],
   );
 
   /* ---------------- pointermove: promote, then drag ---------------- */
@@ -4180,6 +4862,14 @@ export default function Canvas({
   const promote = useCallback(
     (p: Pending, clientX: number, clientY: number) => {
       p.active = true;
+      // Moving is a drag, not a long-press. A hold that already opened the
+      // menu drags on from where it is, and the menu goes.
+      longPressRef.current?.cancel();
+      longPressRef.current = null;
+      if (p.held) {
+        p.held = false;
+        onContextMenuRef.current?.(null);
+      }
 
       // An armed tool owns the whole gesture. The section tool draws its
       // frame; the note tool is a click gesture, so a drag under it degrades
@@ -4712,6 +5402,14 @@ export default function Canvas({
 
       const p = pendingRef.current;
       if (!p || p.pointerId !== e.pointerId) return;
+
+      longPressRef.current?.cancel();
+      longPressRef.current = null;
+      // The hold opened the menu; lifting the finger leaves it open.
+      if (!p.active && p.held) {
+        cancelGesture();
+        return;
+      }
 
       if (!p.active) {
         /* ---- CLICK ---- */
@@ -5433,6 +6131,7 @@ export default function Canvas({
       if (!text || !e.clipboardData) return;
       e.preventDefault();
       e.clipboardData.setData('text/plain', text);
+      onClipboardWrite?.(text);
     };
 
     const onCut = (e: ClipboardEvent) => {
@@ -5441,6 +6140,7 @@ export default function Canvas({
       if (!text || !e.clipboardData) return;
       e.preventDefault();
       e.clipboardData.setData('text/plain', text);
+      onClipboardWrite?.(text);
       // Cut = copy + the same single-edit delete the Delete key performs.
       // Annotations partition into their own bucket: the clipboard does not
       // carry them, but a selected note must still leave the canvas.
@@ -5492,7 +6192,14 @@ export default function Canvas({
       document.removeEventListener('cut', onCut);
       document.removeEventListener('paste', onPasteEvent);
     };
-  }, [onDeleteSelection, clearSelection, onPaste, toWorld, visibleRect]);
+  }, [
+    onDeleteSelection,
+    clearSelection,
+    onPaste,
+    toWorld,
+    visibleRect,
+    onClipboardWrite,
+  ]);
 
   /* ---------------- palette drops ---------------- */
 
@@ -5570,10 +6277,16 @@ export default function Canvas({
    */
   /** The surface size the last fit framed for. See the resize observer. */
   const fittedSizeRef = useRef<{ w: number; h: number } | null>(null);
+  /** The view the last fit set, and how it was asked for. See frameKey. */
+  const lastFitRef = useRef<{
+    view: Viewport;
+    explicit: boolean;
+    whole: boolean;
+  } | null>(null);
   const fitTo = useCallback(
-    (nodes: readonly SimNode[]) => {
+    (nodes: readonly SimNode[], explicit = false): boolean => {
       const rects = visibleRect();
-      if (!rects || nodes.length === 0) return;
+      if (!rects || nodes.length === 0) return false;
       // Scale and centring both use the VISIBLE rect (see fitViewport), so a
       // fit with panels open, or the challenge sheet up on a phone, frames
       // the diagram in the uncovered area and never under an opaque panel.
@@ -5587,19 +6300,72 @@ export default function Canvas({
         if (n.x + NODE_W > maxX) maxX = n.x + NODE_W;
         if (n.y + NODE_H > maxY) maxY = n.y + NODE_H;
       }
-      const next = fitViewport(
-        { minX, minY, maxX, maxY },
-        rects.surface,
-        rects.view,
-        fitTight,
-      );
-      if (!next) return;
+      /* The whole diagram takes its sections, label tab included, and its
+         notes. A section's tab sits above its frame, and left out it opened
+         under the controls at the canvas's top. A note is read too, but it
+         is only added while it costs the cards none of their numbers: one
+         that would drop them a detail band (detailBand) is left to a pan. */
+      const whole = nodes.length === topoRef.current.nodes.length;
+      const anns = whole ? (topoRef.current.annotations ?? []) : [];
+      for (const a of anns) {
+        if (!isSection(a)) continue;
+        minX = Math.min(minX, a.x);
+        minY = Math.min(minY, a.y - SEC_LABEL_H - 4);
+        maxX = Math.max(maxX, a.x + a.width);
+        maxY = Math.max(maxY, a.y + a.height);
+      }
+      const bounds = { minX, minY, maxX, maxY };
+      const all = { ...bounds };
+      for (const a of anns) {
+        if (!isNote(a)) continue;
+        const l = layoutNoteOf(a, a.text);
+        all.minX = Math.min(all.minX, a.x);
+        all.minY = Math.min(all.minY, a.y);
+        all.maxX = Math.max(all.maxX, a.x + l.width);
+        all.maxY = Math.max(all.maxY, a.y + l.height);
+      }
+      // A phone's controls sit outside the canvas or along its edges, and
+      // its fit is tuned in fit.ts; only a wider screen clears them here.
+      let room: FitRect = rects.view;
+      if (!narrowFit) {
+        const chrome = [...document.querySelectorAll(FIT_CLEAR)].map((el) =>
+          el.getBoundingClientRect(),
+        );
+        room = clearOfChrome(rects.view, chrome, {
+          w: all.maxX - all.minX,
+          h: all.maxY - all.minY,
+        });
+      }
+      const how = { explicit, narrow: narrowFit };
+      let next = fitViewport(bounds, rects.surface, room, how);
+      if (!next) return false;
+      // Clearing the controls must not push cards off the screen: a card
+      // under the ledger can still be seen, one past the edge cannot.
+      if (room !== rects.view && fitClips(bounds, room, next.k)) {
+        const plain = fitViewport(bounds, rects.surface, rects.view, how);
+        if (plain && !fitClips(bounds, rects.view, plain.k)) {
+          room = rects.view;
+          next = plain;
+        }
+      }
+      if (
+        all.minX !== bounds.minX ||
+        all.minY !== bounds.minY ||
+        all.maxX !== bounds.maxX ||
+        all.maxY !== bounds.maxY
+      ) {
+        const withNotes = fitViewport(all, rects.surface, room, how);
+        if (withNotes && detailBand(withNotes.k) === detailBand(next.k))
+          next = withNotes;
+      }
       // The surface size this fit was framed for, so the resize observer can
       // tell a real resize from the size it was already fitted to.
       fittedSizeRef.current = { w: rects.surface.width, h: rects.surface.height };
+      lastFitRef.current = { view: next, explicit, whole };
       setView(next);
+      return fitClips(bounds, room, next.k);
     },
-    [visibleRect, fitTight],
+    [visibleRect, narrowFit],
   );
 
   /**
@@ -5645,11 +6411,113 @@ export default function Canvas({
   const coarsePointer = useCoarsePointer();
   const coarsePointerRef = useRef(coarsePointer);
   coarsePointerRef.current = coarsePointer;
+  const narrowFitRef = useRef(narrowFit);
+  narrowFitRef.current = narrowFit;
 
   const fitToContent = useCallback(
     () => fitTo(topology.nodes),
     [fitTo, topology.nodes],
   );
+  /** The Fit button, the zoom readout and Shift+1: always the whole diagram. */
+  const fitAll = useCallback(() => {
+    fitTo(topology.nodes, true);
+  }, [fitTo, topology.nodes]);
+
+  /** Filled for the context menu, the way armToolRef is for the rail. */
+  useEffect(() => {
+    if (!menuApiRef) return;
+    menuApiRef.current = {
+      fitAll,
+      startLink: (id, keyboard) => {
+        if (keyboard) {
+          beginKeyLinkRef.current?.(id);
+          return;
+        }
+        clearTool();
+        setPendingLink(id);
+      },
+    };
+    return () => {
+      menuApiRef.current = null;
+    };
+  }, [menuApiRef, fitAll, clearTool]);
+
+  /**
+   * The browser's context menu never shows over the canvas. Over the
+   * surface it opens ours instead: from a mouse at the pointer, from the
+   * menu key under the focused part, and from a held finger (Android sends
+   * this event for one) exactly as the long-press timer would.
+   */
+  const onHostContextMenu = useCallback(
+    (e: ReactMouseEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const open = onContextMenuRef.current;
+      const surface = surfaceRef.current;
+      const el = e.target as Element | null;
+      if (!open || !surface || !el || !surface.contains(el)) return;
+      if (el.closest?.('button, input, select, textarea, a, [data-chrome]')) return;
+      const p = pendingRef.current;
+      if (p?.held) return;
+      if (p && !p.active && longPressRef.current?.pointerId === p.pointerId) {
+        longPressRef.current.cancel();
+        longPressRef.current = null;
+        openHeldMenu(p);
+        return;
+      }
+      if (performance.now() - menuAtRef.current < 600) return;
+      const target = menuTargetOf(hitTest(el));
+      if (!target) return;
+      // A Mac's Ctrl+click arrives as a primary press first; it was a menu
+      // request, so it must not also select on its lift.
+      if (p) cancelGesture();
+      const pointerType = (e.nativeEvent as Partial<PointerEvent>).pointerType;
+      const keyboard = pointerType === '' || (e.clientX === 0 && e.clientY === 0);
+      let x = e.clientX;
+      let y = e.clientY;
+      if (keyboard) {
+        const r = el.getBoundingClientRect();
+        x = r.left + r.width / 2;
+        y = r.bottom;
+      }
+      open({
+        target,
+        x,
+        y,
+        world: toWorld(x, y),
+        via: keyboard ? 'keyboard' : 'mouse',
+      });
+    },
+    [hitTest, toWorld, cancelGesture, openHeldMenu],
+  );
+  /**
+   * The menu key and Shift+F10 on a focused part. Chrome on Windows turns
+   * them into the contextmenu event above, but a Mac sends nothing for
+   * either, and there the menu was a mouse's alone. Opened here instead,
+   * and stamped, so a contextmenu event that does follow is ignored.
+   */
+  const onHostKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key !== 'ContextMenu' && !(e.key === 'F10' && e.shiftKey)) return;
+      const open = onContextMenuRef.current;
+      const surface = surfaceRef.current;
+      const el = e.target as Element | null;
+      if (!open || !surface || !el || !surface.contains(el)) return;
+      if (el.closest?.('button, input, select, textarea, a, [data-chrome]')) return;
+      const target = menuTargetOf(hitTest(el));
+      if (!target) return;
+      e.preventDefault();
+      menuAtRef.current = performance.now();
+      const r = el.getBoundingClientRect();
+      const x = r.left + r.width / 2;
+      const y = r.bottom;
+      open({ target, x, y, world: toWorld(x, y), via: 'keyboard' });
+    },
+    [hitTest, toWorld],
+  );
+  const onFitClippedRef = useRef(onFitClipped);
+  useEffect(() => {
+    onFitClippedRef.current = onFitClipped;
+  }, [onFitClipped]);
 
   /**
    * Re-fit ONLY when the diagram is replaced wholesale: first content on a
@@ -5700,11 +6568,27 @@ export default function Canvas({
     // argument applies: there is nothing to reveal, and re-aiming here slides
     // the canvas out from under the drop.
     if (dropped) return;
-    fitToContent();
+    if (fitToContent()) onFitClippedRef.current?.();
     // fitToContent is intentionally omitted: it changes identity on every node
     // move, and re-fitting mid-drag is exactly what this guard prevents.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [topoKey, fitSignal]);
+
+  /* The bar changed height (see frameKey). Only a whole-diagram fit the
+     reader has not since moved away from is redone. */
+  const frameKeyRef = useRef(frameKey);
+  useLayoutEffect(() => {
+    if (frameKeyRef.current === frameKey) return;
+    frameKeyRef.current = frameKey;
+    const last = lastFitRef.current;
+    if (!last || !last.whole || pendingRef.current) return;
+    if (viewRef.current !== last.view) return;
+    if (fitTo(topoRef.current.nodes, last.explicit) && !last.explicit) {
+      onFitClippedRef.current?.();
+    }
+    // Follows the bar only; fitTo is read as it stands.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frameKey]);
 
   /** Latest fitToContent, so the resize observer below subscribes once. */
   const fitToContentRef = useRef(fitToContent);
@@ -5797,14 +6681,14 @@ export default function Canvas({
       // only on some layouts.
       if (e.shiftKey && !e.altKey && e.code === 'Digit1') {
         e.preventDefault();
-        fitTo(topology.nodes);
+        fitTo(topology.nodes, true);
         return;
       }
       if (e.shiftKey && !e.altKey && e.code === 'Digit2') {
         const sel = topology.nodes.filter((n) => selectedIds.has(n.id));
         if (sel.length === 0) return;
         e.preventDefault();
-        fitTo(sel);
+        fitTo(sel, true);
         return;
       }
 
@@ -5875,6 +6759,37 @@ export default function Canvas({
 
   const spotNode = spotlightId ? (nodeById.get(spotlightId) ?? null) : null;
 
+  /* A correctness mark is the moment a replay is about. When one appears,
+     pan its part into the uncovered area if it is off screen or under a
+     panel, keeping the zoom. Keyed on the marked part, so the camera moves
+     once per mark and never fights a pan the student makes afterwards. */
+  const markedId = violationMarks?.keys().next().value ?? null;
+  useEffect(() => {
+    if (markedId === null) return;
+    const rects = visibleRect();
+    const n = topoRef.current.nodes.find((x) => x.id === markedId);
+    if (!rects || !n) return;
+    const { surface, view } = rects;
+    const v = viewRef.current;
+    // The ring and the label above it, in screen px.
+    const pad = RING_GAP * 3;
+    const left = surface.left + (n.x - pad) * v.k + v.x;
+    const right = surface.left + (n.x + NODE_W + pad) * v.k + v.x;
+    const top = surface.top + (n.y - pad - VIOLATION_LABEL_H) * v.k + v.y;
+    const bottom = surface.top + (n.y + NODE_H + pad) * v.k + v.y;
+    if (
+      left >= view.left &&
+      right <= view.right &&
+      top >= view.top &&
+      bottom <= view.bottom
+    ) {
+      return;
+    }
+    const dx = (view.left + view.right) / 2 - (left + right) / 2;
+    const dy = (view.top + view.bottom) / 2 - (top + bottom) / 2;
+    setView({ k: v.k, x: v.x + dx, y: v.y + dy });
+  }, [markedId, visibleRect]);
+
   /* Pan a spotlit node into view when it is off screen or under a panel,
      keeping the zoom, then pan the diagram out from under the card marked
      [data-titles-clear] so it covers no box's title. Keyed on the id and
@@ -5902,44 +6817,19 @@ export default function Canvas({
         : null;
     const ring = ringOf(v);
     if (n && ring) {
-      const { left, top, right, bottom } = ring;
-      /* Panels marked [data-spot-avoid] (the answer that named this node,
-         an open "What just happened") cover the canvas. One that overlaps
-         the node trims the band it sits in, top or bottom, from the area the
-         node is centred in. On a phone that band is most of the strip. */
-      let visTop = view.top;
-      let visBottom = view.bottom;
-      let covered = false;
+      /* The smallest pan that puts the ring inside the uncovered canvas and
+         clear of the cards marked [data-spot-avoid] (the answer that named
+         this node, an open "What just happened"). It used to centre the
+         node, which on tour step 2 pushed Client and the lesson note under
+         the components rail to bring Database a few px clear of the card. */
+      const avoid: RevealBox[] = [];
       for (const el of document.querySelectorAll('[data-spot-avoid]')) {
         const o = el.getBoundingClientRect();
-        if (o.width === 0 || o.height === 0) continue;
-        const mid = (view.top + view.bottom) / 2;
-        if ((o.top + o.bottom) / 2 < mid) visTop = Math.max(visTop, o.bottom);
-        else visBottom = Math.min(visBottom, o.top);
-        if (o.left < right && o.right > left && o.top < bottom && o.bottom > top) {
-          covered = true;
-        }
+        if (o.width > 0 && o.height > 0) avoid.push(o);
       }
-      if (
-        covered ||
-        left < view.left ||
-        right > view.right ||
-        top < view.top ||
-        bottom > view.bottom
-      ) {
-        // Panels taller than the room between them leave nothing to centre in.
-        if (visBottom - visTop < (bottom - top) / 2) {
-          visTop = view.top;
-          visBottom = view.bottom;
-        }
-        const cx = view.left + view.width / 2 - surface.left;
-        const cy = (visTop + visBottom) / 2 - surface.top;
-        next = {
-          k: v.k,
-          x: cx - (n.x + NODE_W / 2) * v.k,
-          y: cy - (n.y + NODE_H / 2) * v.k,
-        };
-      }
+      const pan = revealPan(ring, view, avoid, 8);
+      if (pan.dx !== 0 || pan.dy !== 0)
+        next = { k: v.k, x: v.x + pan.dx, y: v.y + pan.dy };
     }
 
     const card = document.querySelector('[data-titles-clear]')?.getBoundingClientRect();
@@ -5987,19 +6877,142 @@ export default function Canvas({
             width: view.width,
             height: view.bottom - below,
           },
-          fitTight,
+          { narrow: narrowFit },
         );
         if (fit && keepsInView(ringOf(fit), view, card)) next = fit;
       }
     }
 
     if (next !== v) setView(next);
-    // fitTight is read when the answer arrives, not followed.
+    // narrowFit is read when the answer arrives, not followed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spotlightId, spotlightKey, visibleRect]);
 
+  /* Keep the part being worked on in view (see reveal.ts). Waits out the
+     panel's slide, so the room is measured where the panel lands, and pans
+     once per key: a pan the reader makes afterwards is theirs to keep. An
+     edge id stands for the two boxes it joins. */
+  const revealKey = reveal?.key ?? null;
+  const revealRef = useRef(reveal);
+  const revealToolsRef = useRef({ visibleRect, fitTo });
+  useLayoutEffect(() => {
+    revealRef.current = reveal;
+    revealToolsRef.current = { visibleRect, fitTo };
+  });
+  useEffect(() => {
+    if (revealKey === null) return;
+    const timer = window.setTimeout(() => {
+      if (pendingRef.current) return;
+      const { visibleRect, fitTo } = revealToolsRef.current;
+      const rects = visibleRect();
+      if (!rects) return;
+      const { surface, view: room } = rects;
+      const { nodes, edges } = topoRef.current;
+      const want = new Set<string>();
+      for (const id of revealRef.current?.ids ?? []) {
+        const e = edges.find((x) => x.id === id);
+        if (e) {
+          want.add(e.from);
+          want.add(e.to);
+        } else want.add(id);
+      }
+      const v = viewRef.current;
+      if (revealRef.current?.content) {
+        // The ledger and zoom row sit inside the room, along its foot.
+        let bottom = room.bottom;
+        for (const el of document.querySelectorAll('.cv-ledger, .cv-zoom')) {
+          const r = el.getBoundingClientRect();
+          if (r.height > 0 && r.top > room.top) bottom = Math.min(bottom, r.top);
+        }
+        const pan = contentPan(nodes, topoRef.current.annotations ?? [], v, surface, {
+          left: room.left,
+          top: room.top,
+          right: room.right,
+          bottom,
+        });
+        if (pan) setView((cur) => ({ ...cur, x: cur.x + pan.dx, y: cur.y + pan.dy }));
+        return;
+      }
+      /* A diagram that was all on screen before the panel came in stays all
+         on screen beside it when it can: panned at this zoom, or fitted at
+         one that still shows every number. Otherwise only the parts named
+         are moved clear, below. */
+      if (!revealRef.current?.fit && want.size > 0) {
+        const keep = keepWhole(
+          nodes,
+          topoRef.current.annotations ?? [],
+          v,
+          surface,
+          room,
+        );
+        if (keep === 'pan') {
+          const pan = contentPan(
+            nodes,
+            topoRef.current.annotations ?? [],
+            v,
+            surface,
+            room,
+          );
+          if (pan) setView((cur) => ({ ...cur, x: cur.x + pan.dx, y: cur.y + pan.dy }));
+          return;
+        }
+        if (keep === 'fit') {
+          const bounds = nodeBounds(nodes);
+          const f = fitViewport(bounds, surface, room, {
+            narrow: narrowFitRef.current,
+          });
+          const floor = revealRef.current?.whole ? MINIMAL_ZOOM : DETAIL_ZOOM;
+          if (f && f.k >= floor && f.k <= v.k && !fitClips(bounds, room, f.k)) {
+            setView(f);
+            return;
+          }
+        }
+      }
+      const boxes: RevealBox[] = [];
+      for (const n of nodes) {
+        if (!want.has(n.id)) continue;
+        boxes.push({
+          left: surface.left + n.x * v.k + v.x,
+          top: surface.top + n.y * v.k + v.y,
+          right: surface.left + (n.x + NODE_W) * v.k + v.x,
+          bottom: surface.top + (n.y + NODE_H) * v.k + v.y,
+        });
+      }
+      if (boxes.length === 0) return;
+      let target: RevealBox = {
+        left: Math.min(...boxes.map((b) => b.left)),
+        top: Math.min(...boxes.map((b) => b.top)),
+        right: Math.max(...boxes.map((b) => b.right)),
+        bottom: Math.max(...boxes.map((b) => b.bottom)),
+      };
+      // Several parts too far apart to show at once: fitted when the panel
+      // is about all of them, else the first one named.
+      if (
+        target.right - target.left > room.width ||
+        target.bottom - target.top > room.height
+      ) {
+        if (revealRef.current?.fit) {
+          if (fitTo(nodes.filter((n) => want.has(n.id)))) onFitClippedRef.current?.();
+          return;
+        }
+        target = boxes[0];
+      }
+      const avoid: RevealBox[] = [];
+      for (const el of document.querySelectorAll('[data-spot-avoid]')) {
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) avoid.push(r);
+      }
+      const { dx, dy } = revealPan(target, room, avoid);
+      if (dx !== 0 || dy !== 0)
+        setView((cur) => ({ ...cur, x: cur.x + dx, y: cur.y + dy }));
+    }, REVEAL_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [revealKey]);
+
   const detail: 0 | 1 | 2 = view.k >= DETAIL_ZOOM ? 2 : view.k >= MINIMAL_ZOOM ? 1 : 0;
-  const glance = glanceScale(view.k, coarsePointer);
+  const glance = glanceScale(view.k);
+  const ledgerRef = useRef<HTMLDivElement | null>(null);
+  useLedgerFit(ledgerRef, topology.nodes.length > 0);
   const showEdgeLabels = view.k >= 1;
 
   /**
@@ -6096,6 +7109,39 @@ export default function Canvas({
     snapshot?.system.timeMs ?? null,
   );
 
+  /* Each node's waiting line, held so a line that blinks between 0 and 2
+     does not blink a bar in and out (lineHold.ts). */
+  const rawLineById = useMemo(() => {
+    const m = new Map<string, LineState>();
+    if (!snapshot) return m;
+    for (const n of topology.nodes) {
+      const s = snapshot.nodes[n.id];
+      if (s) m.set(n.id, rawLine(s.queued, s.queueLimit, s.shedRate));
+    }
+    return m;
+  }, [snapshot, topology.nodes]);
+  const lineById = useLineStates(rawLineById, snapshot?.system.timeMs ?? null);
+
+  /* Retries and drops per wire, read from the engine's tally once per
+     snapshot. Only wires with something to draw get an entry, so most
+     EdgeViews keep the same props and skip the render. */
+  const edgeTallyById = useMemo(() => {
+    const m = new Map<string, { retry: number; lost: number | null }>();
+    if (!readOutcomes || !snapshot) return m;
+    const out = new Float64Array(EDGE_OUTCOME_SLOTS);
+    for (const ed of topology.edges) {
+      if (!readOutcomes(ed.id, out)) continue;
+      const retry = out[EO_RETRY] ?? 0;
+      const sent = (out[EO_FIRST] ?? 0) + retry;
+      const lost =
+        (ed.lossRate ?? 0) > 0 && sent > 0
+          ? clamp((out[EO_LOST] ?? 0) / sent, 0, 1)
+          : null;
+      if (retry > 0 || lost !== null) m.set(ed.id, { retry, lost });
+    }
+    return m;
+  }, [snapshot, readOutcomes, topology.edges]);
+
   const healthById = useMemo(() => {
     if (faultById.size === 0) return settledHealthById;
     const m = new Map(settledHealthById);
@@ -6123,6 +7169,34 @@ export default function Canvas({
     }
     return m;
   }, [topology.edges]);
+
+  /**
+   * Traffic dots: on with the setting and an engine to read, and only while
+   * the wires are long enough on screen for a dot to travel. Dots keep one
+   * screen size at every zoom, so the floor sits below MINIMAL_ZOOM: a
+   * phone fits a large example at 0.38 (FIT_MIN_NARROW) and should still
+   * see its traffic. Below it the moving dashes come back. With reduced
+   * motion nothing moves; each wire shows a still bar of the same shares.
+   */
+  const dotMode: 'moving' | 'still' | null =
+    !dotsOn || !readOutcomes || view.k < DOT_MIN_ZOOM
+      ? null
+      : reducedMotion
+        ? 'still'
+        : 'moving';
+  /** Request paths the dots travel: the same routes EdgeView draws. */
+  const dotWires = useMemo(() => {
+    const out: DotWire[] = [];
+    for (const ed of topology.edges) {
+      if (controlEdges.has(ed.id)) continue;
+      const a = nodeById.get(ed.from);
+      const b = nodeById.get(ed.to);
+      if (!a || !b) continue;
+      const r = routeEdge(nodeRect(a), nodeRect(b), laneById.get(ed.id) ?? 0);
+      out.push({ id: ed.id, points: r.points, label: r.label });
+    }
+    return out;
+  }, [topology.edges, controlEdges, nodeById, laneById]);
 
   /**
    * De-conflicted vertical offsets for edge rate labels, keyed by edge id.
@@ -6223,9 +7297,12 @@ export default function Canvas({
   const editSection =
     editSectionRaw && isSection(editSectionRaw) ? editSectionRaw : null;
 
-  /** Snapped drop target of the live drag-link, if the drop would be legal. */
+  /** Snapped drop target of the live drag-link, if the drop would be legal,
+   *  or the part a keyboard link has picked. */
   const snapTarget =
-    link && link.over && canLink(link.from, link.over) ? link.over : null;
+    link && link.over && canLink(link.from, link.over)
+      ? link.over
+      : (keyLink?.to?.id ?? null);
 
   /**
    * Loose end of the preview wire.
@@ -6243,7 +7320,7 @@ export default function Canvas({
   let previewD: string | null = null;
   if (previewFrom) {
     const snapNode = snapTarget ? nodeById.get(snapTarget) : undefined;
-    if (link && snapNode) {
+    if (snapNode) {
       // Snapped: show the wire exactly where the real edge will route,
       // extended to the arrow tip since the preview draws no head.
       const r = routeEdge(nodeRect(previewFrom), nodeRect(snapNode));
@@ -6263,8 +7340,11 @@ export default function Canvas({
   return (
     <div
       ref={hostRef}
-      className={`cv-host${dropHint ? ' is-dropping' : ''}`}
-      onContextMenu={(e) => e.preventDefault()}
+      className={`cv-host${dropHint ? ' is-dropping' : ''}${
+        dotMode === 'moving' ? ' has-dots' : ''
+      }`}
+      onContextMenu={onHostContextMenu}
+      onKeyDown={onHostKeyDown}
     >
       {/*
         The interaction surface. Everything the pointer router cares about
@@ -6307,6 +7387,7 @@ export default function Canvas({
                     editingLabel={labelEdit?.id === s.id}
                     dropTarget={dropSection === s.id}
                     metricsEpoch={metricsEpoch}
+                    labelScale={coarsePointer ? glance : 0}
                   />
                 ))}
               </g>
@@ -6334,10 +7415,22 @@ export default function Canvas({
                     showLabel={showEdgeLabels}
                     labelDy={labelDyById.get(ed.id) ?? 0}
                     breakMark={breakMarks?.get(ed.id)}
+                    retryRate={edgeTallyById.get(ed.id)?.retry ?? 0}
+                    lostShare={edgeTallyById.get(ed.id)?.lost ?? null}
                   />
                 );
               })}
             </g>
+
+            {dotMode && readOutcomes && (
+              <TrafficDots
+                wires={dotWires}
+                read={readOutcomes}
+                clock={snapshot?.system.timeMs ?? 0}
+                view={view}
+                mode={dotMode}
+              />
+            )}
 
             {previewD && (
               <path
@@ -6367,6 +7460,8 @@ export default function Canvas({
                   onNudge={onNudge}
                   entering={enteredIdRef.current === n.id}
                   breakMark={breakMarks?.get(n.id)}
+                  violationMark={violationMarks?.get(n.id)}
+                  line={lineById.get(n.id)}
                 />
               ))}
             </g>
@@ -6381,8 +7476,10 @@ export default function Canvas({
                   height={NODE_H + SPOT_PAD * 2}
                   rx={NODE_R + SPOT_PAD}
                 />
+                {/* Sized in screen px on a fitted diagram, where the
+                    13px tag would otherwise land at 5. */}
                 <g
-                  transform={`translate(${spotNode.x - SPOT_PAD} ${spotNode.y - SPOT_PAD - SPOT_TAG_H - 4})`}
+                  transform={`translate(${spotNode.x - SPOT_PAD} ${spotNode.y - SPOT_PAD - (SPOT_TAG_H + 4) * (glance || 1)}) scale(${glance || 1})`}
                 >
                   <rect
                     className="cv-spotlight-tag"
@@ -6414,6 +7511,7 @@ export default function Canvas({
                     selected={selectedIds.has(n.id)}
                     editing={noteEdit?.id === n.id}
                     metricsEpoch={metricsEpoch}
+                    readScale={coarsePointer ? glance : 0}
                   />
                 ))}
               </g>
@@ -6590,7 +7688,7 @@ export default function Canvas({
         /* Zoom is deliberately NOT here: the zoom control sits a few pixels
            away and already states it, and a fact printed twice on one
            surface reads as an oversight. */
-        <div className="cv-ledger label" aria-hidden="true">
+        <div ref={ledgerRef} className="cv-ledger" aria-hidden="true">
           <span>
             {topology.nodes.length}{' '}
             {topology.nodes.length === 1 ? 'component' : 'components'}
@@ -6606,19 +7704,29 @@ export default function Canvas({
             {topology.edges.length}{' '}
             {topology.edges.length === 1 ? 'connection' : 'connections'}
           </span>
-          {/* Kept out of the ledger's uppercase transform: "1.5s" must not
-              render as "1.5S" — units always print lowercase. */}
-          <span className="cv-ledger-time">{formatElapsed(elapsed)}</span>
+          {/* Named, so a bare "3.4s" in the corner reads as the run's own
+              clock rather than as some request's latency. */}
+          <span className="cv-ledger-clock">
+            Time <span className="cv-ledger-time">{formatElapsed(elapsed)}</span>
+          </span>
         </div>
       )}
+
+      <p className="sr-only" role="status">
+        {keyLink ? '' : keyLinkSaid}
+      </p>
 
       {/* Live instruction while a click-to-link is armed. A student who
           clicked a port has no other way to learn what happens next. */}
       {pendingLink !== null && (
         <p className="cv-hint" role="status">
-          {coarsePointer
-            ? 'Tap a component to connect'
-            : 'Click a component to connect · Esc to cancel'}
+          {keyLink
+            ? keyLink.to
+              ? `Connect ${keyLink.from.label} to ${keyLink.to.label}. Arrows pick, Enter connects, Esc cancels.`
+              : `${keyLink.from.label} already connects to everything. Esc to close.`
+            : coarsePointer
+              ? 'Tap a component to connect'
+              : 'Click a component to connect · Esc to cancel'}
         </p>
       )}
 
@@ -6648,7 +7756,7 @@ export default function Canvas({
         tool === null &&
         topology.nodes.length > 0 &&
         !renameNode && (
-          <div className="cv-hint-idle label" aria-hidden="true">
+          <div className="cv-hint-idle" aria-hidden="true">
             {topology.nodes.some((n) => selectedIds.has(n.id)) ? (
               <>
                 <span>Drag to move</span>
@@ -6676,6 +7784,14 @@ export default function Canvas({
         Only for a single selected note. With two selected, a control that
         showed one note's state would be lying about the other.
       */}
+      {formatNote &&
+        !editingNoteId &&
+        coarsePointer &&
+        noteTooSmall(layoutNoteOf(formatNote, formatNote.text).font, glance) && (
+          <section className="cv-note-read" data-chrome="note-read" aria-label="Note">
+            <p>{formatNote.text}</p>
+          </section>
+        )}
       {formatNote && (
         <div className="cv-format" data-chrome="format">
           <div className="cv-format-group" role="group" aria-label="Text size">
@@ -6802,23 +7918,31 @@ export default function Canvas({
         nodeW={NODE_W}
         nodeH={NODE_H}
         setView={setView}
-        onFit={fitToContent}
+        onFit={fitAll}
       />
 
+      {dotMode && topology.edges.length > 0 && <TrafficKey mode={dotMode} />}
+
       <div className="cv-zoom" data-chrome="zoom">
+        {/* Below DETAIL_ZOOM a card keeps its name and main number (the
+            glance line) and drops the rest. Said here, beside the zoom, so a
+            fitted diagram with quiet cards does not read as broken. */}
+        {view.k < DETAIL_ZOOM && topology.nodes.length > 0 ? (
+          <p className="cv-zoom-note">Zoom to 70% for every number</p>
+        ) : null}
         <button
           type="button"
           className="btn btn-ghost"
           onClick={() => zoomBy(1 / ZOOM_STEP)}
           aria-label="Zoom out"
-          title="Zoom out (Ctrl+-)"
+          title={`Zoom out (${shortcutLabel('Ctrl+-')})`}
         >
           &minus;
         </button>
         <button
           type="button"
           className="btn btn-ghost cv-zoom-level"
-          onClick={fitToContent}
+          onClick={fitAll}
           // Still fits, because someone who learned to click the number
           // should keep being right. The icon beside it is what makes the
           // action findable in the first place.
@@ -6832,7 +7956,7 @@ export default function Canvas({
           className="btn btn-ghost"
           onClick={() => zoomBy(ZOOM_STEP)}
           aria-label="Zoom in"
-          title="Zoom in (Ctrl+=)"
+          title={`Zoom in (${shortcutLabel('Ctrl+=')})`}
         >
           +
         </button>
@@ -6849,7 +7973,7 @@ export default function Canvas({
         <button
           type="button"
           className="btn btn-ghost"
-          onClick={fitToContent}
+          onClick={fitAll}
           aria-label="Fit the diagram on screen"
           title="Fit the diagram on screen (Shift+1)"
         >

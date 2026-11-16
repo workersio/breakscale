@@ -139,10 +139,10 @@
 
 .gl-title {
   margin: 0;
-  font-size: var(--fs-num);
-  font-weight: var(--fw-num);
-  line-height: var(--lh-label);
-  letter-spacing: var(--tr-num);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-med);
+  line-height: var(--lh-num);
+  letter-spacing: var(--tr-lg);
   color: var(--text);
 }
 
@@ -235,13 +235,11 @@ input.gl-search-input {
 /* The result count. A fact about the list, so it stays quiet. */
 .gl-count {
   margin: var(--sp-2) 0 0;
-  font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum' 1;
-  font-size: var(--fs-label);
+  font-size: var(--fs-sm);
   font-weight: var(--fw-body);
-  line-height: var(--lh-label);
-  letter-spacing: var(--tr-num);
+  line-height: var(--lh-sm);
   color: var(--text-faint);
 }
 
@@ -360,6 +358,35 @@ input.gl-search-input {
   text-wrap: pretty;
 }
 
+/* The beginner card for a component: what it is, a product the reader may
+   know, and when to reach for it. Labels in --text-dim, the same pairing as
+   .gl-short, so it reads as part of the entry rather than a new panel. */
+.gl-intro {
+  display: grid;
+  gap: var(--sp-1);
+  margin: var(--sp-2) 0 0;
+}
+
+.gl-intro-row {
+  display: grid;
+  gap: 0;
+}
+
+.gl-intro dt {
+  font-size: var(--fs-label);
+  font-weight: var(--fw-med);
+  line-height: var(--lh-sm);
+  color: var(--text-dim);
+}
+
+.gl-intro dd {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  color: var(--text);
+  text-wrap: pretty;
+}
+
 /* --------------------------------------------------------------------------
    Cross references
    -------------------------------------------------------------------------- */
@@ -373,12 +400,10 @@ input.gl-search-input {
 }
 
 .gl-see-label {
-  font-size: var(--fs-label);
-  font-weight: var(--fw-med);
-  line-height: var(--lh-label);
-  letter-spacing: var(--tr-label);
-  text-transform: uppercase;
-  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-body);
+  line-height: var(--lh-sm);
+  color: var(--text-dim);
 }
 
 .gl-see-link {
@@ -449,4 +474,9 @@ input.gl-search-input {
     height: 44px;
     right: calc(var(--sp-1) * -1);
   }
+}
+
+/* Focused as a whole on a touch screen instead of its search field. */
+.gl-sheet:focus {
+  outline: none;
 }

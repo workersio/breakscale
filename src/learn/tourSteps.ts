@@ -2,13 +2,22 @@ import type { SimSnapshot, Topology } from '../sim/types';
 import { hasShareHash } from '../share';
 import { hasStoredLink } from '../share/store';
 import { challengeParam } from '../challengeWorkspace';
-import { formatMs, formatPct, healthOfLatency } from '../components/format';
+import {
+  formatCount,
+  formatMs,
+  formatPct,
+  formatRateBare,
+  healthOfErr,
+  healthOfLatency,
+  healthOfLoad,
+  type Health,
+} from '../components/format';
 import {
   FULL,
+  MIN_RATE,
   findBottleneck,
   readParts,
   slotsOf,
-  stateClause,
   type Reading,
 } from './bottleneck';
 
@@ -168,35 +177,88 @@ export function tourSpotlight(stage: TourStage): string | null {
   return stage.kind === 'broken' || stage.kind === 'fix' ? stage.nodeId : null;
 }
 
-/** "Database is full: all 6 slots busy, 34 waiting in line." */
-export function brokenText(
-  topology: Topology,
-  snapshot: SimSnapshot,
-  nodeId: string,
-): string | null {
-  const at = readingOf(topology, snapshot, nodeId);
-  if (!at) return null;
-  const clause = stateClause(at.r, at.byId, topology);
-  return clause ? `${at.r.node.label} is full: ${clause}.` : null;
+/** One live reading on the tour card: "6/6 slots busy", "399 ms p99". */
+export interface TourFigure {
+  readonly id: 'slots' | 'waiting' | 'refused' | 'p99' | 'failing';
+  /** The number, with a separator but no unit. */
+  readonly value: string;
+  /** "ms", "/s", "%", or empty. */
+  readonly unit: string;
+  readonly label: string;
+  readonly health: Health;
 }
 
-/** "Database has room again: 65% busy with 12 slots." */
-export function fixedText(
+/** "399ms" to "399" and "ms", so the unit can ride smaller than the number. */
+function split(text: string): { value: string; unit: string } {
+  const m = /^([<\d.,]+)(.*)$/.exec(text);
+  return m ? { value: m[1] ?? text, unit: m[2] ?? '' } : { value: text, unit: '' };
+}
+
+/**
+ * The numbers the tour points at, all from one snapshot: how full the part
+ * is, its line, what it turns away, and what users feel (p99 and failures).
+ * A reading with nothing behind it is left out, never shown as a guess.
+ */
+export function tourFigures(
   topology: Topology,
   snapshot: SimSnapshot,
   nodeId: string,
-): string | null {
+): TourFigure[] {
   const at = readingOf(topology, snapshot, nodeId);
-  if (!at) return null;
+  if (!at) return [];
   const { r } = at;
+  const out: TourFigure[] = [];
   const slots = slotsOf(r.node, r.s);
-  return `${r.node.label} has room again: ${formatPct(r.fill)} busy${slots !== null ? ` with ${slots} slots` : ''}.`;
-}
-
-/** p99 as the hero shows it, or null with nothing completing. */
-export function p99Text(snapshot: SimSnapshot): string | null {
+  if (slots !== null) {
+    // Calls it is waiting on hold a slot too; the box then reads less busy
+    // than full, so those slots are "taken" rather than "busy".
+    const held = (r.s.waitingOnDownstream ?? 0) >= 1 && r.s.utilization < FULL;
+    out.push({
+      id: 'slots',
+      value: `${formatCount(Math.min(slots, Math.round(r.fill * slots)))}/${formatCount(slots)}`,
+      unit: '',
+      label: held ? 'slots taken' : 'slots busy',
+      health: healthOfLoad(r.fill),
+    });
+  } else {
+    out.push({
+      id: 'slots',
+      ...split(formatPct(r.fill)),
+      label: 'busy',
+      health: healthOfLoad(r.fill),
+    });
+  }
+  out.push({
+    id: 'waiting',
+    value: formatCount(r.line),
+    unit: '',
+    label: 'waiting',
+    health: 'ok',
+  });
+  out.push({
+    id: 'refused',
+    value: formatRateBare(r.refused),
+    unit: '/s',
+    label: 'turned away',
+    health: r.refused >= MIN_RATE ? 'danger' : 'ok',
+  });
   const p99 = p99OrNull(snapshot);
-  return p99 === null ? null : formatMs(p99);
+  if (p99 !== null) {
+    out.push({
+      id: 'p99',
+      ...split(formatMs(p99)),
+      label: 'p99',
+      health: healthOfLatency(p99),
+    });
+  }
+  const err = snapshot.system.errorRate;
+  out.push({
+    id: 'failing',
+    ...split(formatPct(err)),
+    label: 'failing',
+    health: healthOfErr(err),
+  });
+  return out;
 }
 
 function p99OrNull(snapshot: SimSnapshot): number | null {

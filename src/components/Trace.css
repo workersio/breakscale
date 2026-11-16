@@ -35,7 +35,7 @@
 .tr-rows {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--sp-1);
   margin: 0;
   padding: 0;
   list-style: none;

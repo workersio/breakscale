@@ -78,6 +78,26 @@ describe('glossary wiring', () => {
     expect(broken).toEqual([]);
   });
 
+  it('gives every component kind a beginner card', () => {
+    // The palette card and the inspector line read these. A kind without
+    // one would show a bare name to the student who most needs the words.
+    const missing: string[] = [];
+    for (const [kind, id] of Object.entries(KIND_TERM)) {
+      const intro = GLOSSARY_BY_ID.get(id)?.intro;
+      if (!intro) {
+        missing.push(kind);
+        continue;
+      }
+      for (const [field, text] of Object.entries(intro)) {
+        expect(text.length, `${kind} ${field}`).toBeGreaterThan(10);
+        expect(text.length, `${kind} ${field}`).toBeLessThanOrEqual(160);
+        expect(text.endsWith('.'), `${kind} ${field} is a sentence`).toBe(true);
+        expect(text.includes('\u2014'), `${kind} ${field} has an em dash`).toBe(false);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
   it('states independent hit-rate rolls on the cache and CDN inspector copy', () => {
     // Issue #31: the engine is a per-hop coin flip. The inspector blurbs
     // and the hit-rate hint have to say so, or stacking caches reads as a

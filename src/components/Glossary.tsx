@@ -10,7 +10,9 @@ import {
 } from '../content/glossary';
 import { closeTooltip } from './Tooltip';
 import { usePresence } from './presence';
+import { isCoarsePointer } from '../useCoarsePointer';
 import './Glossary.css';
+import { CloseButton } from './CloseButton';
 
 /* ==========================================================================
    The glossary panel.
@@ -183,7 +185,9 @@ export function Glossary({ open, onClose, focusId }: GlossaryProps) {
 
     // Focus the search box: the panel's primary job is lookup, and a student
     // who opened it almost always arrived with a word in mind.
-    searchRef.current?.focus();
+    // Not on a touch screen, where it raises the keyboard over the list.
+    if (isCoarsePointer()) sheetRef.current?.focus();
+    else searchRef.current?.focus();
 
     /* Captured into locals for the cleanup rather than read off the refs when
        it runs. By then the sheet has unmounted and sheetRef.current is null,
@@ -336,6 +340,7 @@ export function Glossary({ open, onClose, focusId }: GlossaryProps) {
       <div
         ref={sheetRef}
         className="gl-sheet"
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="gl-title"
@@ -346,30 +351,12 @@ export function Glossary({ open, onClose, focusId }: GlossaryProps) {
           if (closing && e.target === e.currentTarget) unmount();
         }}
       >
-        <header className="gl-head">
+        <div className="gl-head">
           <div className="gl-head-row">
             <h2 id="gl-title" className="gl-title">
               Glossary
             </h2>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm btn-icon"
-              onClick={onClose}
-              aria-label="Close glossary"
-            >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                aria-hidden="true"
-              >
-                <path d="M18 6 6 18M6 6l12 12" />
-              </svg>
-            </button>
+            <CloseButton onClick={onClose} />
           </div>
 
           <p className="gl-sub">
@@ -447,7 +434,7 @@ export function Glossary({ open, onClose, focusId }: GlossaryProps) {
               ? `${shown} of ${total} ${shown === 1 ? 'term' : 'terms'}`
               : `${total} terms`}
           </p>
-        </header>
+        </div>
 
         <div ref={listRef} className="gl-list scroll">
           {shown === 0 ? (
@@ -510,6 +497,22 @@ function Entry({ entry, active, landed, onSelect, onNavigate }: EntryProps) {
     >
       <h4 className="gl-term">{entry.term}</h4>
       <p className="gl-short">{entry.short}</p>
+      {entry.intro ? (
+        <dl className="gl-intro">
+          <div className="gl-intro-row">
+            <dt>What it is</dt>
+            <dd>{entry.intro.what}</dd>
+          </div>
+          <div className="gl-intro-row">
+            <dt>Real example</dt>
+            <dd>{entry.intro.example}</dd>
+          </div>
+          <div className="gl-intro-row">
+            <dt>When to use it</dt>
+            <dd>{entry.intro.useWhen}</dd>
+          </div>
+        </dl>
+      ) : null}
       <p className="gl-why">{entry.why}</p>
 
       {see.length > 0 ? (

@@ -132,19 +132,26 @@ describe('the first-visit tour', () => {
     mount();
     press(button('Set it to 300'), 'touch');
     const title = () => document.getElementById('tour-title')?.textContent;
-    for (let i = 0; i < 100 && title() !== 'Something filled up'; i += 1) {
+    for (let i = 0; i < 100 && title() !== 'Database filled up'; i += 1) {
       act(() => {
         vi.advanceTimersByTime(100);
       });
     }
-    expect(title()).toBe('Something filled up');
-    expect(card()?.textContent).toMatch(/Database is full: all 6 slots busy/);
+    expect(title()).toBe('Database filled up');
+    const figure = (id: string) =>
+      card()?.querySelector(`[data-figure="${id}"]`)?.textContent ?? '';
+    expect(figure('slots')).toBe('6/6 slots busy');
+    expect(figure('waiting')).toMatch(/^\d+ waiting$/);
+    expect(figure('p99')).toMatch(/^[\d.]+m?s p99$/);
+    expect(figure('failing')).toMatch(/^[\d.<]+% failing$/);
     // Turned-away requests do not wait, so the sentence only says every
     // request waits when none is being turned away.
     const said = card()?.textContent ?? '';
-    expect(said.includes('Every request now waits')).toBe(
-      !said.includes('turning away'),
-    );
+    const refusing =
+      card()?.querySelector('[data-figure="refused"]')?.getAttribute('data-health') ===
+      'danger';
+    expect(said.includes('Every request now waits')).toBe(!refusing);
+    expect(said.includes('turned away.')).toBe(refusing);
     expect(document.querySelector('.cv-spotlight')).not.toBeNull();
     press(button('Show me the fix'), 'touch');
     expect(title()).toBe('Give it more room');

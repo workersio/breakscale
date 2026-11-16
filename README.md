@@ -118,33 +118,53 @@ A few things to ask once it is connected:
 - **33 components.** Load balancers, caches, databases, queues and workers, plus CDNs, rate
   limiters, circuit breakers, read replicas, shards, autoscalers, stream brokers, WebSocket
   gateways, serverless functions, bulkheads and more.
-- **23 worked examples.** Sixteen teaching scenarios that each isolate one failure mode, and seven
+- **24 worked examples.** Seventeen teaching scenarios that each isolate one failure mode, and seven
   reconstructions of real architectures.
 - **A real discrete-event engine.** Finite server slots, gamma-distributed service times and
   measured percentiles, with no formula standing in for the simulation.
-- **Chaos controls.** Crash a node, slow it down, force an error rate, or cut a single link, then
-  watch the failure travel.
-- **Deterministic runs.** The same seed and topology replay identically, every time.
+- **Faults.** Crash a node, restart it, crash one instance, slow it, stall it or make it glitch.
+  Cut a connection, drop packets on it, deliver requests twice or lose the answers coming back.
+  Every fault can be undone, and Reset plays them again at the same moments.
+- **Can you break it?** Say what has to hold, and a search throws faults at the design until it
+  fails, then shrinks the break to the fewest faults that still cause it. Watch it as a replay or
+  send it as a link.
+- **Correctness checks.** Beyond up and fast: was a payment charged twice, was a saved write lost,
+  did a client read its own write? Follow the first request that broke the rule, step by step.
+- **18 challenges.** Designs that fail as they start, a check that plays three fixed runs of
+  traffic, slot budgets, and a workspace of their own, so your design stays untouched.
+- **Six real incidents.** Published outages rebuilt small, each with its source. Watch one happen,
+  then fix it.
+- **A learning path.** Every example, challenge and outage in 48 steps, with a task card on each
+  example, a first-visit tour, Find the problem and What just happened.
+- **Traffic shapes.** Steady, ramp, spike, daily cycle, bursty and thundering herd, with an uneven
+  key spread for hot shards, and load shown as a multiple of where the design started.
+- **Live diagram.** Requests move along the connections coloured by how they ended, with retries,
+  losses and full waiting lines marked, and each client's own p99 and failure rate.
+- **Deterministic runs.** The same seed and topology replay identically, every time, and a replay
+  link plays the exact run for someone else.
 - **Explanations built in.** Every metric and unit has a plain-language definition one hover away.
 - **Share links and design files.** Send a design as an encrypted link, or save it as a
   `.breakscale` file that opens on the website and in VS Code.
+- **Made to use quickly.** A Ctrl+K command palette, context menus, copy and paste, speed control,
+  a pinned run to compare against, and a presenting mode for teaching a room.
 - **Private by design.** No account, and your designs never leave your machine unless you share
   them. The website counts page views with Vercel's cookie-free analytics; the extension and the
   MCP server have no analytics at all.
 
 ## Examples
 
-| Example             | What it teaches                                                  |
-| ------------------- | ---------------------------------------------------------------- |
-| Single Server       | Latency climbs sharply as the database fills up                  |
-| Load Balanced       | Three servers share the load, but all still talk to one database |
-| Cache Aside         | Lower the hit rate and the database takes the whole load         |
-| Async Workers       | The backlog grows when workers fall behind, and drains after     |
-| Retry Storm         | Retries multiply the load that caused them                       |
-| Rate Limited API    | Serves slightly less, but what it serves stays fast              |
-| Circuit Breaker     | Break the dependency, watch the circuit trip, then recover       |
-| Sharded Database    | One shard melts while the average still looks healthy            |
-| Autoscaling Service | Requests fail in the gap while new servers boot                  |
+| Example               | What it teaches                                                  |
+| --------------------- | ---------------------------------------------------------------- |
+| Single Server         | Latency climbs sharply as the database fills up                  |
+| Load Balanced         | Three servers share the load, but all still talk to one database |
+| Cache Aside           | Lower the hit rate and the database takes the whole load         |
+| Async Workers         | The backlog grows when workers fall behind, and drains after     |
+| Retry Storm           | Retries multiply the load that caused them                       |
+| Rate Limited API      | Serves slightly less, but what it serves stays fast              |
+| Circuit Breaker       | Break the dependency, watch the circuit trip, then recover       |
+| Sharded Database      | One shard melts while the average still looks healthy            |
+| Autoscaling Service   | Requests fail in the gap while new servers boot                  |
+| Checkout and payments | A retry after a slow answer charges some customers twice         |
 
 Plus **Netflix**, **Spotify**, **Discord**, **Uber**, **Twitter/X**, **Stripe** and **WhatsApp**,
 reconstructed from published engineering material. Each one says what it models and what it
@@ -157,7 +177,8 @@ the topology, and a handful of details are what make its results worth trusting.
 
 **Finite server slots.** A component's `capacity` is how many requests it can work on at once, and
 `instances` is how many copies of it are running. Anything beyond `instances × capacity` waits in a
-real FIFO queue, and anything beyond the queue limit is shed.
+real FIFO queue, and anything beyond the queue limit is shed. A service, worker or lambda holds its
+slot while it waits on the parts it calls, so a slow database fills the servers in front of it too.
 
 **Service time variance.** Service time is a mean plus a coefficient of variation, sampled from a
 gamma distribution. Variance is what pulls tail latency away from the average, so it is modelled
@@ -211,6 +232,20 @@ const engine = new Engine(PRESETS[0].topology, 42);
 for (let i = 0; i < 600; i += 1) engine.advance(1000 / 60);
 console.log(engine.snapshot().system);
 ```
+
+The search behind Can you break it? runs from a script too. `verify` takes a design and a goal and
+returns the smallest set of faults it found that breaks the goal, with a replay of the run:
+
+```ts
+import { verify } from './src/sim/verify';
+import { PRESETS } from './src/sim/presets';
+
+const design = PRESETS.find((p) => p.id === 'checkout')!.topology;
+const v = verify(design, { metric: 'doubleCharges', max: 0 }, { chargeable: ['pay'] });
+if (v.status === 'broken') console.log(v.schedule, v.measured.actual);
+```
+
+The [docs](https://docs.breakscale.tech) cover every goal and option.
 
 ## Contributing
 

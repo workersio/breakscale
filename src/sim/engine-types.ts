@@ -63,6 +63,8 @@ export interface ReqLike {
    * inherited downstream, so a later node sees the same classification.
    */
   readonly isWrite: boolean;
+  /** True on a read a replica set's primary is serving. See `markFromPrimary`. */
+  readonly fromPrimary: boolean;
 }
 
 /**
@@ -81,6 +83,9 @@ export interface BehaviourCtx {
    * order for a given event, or replay stops matching.
    */
   roll(): number;
+
+  /** True while any client draws its keys from a skewed (Zipf) spread. */
+  keysSkewed(): boolean;
 
   /** Queued (not yet in service) request count for a node. */
   queueDepth(state: NodeStateLike): number;
@@ -275,6 +280,9 @@ export interface BehaviourCtx {
 
   /** Mark a request as a write, so downstream kinds see the classification. */
   markWrite(req: ReqLike, isWrite: boolean): void;
+
+  /** Mark a read as served by a replica set's primary rather than a replica. */
+  markFromPrimary(req: ReqLike): void;
 
   /**
    * Create a detached request at `state` and dispatch it down one specific

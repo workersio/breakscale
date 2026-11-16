@@ -102,7 +102,7 @@ describe('What just happened', () => {
       const first = p?.querySelector('.wh-line');
       expect(first?.querySelector('.wh-at')?.textContent).toBe('2.0s');
       expect(first?.querySelector('.wh-text')?.textContent).toBe(
-        'Database slowed down 5x.',
+        'Database slowed down 5×.',
       );
 
       const close = container.querySelector('.wh-close');
@@ -136,12 +136,30 @@ describe('What just happened', () => {
     expect(panel()).not.toBeNull();
     // The same node, so it was registered before it had anything to say.
     expect(container.querySelector('[role="status"]')).toBe(live);
-    expect(live?.textContent).toBe('What just happened: Database slowed down 5x.');
+    expect(live?.textContent).toBe('What just happened: Database slowed down 5×.');
     // Closed, it has nothing more to say until something new goes wrong.
     const close = container.querySelector('.wh-close');
     if (!close) throw new Error('no close');
     press(close);
     expect(live?.textContent).toBe('');
+  });
+
+  it('reads out the newest line, so a fix is not announced as the crash', () => {
+    const engine = new Engine(topology, 1);
+    play(engine, 2);
+    act(() => {
+      engine.injectFailure(db, 'crash');
+    });
+    play(engine, 0.1);
+    const live = container.querySelector('[role="status"]');
+    expect(live?.textContent).toBe('What just happened: Database crashed.');
+    act(() => {
+      engine.clearFailure(db);
+    });
+    play(engine, 0.1);
+    expect(live?.textContent).toBe(
+      'What just happened: The fault on Database was cleared.',
+    );
   });
 
   it('folds on Escape and opens again when something new goes wrong', () => {

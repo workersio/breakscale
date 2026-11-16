@@ -96,9 +96,10 @@
 
 .dz-title {
   margin: 0;
-  font-size: var(--fs-base);
+  font-size: var(--fs-lg);
   font-weight: var(--fw-med);
-  letter-spacing: var(--tr-base);
+  line-height: var(--lh-num);
+  letter-spacing: var(--tr-lg);
   color: var(--text);
 }
 
@@ -269,7 +270,7 @@
 /* On a phone the card becomes a bottom sheet, the same as Share and
    Settings. The list in .dz-body is the part that scrolls.
    app-sheet-in / app-sheet-out are declared in App.css. */
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   .dz-root {
     place-items: end stretch;
     padding: 0;

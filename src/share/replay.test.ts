@@ -144,7 +144,7 @@ describe('run tail round trip', () => {
     const edgeAt = (ts: Topology, id: string) => ts.edges.findIndex((e) => e.id === id);
     const shape = (ts: Topology, fs: FaultEvent[]) =>
       fs.map((f) =>
-        f.action === 'cut' || f.action === 'restore'
+        'edgeId' in f
           ? { ...f, edgeId: edgeAt(ts, f.edgeId) }
           : { ...f, nodeId: nodeAt(ts, f.nodeId) },
       );
@@ -181,6 +181,18 @@ describe('run tail round trip', () => {
       },
       { atMs: 0, action: 'cut', edgeId: e0.id },
       { atMs: 16.666666666666668, action: 'restore', edgeId: e0.id },
+      { atMs: 2000, action: 'duplicate', edgeId: e1.id, rate: 0.05 },
+      { atMs: 2000, action: 'duplicate', edgeId: e0.id, rate: 1 },
+      { atMs: 2500.5, action: 'undup', edgeId: e1.id },
+      {
+        atMs: 3000,
+        action: 'inject',
+        nodeId: c.id,
+        kind: 'pause',
+        opts: { pauseMs: 2000 },
+      },
+      { atMs: 3000, action: 'cut-replies', edgeId: e1.id },
+      { atMs: 3500.25, action: 'restore-replies', edgeId: e1.id },
       {
         atMs: 1234.5,
         action: 'inject',

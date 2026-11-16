@@ -375,7 +375,7 @@ describe('closing', () => {
   it('closes on the close button', () => {
     const onClose = vi.fn();
     render(<Glossary open onClose={onClose} />);
-    const btn = document.querySelector<HTMLElement>('[aria-label="Close glossary"]');
+    const btn = document.querySelector<HTMLElement>('[aria-label="Close"]');
     act(() => btn?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(onClose).toHaveBeenCalledTimes(1);
   });

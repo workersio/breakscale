@@ -18,7 +18,7 @@ import { allReadoutTermIds, readoutTermFor } from './readoutTerms';
 const PLAIN = new Set([
   'in',
   'out',
-  'passed',
+  'admitted',
   'search',
   'index',
   'append',

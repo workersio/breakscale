@@ -22,6 +22,18 @@
   box-shadow: var(--shadow-lg);
   transform-origin: top right;
   animation: mn-in var(--dur-base) var(--ease-out);
+  /* A phone on its side is about 390px tall and the menu is over 500, so it
+     scrolls inside the window rather than running off the bottom with its
+     last items out of reach. 96px is the bar plus the gap it hangs in. */
+  max-height: calc(100dvh - 96px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Scrolled, not squeezed: a flex column under a max-height shrinks its rows
+   first, and the items' text overlapped. */
+.mn > * {
+  flex: none;
 }
 
 .mn.is-closing {
@@ -95,6 +107,13 @@
 .mn-label {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/* Closes a group: the run controls above, the rest of the app below. */
+.mn-sep {
+  height: var(--bw);
+  margin: var(--sp-1) var(--sp-2);
+  background: var(--border);
 }
 
 /* The binding, quiet on the right. Present so a shortcut is learnable from

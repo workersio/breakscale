@@ -1,0 +1,67 @@
+/* ==========================================================================
+   Canvas context menu.
+
+   The rows come from MainMenu.css (.mn-item, .mn-sep, .mn-hint); this sheet
+   places the box at the press and names what it is about.
+   ========================================================================== */
+
+.cm {
+  position: fixed;
+  /* Over the panels, sheets and briefs; under the toasts (300), so an Undo
+     receipt for something the menu did stays readable. */
+  z-index: 260;
+  min-width: 13rem;
+  max-width: calc(100vw - 16px);
+  /* A phone on its side is about 390px tall and a part's menu is taller
+     than that at 44px rows, so it scrolls inside rather than running off. */
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--sp-1);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--surface);
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+  animation: cm-in var(--dur-fast) var(--ease-out);
+}
+
+.cm > * {
+  flex: none;
+}
+
+@keyframes cm-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.cm-title {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-2) var(--sp-1);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.cm-item.is-danger {
+  color: var(--danger);
+}
+
+.cm-item[aria-disabled='true'] {
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.cm-item[aria-disabled='true']:hover {
+  background: none;
+}

@@ -1,24 +1,43 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
-import { HARDER_BUDGET } from '../sim/breakit';
-import type { AttackKind, BreakOptions, SearchProgress } from '../sim/breakit';
+import { takesCorrectness } from '../sim/behaviour';
+import {
+  HARDER_BUDGET,
+  kindFits,
+  replayOf,
+  retriesTowardCharges,
+} from '../sim/breakit';
+import type { Attack, AttackKind, BreakOptions, SearchProgress } from '../sim/breakit';
+import { isCorrectnessGoal } from '../sim/challenge';
 import type { Goal } from '../sim/challenge';
-import type { SimNode } from '../sim/types';
+import type { Violation } from '../sim/oplog';
+import type { SimNode, Topology } from '../sim/types';
+import { followRequest } from '../sim/verify';
 import type { BreakSearch } from '../useBreakSearch';
 import {
   baselineSentence,
+  checkedLine,
+  clock,
   closestLine,
   effectSentence,
+  evidenceSentence,
   faultPhrase,
   goalLine,
+  goneLine,
+  nothingRetriesLine,
   phaseLine,
   scheduleSentence,
   singlePointLines,
+  timelineWords,
+  TRUNCATED_LINE,
   triedLine,
 } from './breakCopy';
-import type { Names } from './breakCopy';
+import type { Names, TimelineTag } from './breakCopy';
+import { secs } from './breakCopy';
+import { Term } from './Tooltip';
 import './Challenge.css';
 import './BreakIt.css';
+import { CloseButton } from './CloseButton';
 
 /**
  * "Can you break it?": pick what has to hold, and Breakscale throws faults
@@ -37,21 +56,37 @@ export interface BreakPanelProps {
   onClose: () => void;
   onWatch: () => void;
   onReplayLink: () => void;
+  /** Mark a part as charging money, through the same undoable edit the Inspector makes. */
+  onMarkChargeable: (id: string) => void;
   /**
-   * While a replay plays: where it is, in a line. The panel folds to it.
-   * Null otherwise.
+   * While a replay plays: what it has measured so far, when its first fault
+   * lands and when its window ends. The panel folds to it. Null otherwise.
    */
-  watchLine: string | null;
+  watch: ReplayWatch | null;
+  /** The replay's own clock, read on every render. */
+  watchAtMs?: number;
+  /** Stop watching and put the reader's design back. */
+  onStopWatch?: () => void;
   foldOnStart?: boolean;
   onSheetResize?: (height: number | null, shut: boolean) => void;
 }
 
+export interface ReplayWatch {
+  /** The figure so far, as a sentence. */
+  line: string;
+  firstMs: number;
+  endMs: number;
+}
+
 const KIND_LABEL: Record<AttackKind, string> = {
   crash: 'Crashes',
-  'crash-instance': 'Losing one machine',
+  'crash-instance': 'Losing one instance',
   slow: 'Slowdowns',
-  errors: 'Glitches (errors)',
-  cut: 'Cut cables',
+  errors: 'Random errors',
+  cut: 'Cut connections',
+  duplicate: 'Requests delivered twice',
+  pause: 'Stalls (a process pauses)',
+  'cut-replies': 'Answers lost on the way back',
 };
 
 /** A template's name in the radio group. */
@@ -67,6 +102,12 @@ function templateLabel(goal: Goal, names: Names): string {
       return 'No lost writes';
     case 'lostJobs':
       return 'No lost jobs';
+    case 'doubleCharges':
+      return 'Every payment charged at most once';
+    case 'lostAckedWrites':
+      return 'No saved write is lost';
+    case 'staleReads':
+      return 'Read your own writes';
     case 'queueDepth':
       return '';
   }
@@ -91,6 +132,24 @@ function templateSentence(goal: Goal): { before: string; after: string; unit: st
       };
     case 'lostWrites':
       return { before: 'At most', after: 'saved writes are lost.', unit: 'writes' };
+    case 'doubleCharges':
+      return {
+        before: 'At most',
+        after: 'payments are charged more than once.',
+        unit: 'payments',
+      };
+    case 'lostAckedWrites':
+      return {
+        before: 'At most',
+        after: 'writes the client was told were saved are lost.',
+        unit: 'writes',
+      };
+    case 'staleReads':
+      return {
+        before: 'At most',
+        after: 'reads miss a write the same client was told was saved.',
+        unit: 'reads',
+      };
     default:
       return { before: 'At most', after: 'accepted jobs fail.', unit: 'jobs' };
   }
@@ -140,8 +199,8 @@ function GoalNumber({
 function Chevron({ open }: { open: boolean }) {
   return (
     <svg
-      width="14"
-      height="14"
+      width="16"
+      height="16"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -193,7 +252,10 @@ export function BreakPanel({
   onClose,
   onWatch,
   onReplayLink,
-  watchLine,
+  onMarkChargeable,
+  watch,
+  watchAtMs = 0,
+  onStopWatch,
   foldOnStart = false,
   onSheetResize,
 }: BreakPanelProps) {
@@ -226,6 +288,14 @@ export function BreakPanel({
       ro.disconnect();
       onSheetResizeRef.current?.(null, shutRef.current);
     };
+  }, []);
+
+  /* The panel only ever opens because the reader asked, from the bar, the
+     menu or F, so focus comes to its heading: from F on the diagram it used
+     to stay on a box, and nothing said the panel had opened. Escape takes
+     focus back to the bar's button. */
+  useEffect(() => {
+    headingRef.current?.focus({ preventScroll: true });
   }, []);
 
   /* Focus goes to a verdict's heading as it lands, so a screen reader is
@@ -278,7 +348,7 @@ export function BreakPanel({
         </div>
         <button
           type="button"
-          className="btn btn-sm btn-icon chal-collapse"
+          className="btn btn-ghost btn-sm btn-icon chal-collapse"
           aria-expanded={!shut}
           aria-controls={bodyId}
           aria-label={shut ? 'Show the panel' : 'Fold the panel'}
@@ -287,36 +357,26 @@ export function BreakPanel({
         >
           <Chevron open={!shut} />
         </button>
-        <button
-          type="button"
-          className="btn btn-sm btn-icon"
-          aria-label="Close"
-          title="Close"
-          onClick={onClose}
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            aria-hidden="true"
-          >
-            <path d="M18 6 6 18M6 6l12 12" />
-          </svg>
-        </button>
+        <CloseButton onClick={onClose} className="btn-sm" />
       </header>
 
       <p className="sr-only" role="status">
         {announcement(search, names)}
       </p>
 
-      {watchLine !== null ? (
-        <p className="brk-pill" aria-live="off">
-          {watchLine}
-        </p>
+      {watch !== null ? (
+        <ReplayStrip
+          watch={watch}
+          atMs={watchAtMs}
+          onStop={
+            onStopWatch
+              ? () => {
+                  setCollapsed(false);
+                  onStopWatch();
+                }
+              : undefined
+          }
+        />
       ) : null}
 
       <div id={bodyId} className="chal-body" hidden={shut}>
@@ -325,9 +385,8 @@ export function BreakPanel({
             <p className="chal-note">
               You changed the design after this ran. A replay plays it as it was.
             </p>
-            <button type="button" className="btn btn-sm" onClick={() => search.start()}>
-              Run again
-            </button>
+            {/* The fixing view below has its own. */}
+            {fixing && result?.status === 'broke' ? null : <RunAgain search={search} />}
           </div>
         ) : null}
 
@@ -337,6 +396,7 @@ export function BreakPanel({
             names={names}
             nodes={nodes}
             baselineId={baselineId}
+            onMarkChargeable={onMarkChargeable}
           />
         ) : view.status === 'searching' || view.status === 'stopped' ? (
           <Searching
@@ -352,13 +412,7 @@ export function BreakPanel({
               then run it again. Those faults are tried first.
             </p>
             <div className="chal-actions">
-              <button
-                type="button"
-                className="btn btn-sm btn-primary"
-                onClick={() => search.start()}
-              >
-                Run again
-              </button>
+              <RunAgain search={search} primary />
               <button
                 type="button"
                 className="btn btn-sm btn-ghost"
@@ -389,16 +443,67 @@ export function BreakPanel({
   );
 }
 
+/**
+ * Where a replay is: its clock against the end of the window, a bar for the
+ * same, the figure so far, and a way out. Shown folded or not, so the run
+ * can be stopped without opening the panel first.
+ */
+function ReplayStrip({
+  watch,
+  atMs,
+  onStop,
+}: {
+  watch: ReplayWatch;
+  atMs: number;
+  onStop: (() => void) | undefined;
+}) {
+  const at = Math.min(Math.floor(atMs / 1000) * 1000, watch.endMs);
+  const done = atMs >= watch.endMs;
+  const until = Math.ceil((watch.firstMs - atMs) / 1000);
+  const clock = done ? 'Replay done' : `Replay ${secs(at)} of ${secs(watch.endMs)}`;
+  return (
+    <div className="brk-watch">
+      <div className="brk-watch-head">
+        <p className="brk-watch-clock">{clock}</p>
+        {onStop ? (
+          <button type="button" className="btn btn-sm" onClick={onStop}>
+            Stop replay
+          </button>
+        ) : null}
+      </div>
+      <div
+        className="brk-watch-bar"
+        role="progressbar"
+        aria-label="Replay"
+        aria-valuemin={0}
+        aria-valuemax={watch.endMs / 1000}
+        aria-valuenow={at / 1000}
+        aria-valuetext={clock}
+      >
+        <span style={{ width: `${(at / watch.endMs) * 100}%` }} />
+      </div>
+      <p className="brk-pill" aria-live="off">
+        {watch.line}
+        {until > 0
+          ? ` The first fault lands at ${secs(watch.firstMs)}, in ${until}s.`
+          : ''}
+      </p>
+    </div>
+  );
+}
+
 function Picking({
   search,
   names,
   nodes,
   baselineId,
+  onMarkChargeable,
 }: {
   search: BreakSearch;
   names: Names;
   nodes: readonly SimNode[];
   baselineId: string;
+  onMarkChargeable: (id: string) => void;
 }) {
   const { templates, baselines, opts } = search;
   const set = (patch: Partial<BreakOptions>) => search.setOpts({ ...opts, ...patch });
@@ -417,6 +522,9 @@ function Picking({
   const selected = templates.findIndex((t) => t.id === search.goalId);
   const base = selected >= 0 ? baselines?.[selected] : undefined;
   const targets = nodes.filter((n) => n.kind !== 'client');
+  const charging = search.goal.metric === 'doubleCharges';
+  const charged = nodes.filter((n) => n.config.chargeable === 1);
+  const unmarked = charging && charged.length === 0;
 
   return (
     <>
@@ -424,8 +532,8 @@ function Picking({
         Pick what has to hold. Breakscale throws faults at your design until it fails,
         or until it runs out of tries.
       </p>
-      {search.goalGone ? (
-        <p className="chal-note">That traffic source is gone. Pick another goal.</p>
+      {search.goneId !== null ? (
+        <p className="chal-note">{goneLine(search.goneId)} Pick another goal.</p>
       ) : null}
       <fieldset className="brk-goals">
         <legend className="label chal-block-title">What has to hold</legend>
@@ -457,14 +565,25 @@ function Picking({
                   {s.after}
                 </p>
               ) : null}
+              {on ? <GoalTerms metric={t.goal.metric} /> : null}
+              {on && t.goal.metric === 'doubleCharges' ? (
+                <ChargeablePicker
+                  nodes={nodes}
+                  charged={charged}
+                  names={names}
+                  onMark={onMarkChargeable}
+                />
+              ) : null}
             </div>
           );
         })}
       </fieldset>
       <p id={baselineId} className="chal-note">
-        {base
-          ? `${baselineSentence(base.worst, search.goal, names)} That is the worst of three runs of traffic.`
-          : 'Measuring it with no faults…'}
+        {unmarked
+          ? 'Pick the part that charges the card to measure it.'
+          : base
+            ? `${baselineSentence(base.worst, search.goal, names)} That is the worst of three runs of traffic.`
+            : 'Measuring it with no faults…'}
       </p>
 
       {search.singlePoints.length > 0 ? (
@@ -475,19 +594,33 @@ function Picking({
               <li key={line}>{line}</li>
             ))}
           </ul>
-          <p className="chal-note">
-            Each of these is a single point of failure: lose one and that traffic has
-            nowhere to go, which breaks any goal. So the search only slows them and
-            takes down single machines.
-          </p>
-          <label className="brk-check">
-            <input
-              type="checkbox"
-              checked={opts.includeSinglePoints}
-              onChange={(e) => set({ includeSinglePoints: e.currentTarget.checked })}
-            />
-            Crash and cut them too
-          </label>
+          {isCorrectnessGoal(search.goal) ? (
+            // An outage cannot break a goal about the data, and a crash of the
+            // one store is how its writes get lost, so nothing is spared.
+            <p className="chal-note">
+              Each of these is a single point of failure. This goal is about the data,
+              not about staying up, so the search crashes and cuts them like any other
+              part.
+            </p>
+          ) : (
+            <>
+              <p className="chal-note">
+                Each of these is a single point of failure: lose one and that traffic
+                has nowhere to go, which breaks any goal. So the search only slows them
+                and takes down single machines.
+              </p>
+              <label className="brk-check">
+                <input
+                  type="checkbox"
+                  checked={opts.includeSinglePoints}
+                  onChange={(e) =>
+                    set({ includeSinglePoints: e.currentTarget.checked })
+                  }
+                />
+                Crash and cut them too
+              </label>
+            </>
+          )}
         </div>
       ) : null}
 
@@ -495,16 +628,18 @@ function Picking({
         <summary>What can go wrong</summary>
         <fieldset className="brk-kinds">
           <legend className="sr-only">Kinds of fault</legend>
-          {(Object.keys(KIND_LABEL) as AttackKind[]).map((k) => (
-            <label key={k} className="brk-check">
-              <input
-                type="checkbox"
-                checked={opts.kinds.includes(k)}
-                onChange={() => toggleKind(k)}
-              />
-              {KIND_LABEL[k]}
-            </label>
-          ))}
+          {(Object.keys(KIND_LABEL) as AttackKind[])
+            .filter((k) => kindFits(k, search.goal))
+            .map((k) => (
+              <label key={k} className="brk-check">
+                <input
+                  type="checkbox"
+                  checked={opts.kinds.includes(k)}
+                  onChange={() => toggleKind(k)}
+                />
+                {KIND_LABEL[k]}
+              </label>
+            ))}
         </fieldset>
         <label className="brk-check">
           Up to{' '}
@@ -541,7 +676,7 @@ function Picking({
         <button
           type="button"
           className="btn btn-sm btn-primary"
-          disabled={opts.kinds.length === 0}
+          disabled={!opts.kinds.some((k) => kindFits(k, search.goal)) || unmarked}
           onClick={() => search.start()}
         >
           Try to break it
@@ -677,6 +812,18 @@ function Verdict({
           {effectSentence(r.baseline.worst, view.goal, names)}{' '}
           {goalLine(view.goal, r.baseline.worst)}
         </p>
+        {r.baseline.worst.truncated === true ? (
+          <p className="chal-note">{TRUNCATED_LINE}</p>
+        ) : null}
+        {r.baseline.worst.violations?.[0] ? (
+          <FollowRequest
+            design={view.design}
+            attacks={[]}
+            seed={r.baseline.worst.seed}
+            violation={r.baseline.worst.violations[0]}
+            names={names}
+          />
+        ) : null}
         <div className="chal-actions">
           <button
             type="button"
@@ -701,6 +848,26 @@ function Verdict({
           {triedLine(r.bySize)} Each landed between 10s and 15s, and the goal was
           measured from 5s to 35s on three runs of traffic.
         </p>
+        {view.goal.metric === 'doubleCharges' &&
+        !r.triedDuplicates &&
+        !retriesTowardCharges(view.design) ? (
+          <p className="chal-note">
+            {nothingRetriesLine(
+              view.design.nodes
+                .filter((n) => n.config.chargeable === 1)
+                .map((n) => n.id),
+              names,
+            )}
+          </p>
+        ) : null}
+        {r.baseline.worst.checked !== undefined ? (
+          <p className="chal-note">
+            {checkedLine(view.goal, r.baseline.worst.checked)}
+          </p>
+        ) : null}
+        {r.baseline.worst.truncated === true ? (
+          <p className="chal-note">{TRUNCATED_LINE}</p>
+        ) : null}
         <p className="chal-note">{closestLine(r.closest, view.goal, names)}</p>
         {fixed > 0 ? (
           <p className="chal-note">
@@ -748,6 +915,16 @@ function Verdict({
             : `Found on try ${r.foundAt}.`}{' '}
         It broke on this run of traffic and on another one too.
       </p>
+      {r.run.truncated === true ? <p className="chal-note">{TRUNCATED_LINE}</p> : null}
+      {r.run.violations?.[0] ? (
+        <FollowRequest
+          design={view.design}
+          attacks={r.attacks}
+          seed={r.run.seed}
+          violation={r.run.violations[0]}
+          names={names}
+        />
+      ) : null}
       <div className="chal-actions brk-actions">
         <button type="button" className="btn btn-sm btn-primary" onClick={onWatch}>
           Watch the replay
@@ -767,5 +944,185 @@ function Verdict({
         </button>
       </div>
     </>
+  );
+}
+
+/** A story line's tag, in words as well as colour. */
+const TAG_WORDS: Record<NonNullable<TimelineTag>, string> = {
+  'charged-again': 'Charged again',
+  lost: 'Lost',
+  stale: 'Stale',
+};
+
+/**
+ * Run the search again, or, when the goal it ran is no longer offered by
+ * the design, say why and go back to the goals instead of quietly running
+ * another one.
+ */
+function RunAgain({
+  search,
+  primary = false,
+}: {
+  search: BreakSearch;
+  primary?: boolean;
+}) {
+  const cls = `btn btn-sm${primary ? ' btn-primary' : ''}`;
+  if (search.goneId !== null) {
+    return (
+      <>
+        <p className="chal-note">{goneLine(search.goneId)}</p>
+        <button type="button" className={cls} onClick={search.backToGoals}>
+          Pick another goal
+        </button>
+      </>
+    );
+  }
+  return (
+    <button type="button" className={cls} onClick={() => search.start()}>
+      Run again
+    </button>
+  );
+}
+
+/** What a correctness goal counts, with its terms explained on hover. */
+function GoalTerms({ metric }: { metric: Goal['metric'] }) {
+  if (metric === 'doubleCharges') {
+    return (
+      <p className="chal-note brk-small">
+        A payment charged twice breaks the <Term id="at-most-once">at most once</Term>{' '}
+        rule. It happens when a call that already charged looks failed to its caller,
+        after a <Term id="timeout">timeout</Term> or an error further on, and the{' '}
+        <Term id="retry">retry</Term> charges again, or when the network delivers the
+        same call twice. An <Term id="idempotency-key">idempotency key</Term> on the
+        part that charges is the usual fix.
+      </p>
+    );
+  }
+  if (metric === 'lostAckedWrites') {
+    return (
+      <p className="chal-note brk-small">
+        Counts every <Term id="acknowledged-write">acknowledged write</Term> that never
+        reaches storage, a <Term id="lost-write">lost write</Term>. A write still on its
+        way when the run ends is not counted.
+      </p>
+    );
+  }
+  if (metric === 'staleReads') {
+    return (
+      <p className="chal-note brk-small">
+        Checks <Term id="read-your-writes">read your writes</Term>: once a client is
+        told a write was saved, its next read of that record should show it. A{' '}
+        <Term id="replication-lag">replica that is behind</Term> serves a{' '}
+        <Term id="stale-read">stale read</Term> instead.
+      </p>
+    );
+  }
+  return null;
+}
+
+/**
+ * For a correctness goal with nothing marked yet: which part charges the
+ * card. Once one is marked, says which, so the reader knows what is counted.
+ */
+function ChargeablePicker({
+  nodes,
+  charged,
+  names,
+  onMark,
+}: {
+  nodes: readonly SimNode[];
+  charged: readonly SimNode[];
+  names: Names;
+  onMark: (id: string) => void;
+}) {
+  const id = useId();
+  if (charged.length > 0) {
+    return (
+      <p className="chal-note brk-small">
+        Counted at {charged.map((n) => names.node(n.id)).join(', ')}, where each
+        finished call charges money. Change it in the part's settings.
+      </p>
+    );
+  }
+  const candidates = nodes.filter((n) => takesCorrectness(n.kind));
+  return (
+    <p className="brk-goal-sentence">
+      <label htmlFor={id}>Which part charges the card?</label>{' '}
+      <select
+        id={id}
+        value=""
+        onChange={(e) => {
+          if (e.currentTarget.value !== '') onMark(e.currentTarget.value);
+        }}
+      >
+        <option value="">Pick one</option>
+        {candidates.map((n) => (
+          <option key={n.id} value={n.id}>
+            {names.node(n.id)}
+          </option>
+        ))}
+      </select>
+    </p>
+  );
+}
+
+/**
+ * The earliest violation in words, and the request's whole story on
+ * demand. The story is played again from the replay, headless and from the
+ * start, so it is the run the search measured; the canvas replay steps at
+ * the display's rate and can differ in the details.
+ */
+function FollowRequest({
+  design,
+  attacks,
+  seed,
+  violation,
+  names,
+}: {
+  design: Topology;
+  attacks: readonly Attack[];
+  seed: number;
+  violation: Violation;
+  names: Names;
+}) {
+  const [open, setOpen] = useState(false);
+  const listId = useId();
+  const lines = useMemo(() => {
+    if (!open) return null;
+    const tl = followRequest(replayOf(design, attacks, seed), violation.rid);
+    return tl === null ? [] : timelineWords(tl, names, violation);
+  }, [open, design, attacks, seed, violation, names]);
+  return (
+    <div className="brk-follow">
+      <p className="brk-verdict">{evidenceSentence(violation, names)}</p>
+      <div className="chal-actions">
+        <button
+          type="button"
+          className="btn btn-sm"
+          aria-expanded={open}
+          aria-controls={listId}
+          onClick={() => setOpen((o) => !o)}
+        >
+          {open ? 'Hide' : 'Follow'} request{' '}
+          <span className="num">{violation.rid}</span>
+        </button>
+      </div>
+      <ol id={listId} className="brk-story" hidden={!open}>
+        {lines?.map((l, i) => (
+          <li
+            key={i}
+            className={l.tag === null ? 'brk-story-row' : 'brk-story-row is-bad'}
+          >
+            <span className="num brk-story-t">{clock(l.t)}</span>
+            <span>
+              {l.text}
+              {l.tag !== null ? (
+                <span className="brk-story-tag">{TAG_WORDS[l.tag]}</span>
+              ) : null}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }

@@ -12,7 +12,9 @@
   top: calc(var(--bar-clear) + 32px + var(--sp-2));
   right: var(--sp-3);
   pointer-events: none;
-  transition: right var(--dur-base) var(--ease);
+  transition:
+    left var(--dur-base) var(--ease),
+    right var(--dur-base) var(--ease);
 }
 
 .tour > * {
@@ -23,17 +25,28 @@
   right: calc(var(--ins-w) + var(--sp-3) * 2);
 }
 
+/* Its left edge is the open rail's, so a narrow window shrinks the card
+   rather than sliding it under the rail. The card keeps the right. */
+@media (min-width: 721px) and (min-height: 501px),
+  (min-width: 721px) and (pointer: fine),
+  (min-width: 721px) and (pointer: none) {
+  .tour {
+    left: var(--sp-3);
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .app-body.has-library .tour {
+    left: calc(var(--rail-w) + var(--sp-3) * 2);
+  }
+
+  .tour-card {
+    max-width: 100%;
+  }
+}
+
 .tour-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
   width: min(340px, calc(100vw - var(--sp-4) * 2));
-  padding: var(--sp-3);
-  background: var(--surface);
-  border: var(--bw) solid var(--border-strong);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--r-btn);
-  box-shadow: var(--shadow-lg);
 }
 
 /* Focus lands on the card only so a screen reader starts each step at its
@@ -42,62 +55,119 @@
   outline: none;
 }
 
-.tour-head {
+/* Where the student is in four steps: the current one is a longer bar, so
+   it reads without its colour; the count beside it says the same in
+   figures. Every dot is a non-text mark at 3:1 or better on the card. */
+.tour-progress {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--sp-2);
-  /* The skip button's own padding lines its text up with the card edge. */
-  margin: calc(var(--sp-1) * -1) calc(var(--sp-1) * -1) 0 0;
-}
-
-.tour-step {
-  font-size: var(--fs-sm);
-  color: var(--text-dim);
-}
-
-.tour-step .num {
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: 'tnum' 1;
-}
-
-.tour-skip {
-  color: var(--text-dim);
-}
-
-.tour-title {
   margin: 0;
-  font-size: var(--fs-base);
-  font-weight: var(--fw-med);
-  line-height: var(--lh-base);
-  color: var(--text);
+}
+
+.tour-dots {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.tour-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--border-strong);
+  transition:
+    width var(--dur-base) var(--ease),
+    background-color var(--dur-base) var(--ease);
+}
+
+.tour-dot[data-at='done'] {
+  background: var(--accent);
+}
+
+.tour-dot[data-at='now'] {
+  width: 18px;
+  background: var(--accent);
+}
+
+.tour-count {
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  color: var(--text-dim);
+}
+
+.tour-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
 }
 
 .tour-body p {
   margin: 0;
   font-size: var(--fs-base);
   line-height: var(--lh-base);
-  color: var(--text);
+  color: var(--text-dim);
   text-wrap: pretty;
 }
 
-.tour-body p + p {
-  margin-top: var(--sp-2);
-}
-
-.tour-actions {
+/* The live readings, as the canvas cards show them: the figure, then a
+   small word for what it counts. Spread across the card on one row; a long
+   figure wraps the row rather than squeezing a label. */
+.tour-figs {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--sp-2);
+  justify-content: space-between;
+  gap: var(--sp-2) var(--sp-3);
+  margin: 0;
+  padding: var(--sp-3) 0 0;
+  list-style: none;
+  border-top: var(--bw) solid var(--border);
 }
 
-/* The control a step points at. An outline, so it draws outside the
-   element's own border and moves nothing. */
+.tour-fig {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* Coloured past the same thresholds as the canvas readouts, through the
+   status ink .is-warn / .is-danger set, which this rule would otherwise
+   paint over. The label beside it says what it is in words. */
+.tour-fig-v {
+  font-size: var(--fs-num);
+  font-weight: var(--fw-num);
+  line-height: var(--lh-num);
+  color: var(--status-ink, var(--text));
+}
+
+.tour-fig-v .unit {
+  margin-left: 1px;
+}
+
+.tour-fig-k {
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* The control a step points at: a soft tinted plate with a hairline edge,
+   drawn with shadows so it sits outside the field and moves nothing. A
+   plate rather than a hard ring, so a focused input inside it keeps the
+   only strong outline on screen. */
 [data-tour-ring] {
-  outline: 2px solid var(--accent);
-  outline-offset: 4px;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  box-shadow:
+    0 0 0 var(--sp-2) var(--accent-soft),
+    0 0 0 calc(var(--sp-2) + 1px) var(--accent);
+}
+
+/* Inside the plate the stepper's own halo would draw a second ring a few
+   pixels in; its accent border is enough to show focus there. */
+[data-tour-ring] .ins-stepper:focus-within {
+  box-shadow: none;
 }
 
 /* The tour already says what is happening, step by step, so "What just
@@ -107,7 +177,13 @@
   display: none;
 }
 
-@media (max-width: 720px) {
+/* "Find the problem" too, for the same reason: it is a second guide. The
+   card sits where the two meet on a narrow window, and covered half of it. */
+.app-body:has(.tour) .fp {
+  display: none;
+}
+
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   /* Docked on the tab bar, where "What just happened" sits: the diagram
      keeps the middle of the screen. Over the inspector sheet too (z 10),
      since step 3 happens in that sheet. */
@@ -123,18 +199,39 @@
 
   .tour-card {
     width: auto;
-    gap: var(--sp-1);
-    padding: var(--sp-2) var(--sp-3) var(--sp-3);
+    gap: var(--sp-2);
+    padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  }
+
+  .tour-body {
+    gap: var(--sp-2);
   }
 
   .tour-body p {
     font-size: var(--fs-sm);
     line-height: var(--lh-sm);
   }
+
+  .tour-figs {
+    gap: var(--sp-2) var(--sp-3);
+    padding-top: var(--sp-2);
+  }
+
+  .tour-fig-v {
+    font-size: var(--fs-base);
+  }
+
+  /* Step 3 happens in the inspector sheet, and on a short phone the card
+     with its figures would reach the field it rings. The figures step
+     aside while the sheet is up; the bar above keeps system p99 in view. */
+  .app-body.has-inspector .tour-figs {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .tour {
+  .tour,
+  .tour-dot {
     transition: none;
   }
 }

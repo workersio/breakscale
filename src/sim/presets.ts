@@ -756,7 +756,7 @@ const singleServer: Topology = {
       'ss-note-db',
       40,
       320,
-      'One server, one database. The database is the smaller of the two: 6 requests at a time at 30ms each, so it runs out near 200 a second. Drag the load past 4x and the wait builds there first, not at the API.',
+      'One server, one database. The database is the smaller of the two: 6 requests at a time at 30ms each, so it runs out near 200 a second. Drag the load past 200 a second and the wait builds there first, not at the API.',
       340,
     ),
   ],
@@ -2033,6 +2033,60 @@ const resilientDelivery: Topology = {
       496,
       'The transcoders drain about 3.3 jobs a second against 3 arriving, so they are already 90 percent busy at rest. Turn the load up and the backlog grows about 9 jobs every second and never drains on its own. Raise the number of instances to fix it.',
       300,
+    ),
+  ],
+};
+
+/* ------------------------------------------------------------------ *
+ * Checkout and payments
+ *    api:      64 slots / 5ms; it calls Payments and Orders DB side by
+ *              side, gives each call 300ms and tries twice more.
+ *    payments: 12 slots / 40ms -> 300 rps <- the one that fills, at 3x.
+ *              Every call that finishes its work here charges a card.
+ *    orders:   8 slots / 10ms, every call a write -> 800 rps.
+ *    Measured at 1x (seed 1, 30s): no errors, p99 83ms, Payments 32 in
+ *    100 busy. At 3x Payments is full, its calls pass 300ms, and the API
+ *    tries them again while the first try is still charging: with no
+ *    faults, 15 calls charged twice and 96 of 9,179 requests shed between
+ *    10s and 35s (seed 2). At 1x the search breaks it with a 1% duplicate
+ *    on the cable to Payments.
+ * ------------------------------------------------------------------ */
+
+const checkoutPayments: Topology = {
+  nodes: [
+    node('client', 'client', 'Shop', COL(0), ROW(1), { rps: 100, timeoutMs: 2000 }),
+    node('api', 'service', 'Checkout API', COL(1), ROW(1), {
+      capacity: 64,
+      serviceMs: 5,
+      serviceCv: 0.4,
+      queueLimit: 128,
+      timeoutMs: 300,
+      retries: 2,
+    }),
+    node('pay', 'service', 'Payments', COL(2), ROW(0), {
+      capacity: 12,
+      serviceMs: 40,
+      serviceCv: 0.5,
+      queueLimit: 64,
+      chargeable: 1,
+    }),
+    node('orders', 'db', 'Orders DB', COL(2), ROW(2), {
+      capacity: 8,
+      serviceMs: 10,
+      serviceCv: 0.5,
+      queueLimit: 64,
+      readFraction: 0,
+      lockMs: 0,
+    }),
+  ],
+  edges: [edge('client', 'api'), edge('api', 'pay'), edge('api', 'orders')],
+  annotations: [
+    note(
+      'co-note-charge',
+      COL(0),
+      ROW(2),
+      'Every call that finishes at Payments charges a card. The API gives Payments 300ms, then tries again while the first try is still running, and that one charges too. Open Can you break it? and ask that nobody pays twice. Push the load to 3x and it is broken with no faults at all, while the error chart barely moves.',
+      340,
     ),
   ],
 };
@@ -3823,6 +3877,14 @@ export const PRESETS: Preset[] = [
     description:
       'Failing on purpose: a shedder drops the traffic that matters least, a bulkhead contains a slow dependency, retried deliveries land on a dead letter shelf, and a write-behind buffer trades durability for speed.',
     topology: resilientDelivery,
+  },
+  {
+    id: 'checkout',
+    name: 'Checkout and payments',
+    tagline: 'Fast, up, and charging some people twice',
+    description:
+      'A checkout API calls Payments and an orders database. A slow answer makes the API try again while the first try is still charging, so the dashboards stay green while some customers pay twice.',
+    topology: checkoutPayments,
   },
   {
     id: 'discord',

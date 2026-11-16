@@ -40,6 +40,13 @@ export interface Preferences {
    */
   minimap: boolean;
   /**
+   * Draw requests as dots moving along the wires, coloured by how each call
+   * ended. ON by default: it is the first thing that shows a student where
+   * calls fail, retry or get turned away. Off brings back the plain moving
+   * dashes, for a slow machine or a reader who finds the motion busy.
+   */
+  trafficDots: boolean;
+  /**
    * Name components after a cloud vendor's products.
    *
    * `generic` by default and deliberately so: a student meets "load
@@ -69,6 +76,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   sparklines: true,
   snapToGrid: true,
   minimap: false,
+  trafficDots: true,
   vendor: 'generic',
   // Follow the OS until told otherwise. Picking light as the default would
   // flash a bright page at someone whose machine is set to dark.
@@ -99,6 +107,7 @@ function load(): Preferences {
       sparklines: bool(p.sparklines, DEFAULT_PREFERENCES.sparklines),
       snapToGrid: bool(p.snapToGrid, DEFAULT_PREFERENCES.snapToGrid),
       minimap: bool(p.minimap, DEFAULT_PREFERENCES.minimap),
+      trafficDots: bool(p.trafficDots, DEFAULT_PREFERENCES.trafficDots),
       vendor: vendor(p.vendor),
       theme: theme(p.theme),
     };

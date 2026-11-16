@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { PHONE_QUERY } from '../phoneQuery';
 
 /*
  * On a phone every dialog opens as a bottom sheet, the way Share and Settings
@@ -9,9 +11,13 @@ import { readFileSync } from 'node:fs';
 
 const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8');
 
-/** The text of the `@media (max-width: 720px)` block, braces balanced. */
+/* The same query as PHONE_QUERY in phoneQuery.ts: a phone on its side is a
+   phone too. */
+const PHONE_MEDIA = `@media ${PHONE_QUERY} {`;
+
+/** The text of the phone layout's media block, braces balanced. */
 function phoneBlock(css: string): string {
-  const start = css.indexOf('@media (max-width: 720px) {');
+  const start = css.indexOf(PHONE_MEDIA);
   if (start < 0) throw new Error('no phone block');
   let depth = 0;
   for (let i = css.indexOf('{', start); i < css.length; i++) {
@@ -56,4 +62,33 @@ describe('dialogs on a phone', () => {
       );
     });
   }
+});
+
+describe('the phone layout query', () => {
+  /* Every stylesheet under src that has a phone rule, found rather than
+     listed: a list missed the ones added after it was written. */
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const FILES = readdirSync(root, { recursive: true, encoding: 'utf8' })
+    .filter((f) => f.endsWith('.css'))
+    // readdirSync joins with backslashes on Windows; the paths here are URLs.
+    .map((f) => `../${f.replaceAll('\\', '/')}`)
+    .filter((f) => /@media[^{]*\b72[01]px\b/.test(read(f)));
+
+  it('finds the stylesheets it checks', () => {
+    expect(FILES).toContain('../components/PinBar.css');
+    expect(FILES).toContain('../App.phone.css');
+  });
+
+  it('is stated the same way in every stylesheet', () => {
+    for (const f of FILES) {
+      const css = read(f);
+      // A bare width query would leave a phone on its side out again.
+      expect(css, f).not.toMatch(/@media \(max-width: 720px\) \{/);
+      expect(css, f).not.toMatch(/@media \(min-width: 721px\) \{/);
+      expect(
+        css.includes(PHONE_MEDIA) || css.includes('(min-width: 721px) and'),
+        f,
+      ).toBe(true);
+    }
+  });
 });

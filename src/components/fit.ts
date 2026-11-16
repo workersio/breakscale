@@ -51,14 +51,9 @@ export function fitMarginFor(viewWidth: number): number {
 }
 
 /**
- * The auto-fit floor on a wide screen.
- *
- * Deliberately DETAIL_ZOOM, not a rounder 0.6. Auto-fit runs on every preset
- * load, so it decides what a student sees first, and at 0.6 the fitted view
- * landed in the 0.6-0.7 band where the body numbers are suppressed,
- * presenting the flagship preset as a row of empty boxes. Never auto-fit to
- * a zoom at which the diagram stops showing its data, when there is room
- * not to. During a brief, see FIT_MIN_TIGHT.
+ * The zoom a wide screen fits at when it can: the last one at which a card
+ * draws its full body, numbers and sparkline included. A diagram that fits
+ * at this zoom with the usual margin is framed there and no further out.
  */
 export const FIT_MIN = DETAIL_ZOOM;
 
@@ -73,28 +68,36 @@ export const FIT_MIN = DETAIL_ZOOM;
  * 360px screen inside the 24px margin (804 x 0.38 = 306 of 312); at 0.45 the
  * outer two cards were cut off there. Anything wider than that is panned.
  *
- * On a touch screen the cards still show their numbers this far out: the
- * canvas draws a counter-scaled glance line below DETAIL_ZOOM (glance.ts),
- * sized to stay readable down to exactly this floor.
+ * The cards still show their numbers this far out: the canvas draws a
+ * counter-scaled glance line below DETAIL_ZOOM (glance.ts), sized to stay
+ * readable down to exactly this floor.
  */
 export const FIT_MIN_NARROW = 0.38;
 
 /**
- * The auto-fit floor on a wide screen during a brief, when 0.7 would leave
- * boxes under the brief's panel.
+ * The auto-fit floor on a wide screen, when 0.7 would leave boxes off
+ * screen or under a panel.
  *
- * An example keeps FIT_MIN and lets a wide diagram run past the edge, for
- * the reason given there. A brief cannot: it is about specific boxes, and at
- * 1440px, with the components rail and the brief open, the widest one (loud
- * and quiet, 1484 world px) needed 0.54, so at 0.7 its last two cards sat
- * under the panel asking about them. So during a brief, a diagram too wide
- * for 0.7 takes a tighter margin and may go down to MINIMAL_ZOOM. Not lower:
- * 0.5 is the last zoom at which a card still shows its name, its health
- * colour and its meter, so every box still says what it is and whether it
- * is in trouble, and the brief's panel carries the numbers being checked.
- * Below 0.5 a card is a blank rectangle, and panning is the better answer.
+ * This was 0.7 for examples, and a wide example ran past the edge: measured
+ * at 1024 with the components rail open, 13 of 26 opened with boxes cut
+ * off, and Stripe needed 42%. A diagram that opens cut off reads as a
+ * smaller system than it is. So a diagram too wide for 0.7 takes a tighter
+ * margin and may go down to MINIMAL_ZOOM. Not lower: 0.5 is the last zoom
+ * at which a card still shows its name, its health colour and its meter,
+ * and between 0.5 and 0.7 the glance line keeps its main number. Below 0.5
+ * the shell folds the components rail instead (see onFitClipped).
  */
 export const FIT_MIN_TIGHT = MINIMAL_ZOOM;
+
+/**
+ * The floor for a fit the reader asked for: the Fit button, the zoom
+ * readout and Shift+1. They asked to see the whole diagram, so it is shown
+ * whole even past the point where a card can say much. On a phone the
+ * auto floor already sits at 0.38, and Fit pressed on a diagram that was
+ * still wider than the screen there used to return the same view and look
+ * broken.
+ */
+export const FIT_MIN_EXPLICIT = 0.25;
 
 /** 1.5 stops a 3-node preset becoming a billboard. */
 export const FIT_MAX = 1.5;
@@ -105,6 +108,17 @@ function rawFit(bw: number, bh: number, view: FitRect, margin: number): number {
   // The same rounding zoomAt applies, so a fit and a keyboard zoom can never
   // report two spellings of the same percentage.
   return Math.round(raw * 1000) / 1000;
+}
+
+export interface FitHow {
+  /** The reader asked for this fit; see FIT_MIN_EXPLICIT. */
+  explicit?: boolean;
+  /**
+   * Use the phone's floor and margin. Defaults to a surface no wider than
+   * NARROW_FIT_WIDTH; a phone held sideways is wider than that and still a
+   * phone, so the shell says so.
+   */
+  narrow?: boolean;
 }
 
 /**
@@ -120,13 +134,11 @@ function rawFit(bw: number, bh: number, view: FitRect, margin: number): number {
  * and that is still a desktop, where the phone's narrow floor never applies.
  *
  * A diagram still wider than the view at the floor starts at the left
- * margin, instead of being centred. Centred, a wide example on a phone
+ * margin, instead of being centred, and one still taller starts at the top. Centred, a wide example on a phone
  * showed the middle of a flow with neither end on screen. Every diagram
  * reads left to right from its traffic source, so the left end is the one
  * to keep, and the edge cues (EdgeCues.tsx) say the rest is a pan to the
  * right.
- *
- * `tight` is a brief on screen; see FIT_MIN_TIGHT.
  *
  * Returns null for a rect with no area, which is a canvas not laid out yet.
  */
@@ -134,17 +146,18 @@ export function fitViewport(
   bounds: FitBounds,
   surface: FitRect,
   view: FitRect,
-  tight = false,
+  how: FitHow = {},
 ): FitView | null {
   if (view.width <= 0 || view.height <= 0) return null;
   const bw = Math.max(1, bounds.maxX - bounds.minX);
   const bh = Math.max(1, bounds.maxY - bounds.minY);
-  let margin = fitMarginFor(view.width);
+  const narrow = how.narrow ?? surface.width <= NARROW_FIT_WIDTH;
+  let margin = narrow ? FIT_MARGIN_NARROW : fitMarginFor(view.width);
   let floor = FIT_MIN_NARROW;
   let raw = rawFit(bw, bh, view, margin);
-  if (surface.width > NARROW_FIT_WIDTH) {
+  if (!narrow) {
     floor = FIT_MIN;
-    if (tight && raw < FIT_MIN) {
+    if (raw < FIT_MIN) {
       // Too wide for the numbers at the usual margin. A tighter frame may
       // still keep them; if not, see FIT_MIN_TIGHT.
       margin = FIT_MARGIN_NARROW;
@@ -152,10 +165,14 @@ export function fitViewport(
       raw = rawFit(bw, bh, view, margin);
     }
   }
+  if (how.explicit) floor = Math.min(floor, FIT_MIN_EXPLICIT);
   const k = Math.min(FIT_MAX, Math.max(floor, raw));
   // Past the view itself, not merely into the margin: a diagram that only
   // eats into the margin is all on screen, and centred is still right.
   const spills = bw * k > view.width + 0.5;
+  // Too tall as well, the top is kept for the same reason: centred, the
+  // first row went under the controls along the canvas's top.
+  const spillsY = bh * k > view.height + 0.5;
   return {
     k,
     x:
@@ -163,8 +180,85 @@ export function fitViewport(
       surface.left +
       (spills ? margin : (view.width - bw * k) / 2) -
       bounds.minX * k,
-    y: view.top - surface.top + (view.height - bh * k) / 2 - bounds.minY * k,
+    y:
+      view.top -
+      surface.top +
+      (spillsY ? margin : (view.height - bh * k) / 2) -
+      bounds.minY * k,
   };
+}
+
+/** Does `bounds` at zoom `k` run past `view` either way? */
+export function fitClips(bounds: FitBounds, view: FitRect, k: number): boolean {
+  return (
+    (bounds.maxX - bounds.minX) * k > view.width + 0.5 ||
+    (bounds.maxY - bounds.minY) * k > view.height + 0.5
+  );
+}
+
+/** Air kept between the fitted diagram and a control floating over it. */
+const CHROME_GAP = 8;
+/** A control along a side edge floats this far in, plus that air. */
+const EDGE_INSET = 12 + CHROME_GAP;
+
+/**
+ * `view` with the controls that float over the canvas taken out of it: the
+ * rail toggles, the gesture hint and "Find the problem" along the top, the
+ * ledger and the zoom row along the foot. They are opaque, and a fit that
+ * ran under them put a card's name under a button.
+ *
+ * Each control is cut away along whichever side costs the diagram least: a
+ * control in the top half can push the top down, one in the bottom half can
+ * pull the foot up, and one near a side edge can push that side in instead.
+ * `size` is the diagram's size in world px, which is what decides; a wide
+ * diagram gives up height more cheaply than width. Taking the controls out
+ * never leaves less than half the view either way; past that the view is
+ * returned as it was.
+ */
+export function clearOfChrome(
+  view: FitRect,
+  chrome: readonly ScreenBox[],
+  size: { w: number; h: number } = { w: 1, h: 0 },
+): FitRect {
+  let l = view.left;
+  let t = view.top;
+  let r = view.left + view.width;
+  let b = view.top + view.height;
+  const midY = view.top + view.height / 2;
+  const edge = view.width / 4;
+  const scale = (w: number, h: number) =>
+    Math.min(w / Math.max(1, size.w), size.h > 0 ? h / size.h : Infinity);
+  for (const c of chrome) {
+    if (c.right <= c.left || c.bottom <= c.top) continue;
+    if (c.right <= l || c.left >= r || c.bottom <= t || c.top >= b) continue;
+    const options: [number, number, number, number][] = [];
+    if ((c.top + c.bottom) / 2 < midY)
+      options.push([l, Math.max(t, c.bottom + CHROME_GAP), r, b]);
+    else options.push([l, t, r, Math.min(b, c.top - CHROME_GAP)]);
+    // Measured from the edge rather than from where the control is now: it
+    // may still be sliding along with a rail that is opening or closing.
+    const across = c.right - c.left + EDGE_INSET;
+    if (c.left - view.left < edge)
+      options.push([Math.max(l, view.left + across), t, r, b]);
+    if (view.left + view.width - c.right < edge)
+      options.push([l, t, Math.min(r, view.left + view.width - across), b]);
+    let best = options[0]!;
+    for (const o of options) {
+      if (
+        scale(o[2] - o[0], o[3] - o[1]) > scale(best[2] - best[0], best[3] - best[1])
+      ) {
+        best = o;
+      }
+    }
+    [l, t, r, b] = best;
+  }
+  if (r - l < view.width / 2 || b - t < view.height / 2) return view;
+  return { left: l, top: t, width: r - l, height: b - t };
+}
+
+/** How much a card shows at zoom `k`: 2 everything, 1 a glance line, 0 its name. */
+export function detailBand(k: number): 0 | 1 | 2 {
+  return k >= DETAIL_ZOOM ? 2 : k >= MINIMAL_ZOOM ? 1 : 0;
 }
 
 /** A box in client px. */

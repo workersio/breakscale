@@ -1,0 +1,235 @@
+/* ==========================================================================
+   The phone layout's room for the diagram.
+
+   Loaded after App.css, whose phone block builds the header, the tab bar and
+   the sheets. This file decides how much of the canvas those leave, which
+   is what the camera frames and pans into (the .stage-safe sentinel), and
+   how the same layout lies down when the phone does.
+   ========================================================================== */
+
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
+  /* The desktop insets the sentinel by a rail's width. A sheet is not
+     beside the canvas, so those insets do not apply here. */
+  .app-body.has-library .stage-canvas > .stage-safe,
+  .app-body.has-inspector .stage-canvas > .stage-safe {
+    left: 0;
+    right: 0;
+  }
+
+  /* The inspector stops at a fixed height instead of growing to most of
+     the screen, so the diagram it is about keeps the strip above it. At
+     62% it covered every part of a three-box design at 390x844; at 45% the
+     strip is about 300px, and the selected part is panned into it (see
+     reveal.ts). The sheet's own list scrolls. */
+  .app-body {
+    --ins-sheet-h: 45dvh;
+  }
+
+  .app-slot-right {
+    height: var(--ins-sheet-h);
+  }
+
+  .app-body.has-inspector .stage-canvas > .stage-safe {
+    bottom: calc(var(--ins-sheet-h) + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Toasts drop from under the header, a row down so they clear "Find the
+     problem" (a 44px button at the canvas's top left). At the foot of the
+     screen they sat on the tab bar and on whichever sheet was open; the
+     header is the one edge nothing slides over. */
+  .app-toast-dock {
+    position: fixed;
+    top: calc(var(--bar-clear) + var(--sp-3) + 44px + var(--sp-2));
+    bottom: auto;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   A phone on its side.
+
+   About 390px tall. The portrait header (two rows) and a bottom sheet left
+   a strip of diagram under 100px, so here the header is one row and the
+   sheets come in from the sides, the way the desktop rails do, leaving the
+   diagram its full height beside them.
+   -------------------------------------------------------------------------- */
+
+/* One row from 760px. Narrower, as on a 667px phone, a slider beside
+   everything else in the row was under 70px wide, too short to set a load
+   with, so the load control keeps a row of its own there. */
+@media (pointer: coarse) and (max-height: 500px) and (min-width: 760px) {
+  .app-bar {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+
+  /* The wordmark goes; undo and redo stay at the start of the row. */
+  .app-brand,
+  .app-saved {
+    display: none;
+  }
+
+  .app-island-brand {
+    flex: none;
+    padding-right: 0;
+  }
+
+  .app-history {
+    margin-left: 0;
+  }
+
+  .app-island-load {
+    order: 2;
+    flex: 1 1 auto;
+    min-width: 0;
+    border-top: 0;
+    padding-block: var(--sp-1);
+  }
+
+  .app-island-menu {
+    order: 3;
+    flex: none;
+  }
+
+  /* The short word, as in portrait (see .app-break-short in App.css). A
+     932px phone is wide enough for the long label by the desktop rule, and
+     the long label ran into Reset. */
+  .app-break-long {
+    display: none;
+  }
+
+  .app-break-short {
+    display: inline;
+  }
+}
+
+@media (pointer: coarse) and (max-height: 500px) {
+  /* The load control is one line. The load and p99 each stack the figure
+     over its caption, as on a desktop, so both stay named in the width of
+     the figure and the slider keeps the rest. */
+  .traffic {
+    flex-wrap: nowrap;
+  }
+
+  .traffic-load-track {
+    flex: 1 1 auto;
+    order: 0;
+  }
+
+  .traffic-headline {
+    order: 0;
+    margin-left: 0;
+  }
+
+  .traffic-load-readout,
+  .traffic-metric {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+  }
+
+  /* The menu stops above the tab bar, which would otherwise cover its
+     last rows. */
+  .app-bar .mn {
+    max-height: calc(
+      100dvh - var(--bar-clear, 72px) - var(--tabbar-h) -
+        env(safe-area-inset-bottom, 0px)
+    );
+  }
+
+  /* --- Sheets at the sides --------------------------------------- */
+
+  .app-body {
+    --side-sheet-w: 45vw;
+  }
+
+  .app-slot-left,
+  .app-slot-right {
+    top: var(--bar-clear);
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
+    width: var(--side-sheet-w);
+    height: auto;
+    max-height: none;
+    border-bottom: var(--bw) solid var(--border);
+  }
+
+  .app-slot-left {
+    right: auto;
+    border-left: 0;
+    border-radius: 0 var(--r-lg) var(--r-lg) 0;
+  }
+
+  .app-slot-right {
+    left: auto;
+    border-right: 0;
+    border-radius: var(--r-lg) 0 0 var(--r-lg);
+  }
+
+  /* The desktop rails' slides (App.css), since these come in from the same
+     edges. */
+  .app-slot-left.is-entering {
+    animation-name: app-slot-in-left;
+  }
+
+  .app-slot-left.is-closing {
+    animation-name: app-slot-out-left;
+  }
+
+  .app-slot-right.is-entering {
+    animation-name: app-slot-in-right;
+  }
+
+  .app-slot-right.is-closing {
+    animation-name: app-slot-out-right;
+  }
+
+  /* A brief, an incident or "Can you break it?" takes the same side. As a
+     bottom sheet it held half of a 257px canvas, and the diagram it is
+     about had the other 120px. Folded, it is its heading only. */
+  .app-body .chal {
+    top: var(--bar-clear);
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
+    left: auto;
+    right: 0;
+    width: var(--side-sheet-w);
+    max-height: none;
+    border-bottom: var(--bw) solid var(--border);
+    border-right: 0;
+    border-radius: var(--r-lg) 0 0 var(--r-lg);
+  }
+
+  .app-body .chal.is-collapsed {
+    bottom: auto;
+    border-radius: 0 0 0 var(--r-lg);
+  }
+
+  .app-body.has-challenge .stage-canvas > .stage-safe {
+    right: var(--side-sheet-w);
+    bottom: 0;
+  }
+
+  /* The diagram keeps the side the inspector leaves, at full height. */
+  .app-body.has-inspector .stage-canvas > .stage-safe {
+    right: var(--side-sheet-w);
+    bottom: 0;
+  }
+
+  /* A toast keeps to the same side, off the sheets. */
+  .app-body.has-library .app-toast-dock {
+    left: var(--side-sheet-w);
+  }
+
+  .app-body.has-inspector .app-toast-dock,
+  .app-body.has-challenge .app-toast-dock {
+    right: var(--side-sheet-w);
+  }
+}
+
+/* The traffic key's corner is under a docked brief, incident or task card
+   or the tour on a phone. It steps aside while one is open rather than sit beneath it. */
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
+  .app-body.has-challenge .cv-key,
+  .app-body.has-task .cv-key,
+  .app:has(.tour-card) .cv-key {
+    display: none;
+  }
+}

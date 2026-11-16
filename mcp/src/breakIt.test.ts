@@ -7,7 +7,7 @@ import {
   measureSeed,
 } from '../../src/sim/breakit';
 import { Engine } from '../../src/sim/engine';
-import { PRESETS } from '../../src/sim/presets';
+import { PRESETS, defaultConfig } from '../../src/sim/presets';
 import type { Topology } from '../../src/sim/types';
 import { HOSTED_BREAK, LOCAL_BREAK, breakDesign } from './breakIt';
 import type { BreakLimits, BreakRequest } from './breakIt';
@@ -165,4 +165,104 @@ describe('break_it', () => {
     expect(out.verdict).toBeNull();
     expect(out.text).toMatch(/^Stopped after \d+ schedules? without an answer/);
   });
+});
+
+describe('break_it: correctness', () => {
+  const checkout = (): Topology => ({
+    nodes: [
+      {
+        id: 'client',
+        kind: 'client',
+        label: 'Client',
+        x: 0,
+        y: 0,
+        config: { ...defaultConfig('client'), rps: 100 },
+      },
+      {
+        id: 'checkout',
+        kind: 'service',
+        label: 'Checkout',
+        x: 0,
+        y: 0,
+        config: {
+          ...defaultConfig('service'),
+          capacity: 64,
+          serviceMs: 5,
+          timeoutMs: 300,
+          retries: 2,
+        },
+      },
+      {
+        id: 'pay',
+        kind: 'service',
+        label: 'Payment Provider',
+        x: 0,
+        y: 0,
+        config: {
+          ...defaultConfig('service'),
+          capacity: 64,
+          serviceMs: 100,
+          serviceCv: 0.3,
+        },
+      },
+    ],
+    edges: [
+      { id: 'a', from: 'client', to: 'checkout', weight: 1 },
+      { id: 'b', from: 'checkout', to: 'pay', weight: 1 },
+    ],
+  });
+
+  it('names the request charged twice and tells its story', async () => {
+    const text = await said(checkout(), {
+      goal: { metric: 'doubleCharges', max: 0 },
+      chargeable: ['pay'],
+    });
+    expect(text).toContain('Broke it with one fault');
+    expect(text).toMatch(
+      /Request \d+ was charged twice at Payment Provider \(id 'pay'\)/,
+    );
+    expect(text).toMatch(/What happened to request \d+, on the replay's clock:/);
+    expect(text).toMatch(
+      /\d+\.\d\ds Payment Provider \(id 'pay'\) charges the card again\. \(charged again\)/,
+    );
+  }, 60_000);
+
+  it('asks for the paying part when nothing is marked', async () => {
+    const out = await breakDesign(
+      checkout(),
+      { goal: { metric: 'doubleCharges', max: 0 } },
+      LOCAL_BREAK,
+      APP,
+    );
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.errors.join(' ')).toContain('Pass chargeable');
+  });
+  it('says a hold comes from nothing retrying when nothing does', async () => {
+    const t = checkout();
+    const noRetry = {
+      ...t,
+      nodes: t.nodes.map((n) =>
+        n.id === 'checkout' ? { ...n, config: { ...n.config, retries: 0 } } : n,
+      ),
+    };
+    const text = await said(noRetry, {
+      goal: { metric: 'doubleCharges', max: 0 },
+      chargeable: ['pay'],
+      budget: 5,
+      kinds: ['crash', 'crash-instance', 'slow', 'errors', 'cut'],
+    });
+    expect(text).toContain('Held.');
+    expect(text).toContain(
+      "Nothing on the way to Payment Provider (id 'pay') sends a call again",
+    );
+  }, 60_000);
+
+  it('names the stale read and tags it in the story', async () => {
+    const text = await said(preset('read-replicas'), {
+      goal: { metric: 'staleReads', max: 0 },
+    });
+    expect(text).toContain('It already misses the goal with no faults');
+    expect(text).toMatch(/Request \d+ read a record at /);
+    expect(text).toContain('(stale)');
+  }, 60_000);
 });

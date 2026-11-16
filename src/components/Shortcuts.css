@@ -104,9 +104,10 @@
 
 .sc-title {
   margin: 0;
-  font-size: var(--fs-base);
+  font-size: var(--fs-lg);
   font-weight: var(--fw-med);
-  letter-spacing: var(--tr-base);
+  line-height: var(--lh-num);
+  letter-spacing: var(--tr-lg);
   color: var(--text);
 }
 

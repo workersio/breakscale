@@ -11,6 +11,8 @@ import {
 } from '../savedDesigns';
 import type { SavedSummary } from '../savedDesigns';
 import './Designs.css';
+import { CloseButton } from './CloseButton';
+import { trapTab } from './trapTab';
 
 /* ==========================================================================
    Your designs.
@@ -115,36 +117,20 @@ export function Designs({
             e.preventDefault();
             e.stopPropagation();
             onClose();
+            return;
           }
+          trapTab(e, cardRef.current);
         }}
         onAnimationEnd={(e) => {
           if (closing && e.target === e.currentTarget) unmount();
         }}
       >
-        <header className="dz-head">
+        <div className="dz-head">
           <h2 id="dz-title" className="dz-title">
             Your designs
           </h2>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm btn-icon"
-            onClick={onClose}
-            aria-label="Close your designs"
-          >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              aria-hidden="true"
-            >
-              <path d="M18 6 6 18M6 6l12 12" />
-            </svg>
-          </button>
-        </header>
+          <CloseButton onClick={onClose} />
+        </div>
 
         <div className="dz-save">
           <input

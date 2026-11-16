@@ -58,7 +58,7 @@
 /* On a phone the card becomes a bottom sheet, rising from the same edge
    with the same motion as the panels the tab bar opens. app-sheet-in /
    app-sheet-out are declared in App.css. */
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   .sh-root {
     place-items: end stretch;
     padding: 0;
@@ -124,31 +124,19 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-3);
+  /* The banded head every dialog shares. */
+  margin: calc(var(--sp-5) * -1) calc(var(--sp-5) * -1) 0;
+  padding: var(--sp-4) var(--sp-5) var(--sp-3);
+  border-bottom: var(--bw) solid var(--border);
 }
 
 .sh-title {
   margin: 0;
   font-size: var(--fs-lg);
-  font-weight: 600;
+  font-weight: var(--fw-med);
+  line-height: var(--lh-num);
+  letter-spacing: var(--tr-lg);
   color: var(--text);
-}
-
-.sh-close {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  color: var(--text-dim);
-  background: none;
-  border: none;
-  border-radius: var(--r-sm);
-  cursor: pointer;
-}
-
-.sh-close:hover {
-  color: var(--text);
-  background: var(--surface-2);
 }
 
 .sh-options {
@@ -172,7 +160,7 @@
 .sh-option-title {
   margin: 0;
   font-size: var(--fs-base);
-  font-weight: 600;
+  font-weight: var(--fw-med);
   color: var(--text);
 }
 
@@ -264,13 +252,6 @@
 /* The 44px touch floor the shared .btn takes in index.css. Desktop density
    is unchanged. */
 @media (pointer: coarse) {
-  .sh-close {
-    width: 44px;
-    height: 44px;
-    /* Grows outward rather than pushing the title down. */
-    margin: calc(var(--sp-2) * -1);
-  }
-
   .sh-btn {
     min-height: 44px;
   }
