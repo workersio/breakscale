@@ -263,7 +263,7 @@ export function Share({ open, onClose, onBuild, replayable = false, onExport }: 
                   aria-disabled={link.status === 'working' || undefined}
                   aria-describedby={headId}
                 >
-                  {copied && <Check size={14} strokeWidth={2.5} aria-hidden="true" />}
+                  {copied && <Check size={14} strokeWidth={2} aria-hidden="true" />}
                   {link.status === 'working'
                     ? 'Making link…'
                     : link.status === 'failed'

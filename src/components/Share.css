@@ -160,7 +160,7 @@
 .sh-option-title {
   margin: 0;
   font-size: var(--fs-base);
-  font-weight: 600;
+  font-weight: var(--fw-med);
   color: var(--text);
 }
 

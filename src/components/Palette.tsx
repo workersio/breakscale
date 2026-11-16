@@ -508,7 +508,7 @@ export function Palette({ onAdd, onAddAnnotation, armedTool }: PaletteProps) {
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
-                  strokeWidth="2.5"
+                  strokeWidth="2"
                   strokeLinecap="round"
                   aria-hidden="true"
                 >

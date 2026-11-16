@@ -256,7 +256,6 @@
 .pal-row.is-armed {
   background: var(--accent-soft);
   color: var(--accent-ink);
-  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .pal-row.is-armed .pal-glyph {
@@ -427,12 +426,6 @@
   background: var(--k-fill, var(--surface-2));
   color: var(--k-ink, var(--text-dim));
   transition: transform var(--dur-fast) var(--ease);
-}
-
-/* The chip lifts very slightly on hover — enough to say "this is the thing
-   you are about to drag", not enough to read as motion. */
-.pal-row:hover .pal-glyph {
-  transform: scale(1.06);
 }
 
 /* The carry: what the pointer holds once a row is picked up. Three layers,

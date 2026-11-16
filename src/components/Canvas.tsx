@@ -981,7 +981,7 @@ export function readoutFor(
       const phase = s.scalePhase ?? 'idle';
       return {
         primary: { value: formatPct(watched), label: 'watching' },
-        a: { value: `${have}/${want}`, label: 'pods' },
+        a: { value: `${have}/${want}`, label: 'running' },
         b: { value: '', label: phase },
         load: drift,
         health: healthOfLoad(drift),
@@ -1127,7 +1127,7 @@ export function readoutFor(
       const burst = cfg.burst ?? cfg.rateLimitRps ?? 1;
       return {
         primary: { value: formatRate(throttled), label: 'refused' },
-        a: { value: formatRate(admitted), label: 'passed' },
+        a: { value: formatRate(admitted), label: 'admitted' },
         b: { value: formatCount(s.tokens), label: 'tokens' },
         // A drained bucket is a limiter working hard; a full one is idle.
         load: 1 - frac(s.tokens ?? 0, burst),
@@ -1258,7 +1258,7 @@ export function readoutFor(
         primary: { value: formatCount(lag), label: 'lag' },
         a:
           dropRate > 0
-            ? { value: formatRate(dropRate), label: 'lost' }
+            ? { value: formatRate(dropRate), label: 'expired' }
             : { value: formatRate(s.deliveryRate), label: 'deliver' },
         b: { value: formatRate(s.throughput), label: 'publish' },
         load: fill,
@@ -1314,9 +1314,9 @@ export function readoutFor(
       const badAuth = s.authRejectRate ?? 0;
       const burst = cfg.burst ?? cfg.rateLimitRps ?? 1;
       return {
-        primary: { value: formatRate(admitted), label: 'passed' },
-        a: { value: formatRate(throttled), label: 'limited' },
-        b: { value: formatRate(badAuth), label: 'denied' },
+        primary: { value: formatRate(admitted), label: 'admitted' },
+        a: { value: formatRate(throttled), label: 'refused' },
+        b: { value: formatRate(badAuth), label: 'bad auth' },
         load: 1 - frac(s.tokens ?? 0, burst),
         health: throttled > admitted ? 'danger' : throttled > 0 ? 'warn' : 'ok',
         spark: admitted,
@@ -1493,11 +1493,11 @@ export function readoutFor(
       const highIn = s.highAdmittedRate ?? 0;
       const burst = cfg.burst ?? cfg.rateLimitRps ?? 1;
       return {
-        primary: { value: formatRate(lowShed), label: 'shed low' },
+        primary: { value: formatRate(lowShed), label: 'low cut' },
         a: { value: formatRate(highIn), label: 'high in' },
         b:
           highShed > 0
-            ? { value: formatRate(highShed), label: 'shed high' }
+            ? { value: formatRate(highShed), label: 'high cut' }
             : { value: formatCount(s.tokens), label: 'tokens' },
         load: 1 - frac(s.tokens ?? 0, burst),
         health: highShed > 0 ? 'danger' : lowShed > 0 ? 'warn' : 'ok',

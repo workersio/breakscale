@@ -304,11 +304,7 @@ export function LearningPath({
                         aria-current={now ? 'step' : undefined}
                       >
                         <span className="lp-mark" aria-hidden="true">
-                          {status === 'done' ? (
-                            <Check size={14} strokeWidth={2.25} />
-                          ) : (
-                            n
-                          )}
+                          {status === 'done' ? <Check size={14} strokeWidth={2} /> : n}
                         </span>
                         <span className="lp-step-text">
                           <span className="lp-step-name">

@@ -85,7 +85,7 @@ export function WhatHappened({ topology, snapshot }: WhatHappenedProps) {
             aria-expanded="false"
             onClick={() => setUserOpen(true)}
           >
-            <History size={16} strokeWidth={1.75} aria-hidden="true" />
+            <History size={16} strokeWidth={2} aria-hidden="true" />
             What just happened
           </button>
         </div>
@@ -114,7 +114,7 @@ export function WhatHappened({ topology, snapshot }: WhatHappenedProps) {
               title="Close (Esc)"
               onClick={close}
             >
-              <X size={16} strokeWidth={1.75} aria-hidden="true" />
+              <X size={16} strokeWidth={2} aria-hidden="true" />
             </button>
           </header>
           {earlier > 0 ? (

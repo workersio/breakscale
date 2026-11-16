@@ -127,7 +127,7 @@ export function FindProblem({
         disabled={!snapshot}
         title="Find what is holding the system back"
       >
-        <ScanSearch size={16} strokeWidth={1.75} aria-hidden="true" />
+        <ScanSearch size={16} strokeWidth={2} aria-hidden="true" />
         Find the problem
       </button>
       {/* Always in the accessibility tree, so a screen reader hears each new
@@ -156,7 +156,7 @@ export function FindProblem({
               title="Close (Esc)"
               onClick={close}
             >
-              <X size={16} strokeWidth={1.75} aria-hidden="true" />
+              <X size={16} strokeWidth={2} aria-hidden="true" />
             </button>
           </header>
           <div className="fp-text" aria-hidden="true">

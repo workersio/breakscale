@@ -4667,11 +4667,11 @@ export function TrafficControl({
               the fill is what marks it primary now that the accent surface
               is gone (an icon in a coloured box is on the ban list). */}
           {running ? (
-            <Pause size={18} strokeWidth={1.5} fill="currentColor" aria-hidden="true" />
+            <Pause size={18} strokeWidth={2} fill="currentColor" aria-hidden="true" />
           ) : (
             <Play
               size={18}
-              strokeWidth={1.5}
+              strokeWidth={2}
               fill="currentColor"
               aria-hidden="true"
               /* A triangle's visual mass sits left of its bounding-box
