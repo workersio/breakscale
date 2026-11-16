@@ -36,6 +36,16 @@
   right: calc(var(--ins-w) + var(--sp-3) * 2);
 }
 
+/* Beside an open inspector the card steps left, onto the canvas. Where
+   there is width for it, the uncovered area leaves the card's width too, so
+   the reveal that pans a selected part clear of the inspector also pans it
+   clear of the card. Narrower, the card goes over the rail (below). */
+@media (min-width: 1101px) {
+  .app-body.has-task.has-inspector .stage-safe {
+    right: calc(var(--ins-w) + var(--task-w) + var(--sp-3) * 3);
+  }
+}
+
 /* Between a phone and a wide desktop, both rails open leave less room
    than the card needs, and it would slide under the components rail.
    It goes over the rail instead: while a step points into the inspector,

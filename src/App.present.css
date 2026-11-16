@@ -72,6 +72,16 @@
   bottom: calc(var(--strip-shown) + var(--pb-h, 56px) + var(--sp-3) * 3);
 }
 
+/* The traffic key sits in the canvas's bottom corner, which is the bar's
+   row now; it lifts clear of the bar as the safe area does. */
+.app.is-presenting .cv-key {
+  bottom: calc(var(--pb-h, 56px) + var(--sp-3) * 2);
+}
+
+.app.is-presenting .app-body.has-metrics .cv-key {
+  bottom: calc(var(--strip-shown) + var(--pb-h, 56px) + var(--sp-3) * 3);
+}
+
 /* Phones. The tab bar goes: two of its three tabs open panels this mode
    keeps shut. */
 @media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
@@ -85,6 +95,15 @@
 
   .app.is-presenting .stage-canvas > .stage-safe {
     bottom: calc(var(--pb-h, 56px) + var(--sp-2) * 2);
+  }
+
+  /* A brief, an incident or a task card docks on the tab bar, which this
+     mode takes away; they sit on the presenting bar instead of under it. */
+  .app.is-presenting .app-body .chal,
+  .app.is-presenting .app-body .task {
+    bottom: calc(
+      var(--pb-h, 56px) + var(--sp-2) * 2 + env(safe-area-inset-bottom, 0px)
+    );
   }
 
   /* "What just happened" sits at the canvas's foot on a phone, which is
@@ -145,5 +164,29 @@
      own row, so they stay: they are half of what a class is shown. */
   .app.is-presenting .app-bar[data-fit='compact'] .traffic-metric-group {
     display: flex;
+  }
+}
+
+/* A phone on its side shows a brief as a side sheet, and folded it is its
+   heading only, at the top. */
+@media (pointer: coarse) and (max-height: 500px) {
+  .app.is-presenting .app-body .chal.is-collapsed {
+    bottom: auto;
+  }
+}
+
+/* A phone held upright frames the diagram above a docked brief, incident or
+   task card, and in this mode those sit on the bar, so the frame stops above
+   both. */
+@media (max-width: 720px) and (orientation: portrait) {
+  .app.is-presenting .app-body.has-challenge .stage-canvas > .stage-safe {
+    bottom: calc(
+      var(--chal-sheet-h, var(--chal-fold-h)) + var(--pb-h, 56px) + var(--sp-2) * 2 +
+        env(safe-area-inset-bottom, 0px)
+    );
+  }
+
+  .app.is-presenting .app-body.has-task .stage-canvas > .stage-safe {
+    bottom: calc(var(--task-phone-h) + var(--pb-h, 56px) + var(--sp-2) * 3);
   }
 }

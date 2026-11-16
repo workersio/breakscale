@@ -223,3 +223,13 @@
     right: var(--side-sheet-w);
   }
 }
+
+/* The traffic key's corner is under a docked brief, incident or task card
+   or the tour on a phone. It steps aside while one is open rather than sit beneath it. */
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
+  .app-body.has-challenge .cv-key,
+  .app-body.has-task .cv-key,
+  .app:has(.tour-card) .cv-key {
+    display: none;
+  }
+}
