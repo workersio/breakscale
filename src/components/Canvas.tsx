@@ -46,7 +46,6 @@ import {
   formatMs,
   formatPct,
   formatRate,
-  NA,
   healthOfErr,
   healthOfLatency,
   healthOfLoad,
@@ -698,13 +697,26 @@ function frac(n: number, d: number): number {
 }
 
 /**
- * A node's p99, or n/a until it has finished a request. A box that has served
- * nothing has no slowest request, and "0ms" would read as instant. Same rule
- * as the latency chart's n/a.
+ * A node's p99, or "none yet" until it has finished a request. A box that has
+ * served nothing has no slowest request, and "0ms" would read as instant.
  */
 function p99Cell(s: NodeStats, label = 'p99'): Cell {
   const measured = s.p99 > 0 || s.throughput > 0;
-  return { value: measured ? formatMs(s.p99) : NA, label };
+  return { value: measured ? formatMs(s.p99) : 'none yet', label };
+}
+
+/**
+ * What a crashed node shows: one word in place of its three cells. Its
+ * busy share reads near zero and its p99 has nothing to measure, and the
+ * three together looked like an idle, healthy box.
+ */
+function downReadout(r: Readout): Readout {
+  return {
+    ...r,
+    primary: { value: 'Down', label: '' },
+    a: { value: '', label: '' },
+    b: { value: '', label: '' },
+  };
 }
 
 /**
@@ -1004,7 +1016,7 @@ export function readoutFor(
         primary: { value: formatPct(util), label: 'busy' },
         a: p99Cell(s),
         b: contended
-          ? { value: formatMs(lockWait), label: 'lock' }
+          ? { value: formatMs(lockWait), label: 'lock wait' }
           : { value: formatCount(s.queued), label: 'waiting' },
         load: util,
         health:
@@ -3250,9 +3262,8 @@ export const NodeView = memo(function NodeView({
   violationMark,
   line = 'none',
 }: NodeViewProps) {
-  const readout = stats
-    ? readoutFor(node.kind, stats, node.config, backlog, route)
-    : null;
+  const live = stats ? readoutFor(node.kind, stats, node.config, backlog, route) : null;
+  const readout = live && fault === 'crash' ? downReadout(live) : live;
   // A faulted node is never reported as healthy, whatever its metrics say.
   const health: Health = fault
     ? 'danger'
@@ -7635,7 +7646,7 @@ export default function Canvas({
         /* Zoom is deliberately NOT here: the zoom control sits a few pixels
            away and already states it, and a fact printed twice on one
            surface reads as an oversight. */
-        <div ref={ledgerRef} className="cv-ledger label" aria-hidden="true">
+        <div ref={ledgerRef} className="cv-ledger" aria-hidden="true">
           <span>
             {topology.nodes.length}{' '}
             {topology.nodes.length === 1 ? 'component' : 'components'}
@@ -7651,9 +7662,11 @@ export default function Canvas({
             {topology.edges.length}{' '}
             {topology.edges.length === 1 ? 'connection' : 'connections'}
           </span>
-          {/* Kept out of the ledger's uppercase transform: "1.5s" must not
-              render as "1.5S" — units always print lowercase. */}
-          <span className="cv-ledger-time">{formatElapsed(elapsed)}</span>
+          {/* Named, so a bare "3.4s" in the corner reads as the run's own
+              clock rather than as some request's latency. */}
+          <span className="cv-ledger-clock">
+            Time <span className="cv-ledger-time">{formatElapsed(elapsed)}</span>
+          </span>
         </div>
       )}
 
@@ -7697,7 +7710,7 @@ export default function Canvas({
         tool === null &&
         topology.nodes.length > 0 &&
         !renameNode && (
-          <div className="cv-hint-idle label" aria-hidden="true">
+          <div className="cv-hint-idle" aria-hidden="true">
             {topology.nodes.some((n) => selectedIds.has(n.id)) ? (
               <>
                 <span>Drag to move</span>

@@ -577,7 +577,8 @@
   }
 }
 
-/* T1 — unit captions. Uppercase is what makes 11px read as a label.
+/* T1 — unit captions. Lower case, read on from the number they follow:
+   "48/s sent", "131ms p99", "0 waiting".
 
    Drawn in the kind's ink rather than --text-faint. On a tinted body the
    neutral faint grey is the one token that goes muddy: it is the lowest-
@@ -587,9 +588,7 @@
   fill: var(--k-ink, var(--text-dim));
   font-family: var(--sans);
   font-size: var(--fs-label);
-  font-weight: var(--fw-num);
-  text-transform: uppercase;
-  letter-spacing: var(--tr-label);
+  font-weight: var(--fw-med);
 }
 
 /* The primary value takes the health color only at warn and danger, and only
@@ -1128,7 +1127,7 @@
   transform: translateX(-50%);
   padding: var(--sp-1) var(--sp-3);
   background: var(--surface);
-  border: 1px solid var(--accent);
+  border: var(--bw) solid var(--border);
   border-radius: var(--r-md);
   color: var(--text-dim);
   font-size: var(--fs-sm);
@@ -1153,9 +1152,10 @@
      a WCAG failure carrying no information at all. This gap separates them
      just as clearly and leaves nothing that can fail. */
   gap: var(--sp-3);
-  font-family: var(--mono);
+  font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum' 1;
+  white-space: nowrap;
   color: var(--text-faint);
   pointer-events: none;
 
@@ -1170,12 +1170,6 @@
   border-radius: var(--r-btn);
   background: var(--surface);
   border: var(--bw) solid var(--border);
-}
-
-/* The elapsed clock. Units print lowercase ("1.5s", "2m 05s"): the ledger's
-   .label uppercase turned the seconds into "1.5S", a unit no book sets. */
-.cv-ledger-time {
-  text-transform: none;
 }
 
 /* The category breakdown drops out well before the phone breakpoint, because
@@ -1212,6 +1206,8 @@
   gap: var(--sp-4);
   min-height: 32px;
   align-items: center;
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
   white-space: nowrap;
   pointer-events: none;
 
@@ -2225,7 +2221,7 @@
     gap: var(--sp-3);
   }
 
-  .cv-ledger-time {
+  .cv-ledger-clock {
     display: none;
   }
 }

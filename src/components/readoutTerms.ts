@@ -23,7 +23,7 @@ const BY_LABEL: Readonly<Record<string, string>> = {
   failing: 'error-rate',
   hit: 'hit-rate',
   stale: 'stale-read',
-  lock: 'lock-contention',
+  'lock wait': 'lock-contention',
   origin: 'origin-fetch',
   tokens: 'tokens',
   circuit: 'breaker',
