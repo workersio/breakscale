@@ -270,7 +270,7 @@ describe('the check', () => {
     );
     render({ budget: { used: 0, allowed: 0 } });
     expect(container.querySelector('.chal-budget')?.textContent).toBe(
-      "You can't add any slots here. Used: 0.",
+      'You cannot add any slots here. Used: 0.',
     );
     const over = verdict({ status: 'over-budget', budget: { used: 7, allowed: 6 } });
     render({
@@ -289,7 +289,7 @@ describe('the check', () => {
     });
     render({ check: { status: 'verdict', verdict: lost } });
     expect(text()).toContain('The brief breaks the db on purpose');
-    expect(container.querySelector('.chal-chip')?.textContent).toBe('Cannot check');
+    expect(container.querySelector('.chal-chip')?.textContent).toBe('Cannot check yet');
   });
 
   it('says what a design changed that the brief does not allow', () => {

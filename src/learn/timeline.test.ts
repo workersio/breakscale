@@ -81,7 +81,7 @@ function snapAt(r: Run, ms: number): SimSnapshot {
   return s;
 }
 
-describe('timeline: Single server, Database slowed 5x', () => {
+describe('timeline: Single server, Database slowed 5×', () => {
   const top = preset('single-server');
   const db = idOf(top, 'db');
   const r = run(top, 20, (e, _t, ms) => {
@@ -91,19 +91,19 @@ describe('timeline: Single server, Database slowed 5x', () => {
 
   it('tells the story in order, cause first', () => {
     const order = [
-      'Database slowed down 5x.',
+      'Database slowed down 5×.',
       'Database: all 6 slots busy',
       'Database started turning away',
       'The fault on Database was cleared.',
       'Database is keeping up again.',
     ].map((s) => r.lines.indexOf(line(r.lines, s)));
     expect(order).toEqual([...order].sort((a, b) => a - b));
-    expect(r.lines[0]?.text).toBe('Database slowed down 5x.');
+    expect(r.lines[0]?.text).toBe('Database slowed down 5×.');
     expect(r.lines[0]?.tone).toBe('cause');
   });
 
   it("stamps the fault with the engine's own injection time", () => {
-    const fault = line(r.lines, 'Database slowed down 5x.');
+    const fault = line(r.lines, 'Database slowed down 5×.');
     const snap = snapAt(r, 3000);
     expect(snap.activeFailures[0]?.sinceMs).toBe(fault.atMs);
   });
@@ -124,7 +124,7 @@ describe('timeline: Single server, Database slowed 5x', () => {
 
   it('holds a condition for a second before it is a line', () => {
     const full = line(r.lines, 'Database: all 6 slots busy');
-    const fault = line(r.lines, 'Database slowed down 5x.');
+    const fault = line(r.lines, 'Database slowed down 5×.');
     expect(full.atMs - fault.atMs).toBeGreaterThanOrEqual(1000);
   });
 

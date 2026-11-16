@@ -238,9 +238,9 @@ export function formatDownFor(ms: number): string {
   return `${Number.isInteger(s) ? s : s.toFixed(1)}s`;
 }
 
-/** A service-time multiplier as the controls print it: `5x`. */
+/** A service-time multiplier as the controls print it: `5×`. */
 export function formatFactor(f: number): string {
-  return `${Number.isInteger(f) ? f : f.toFixed(1)}x`;
+  return `${Number.isInteger(f) ? f : f.toFixed(1)}×`;
 }
 
 /** What the fault controls show for the current selection. */

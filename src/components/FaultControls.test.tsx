@@ -232,7 +232,7 @@ describe('fault controls on a selected node', () => {
       kind: 'slow',
       opts: { factor: DEFAULT_SLOW_FACTOR },
     });
-    expect(status()).toMatch(/^Running 5x slower since 2\.0s\./);
+    expect(status()).toMatch(/^Running 5× slower since 2\.0s\./);
 
     const factor = container.querySelector<HTMLSelectElement>(
       '#' + labelFor('How much slower'),

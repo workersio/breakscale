@@ -410,7 +410,7 @@ function chipOf(view: CheckView, fresh: boolean): string {
     case 'over-budget':
       return 'Over budget';
     case 'unjudgeable':
-      return 'Cannot check';
+      return 'Cannot check yet';
   }
 }
 
@@ -779,7 +779,7 @@ export function ChallengePanel({
         {budget ? (
           <p className={`chal-budget${budget.used > budget.allowed ? ' is-over' : ''}`}>
             {budget.allowed === 0
-              ? "You can't add any slots here."
+              ? 'You cannot add any slots here.'
               : `You can add up to ${budget.allowed} more ${budget.allowed === 1 ? 'slot' : 'slots'}.`}{' '}
             Used: <span className="num">{budget.used}</span>.
           </p>

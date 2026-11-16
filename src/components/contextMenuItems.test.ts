@@ -40,7 +40,7 @@ describe('a part menu', () => {
       'Copy',
       'Connect to…',
       'Crash',
-      'Slow down 5x',
+      'Slow down 5×',
       'Delete',
     ]);
     expect(menuTitle(S, facts())).toBe('API Server');
@@ -58,13 +58,13 @@ describe('a part menu', () => {
     const crash: ActiveFailure = { nodeId: 's', kind: 'crash', sinceMs: 0 };
     expect(labels(S, facts({ fault: slow }))).toContain('Crash');
     expect(labels(S, facts({ fault: slow }))).toContain('Fix');
-    expect(labels(S, facts({ fault: slow }))).not.toContain('Slow down 5x');
+    expect(labels(S, facts({ fault: slow }))).not.toContain('Slow down 5×');
     expect(labels(S, facts({ fault: crash }))).not.toContain('Crash');
     expect(labels(S, facts({ fault: crash }))).toContain('Fix');
   });
 
   it('does not offer Slow for a kind with no service time', () => {
-    expect(labels(S, facts({ canSlow: false }))).not.toContain('Slow down 5x');
+    expect(labels(S, facts({ canSlow: false }))).not.toContain('Slow down 5×');
   });
 
   it('stands for the whole selection when pressed inside one', () => {

@@ -261,7 +261,7 @@ describe('presenting', () => {
     key('r');
     expect(state()).toBe('Running');
     key('w');
-    expect(state()).toBe('Slowed 5x');
+    expect(state()).toBe('Slowed 5×');
     // The inspector stays shut the whole time.
     expect(
       document.querySelector('.app-body')?.classList.contains('has-inspector'),

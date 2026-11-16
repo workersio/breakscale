@@ -42,7 +42,7 @@ export function EmptyCanvas({ actions }: EmptyCanvasProps) {
             className="btn btn-primary btn-sm"
             onClick={actions.onStartSimple}
           >
-            Start with one server
+            Start with one service
           </button>
           <button
             type="button"

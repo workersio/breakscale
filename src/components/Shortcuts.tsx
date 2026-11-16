@@ -54,7 +54,10 @@ const GROUPS: Group[] = [
     title: 'Build',
     rows: [
       { keys: ['Drag a port'], does: 'Connect two components' },
-      { keys: ['Click a port'], does: 'Arm a link; click the target to finish' },
+      {
+        keys: ['Click a port'],
+        does: 'Start a connection; click the target to finish',
+      },
       {
         keys: ['L'],
         does: 'Connect the selected component; arrows pick, Enter connects',

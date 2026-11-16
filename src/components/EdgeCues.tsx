@@ -270,7 +270,7 @@ export function EdgeCues({
           data-chrome="cue"
           style={style}
           aria-label="Fit the diagram on screen"
-          title="Fit the diagram on screen"
+          title="Fit the diagram on screen (Shift+1)"
           onClick={() => {
             handoff.current = { from: 'fit', at: performance.now() };
             onFit();
