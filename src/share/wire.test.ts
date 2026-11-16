@@ -156,6 +156,10 @@ describe('protocol tables', () => {
       idempotencyKeys: true,
       flushEveryMs: true,
       freshReads: true,
+      keySkew: true,
+      burstSize: true,
+      herdSize: true,
+      herdSpreadMs: true,
     };
     for (const field of Object.keys(every)) expect(WIRE_FIELDS).toContain(field);
   });

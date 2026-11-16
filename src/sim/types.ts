@@ -111,6 +111,35 @@ export interface NodeConfig {
    * when absent.
    */
   trafficPeriodS?: number;
+  /**
+   * Client only: how unevenly this client's requests pick their keys, 0..2.
+   *
+   * Absent or 0 is an even spread over the 64 keys. Above 0 the keys follow a
+   * Zipf curve, where key k is wanted in proportion to 1 / (k + 1)^skew: at
+   * 1.0 the hottest key gets about 21% of requests and the next about 11%.
+   * Unlike a shard's `hotKeyFraction`, this changes the key itself, so every
+   * component that reads keys downstream sees the same hot key.
+   */
+  keySkew?: number;
+  /**
+   * Client only, `bursty` traffic: the average number of requests that arrive
+   * together in one clump, 1..50. Clumps are spaced so the average rate stays
+   * `rps`; only how unevenly it arrives changes. Defaults to 10.
+   */
+  burstSize?: number;
+  /**
+   * Client only, `herd` traffic: how many callers fire at the same instant at
+   * the end of each cycle, 0..5000, on top of the steady `rps`. Each one is a
+   * real request with its own timeout and retries. Defaults to 500.
+   */
+  herdSize?: number;
+  /**
+   * Client only, `herd` traffic: ms the herd is spread over, 0..10000. 0 is
+   * every caller at once; above it each caller waits a random delay inside
+   * the window first, which is the jitter that real clients add to stop a
+   * herd forming. Defaults to 0.
+   */
+  herdSpreadMs?: number;
 
   /* ---- autoscaler ------------------------------------------------- *
    * An autoscaler is a controller, not a request path. It watches one node's
@@ -997,6 +1026,14 @@ export interface NodeStats {
    * empty for every other kind. Length tracks shardCount.
    */
   shardUtilization: number[];
+  /**
+   * Shard nodes only, and only while some client skews its keys: the share of
+   * requests reaching this store that carried its single most common key,
+   * 0..1, measured over roughly the last two seconds. Absent otherwise.
+   */
+  hottestKeyShare?: number;
+  /** The partition that key lives on, 0-based. Present with hottestKeyShare. */
+  hottestKeyShard?: number;
 
   /* ---- cdn readouts ------------------------------------------------ */
 
@@ -1342,23 +1379,34 @@ export interface SystemStats {
  * - `ramp`     climbs from nothing to the baseline over one period, then
  *              holds. A launch, or traffic arriving as a region wakes up.
  * - `spike`    quiet at a tenth of the baseline, then a short burst well
- *              above it. This is the one that finds queue limits.
+ *              above it. This is the one that finds queue limits. It
+ *              averages about half the baseline over a cycle.
  * - `diurnal`  a smooth day: a trough overnight, a peak in the afternoon.
  *              Teaches that a system sized for the average is undersized for
  *              half the day.
  *
- * A thundering herd is deliberately NOT here. The other four are rate curves,
- * but a herd is correlated ARRIVALS: many callers retrying at the same instant
- * after a recovery. That is a different mechanism, not a different curve, and
- * modelling it as a tall thin spike would be a plausible-looking lie.
+ * The last two are not rate curves. They change how arrivals are grouped,
+ * which is a different mechanism from how fast they come:
+ *
+ * - `bursty`   the same average rate, arriving in clumps of `burstSize`.
+ * - `herd`     the steady baseline, plus `herdSize` callers at the same
+ *              instant once a cycle: a cache expiring, or every client
+ *              reconnecting after a deploy. Fired as real requests by an
+ *              event of their own, not as a tall thin spike in the curve,
+ *              which would be a plausible-looking lie.
+ *
+ * Append only: the wire format stores a pattern by its index here.
  */
-export type TrafficPattern = 'steady' | 'ramp' | 'spike' | 'diurnal';
+export type TrafficPattern =
+  'steady' | 'ramp' | 'spike' | 'diurnal' | 'bursty' | 'herd';
 
 export const TRAFFIC_PATTERNS: readonly TrafficPattern[] = [
   'steady',
   'ramp',
   'spike',
   'diurnal',
+  'bursty',
+  'herd',
 ];
 
 /**

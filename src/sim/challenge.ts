@@ -322,6 +322,10 @@ export const DEFAULT_LOCKS: readonly FieldLock[] = [
   { kind: 'client', field: 'retries' },
   { kind: 'client', field: 'traffic' },
   { kind: 'client', field: 'trafficPeriodS' },
+  { kind: 'client', field: 'keySkew' },
+  { kind: 'client', field: 'burstSize' },
+  { kind: 'client', field: 'herdSize' },
+  { kind: 'client', field: 'herdSpreadMs' },
 ];
 
 /** Every lock a brief holds: the defaults and its own. */

@@ -111,7 +111,11 @@ describe('during a challenge', () => {
     const rows = [...container.querySelectorAll('.is-locked')];
     expect(rows.length).toBeGreaterThanOrEqual(3);
     for (const row of rows) {
-      expect(row.querySelector('input')?.disabled).toBe(true);
+      // The traffic shape is a select; every other client field an input.
+      expect(
+        row.querySelector<HTMLInputElement | HTMLSelectElement>('input, select')
+          ?.disabled,
+      ).toBe(true);
       expect(row.textContent).toContain('how the people sending requests behave');
     }
   });

@@ -231,6 +231,10 @@ const FIELDS = [
   'idempotencyKeys',
   'flushEveryMs',
   'freshReads',
+  'keySkew',
+  'burstSize',
+  'herdSize',
+  'herdSpreadMs',
 ] as const satisfies readonly ConfigField[];
 
 /** Every field the wire can carry; exported so a test can prove it is complete. */
@@ -284,6 +288,10 @@ const SCHEMA: Record<NodeKind, readonly ConfigField[]> = {
     'serviceCv',
     'errorRate',
     'hitRate',
+    'keySkew',
+    'burstSize',
+    'herdSize',
+    'herdSpreadMs',
   ],
   lb: [...COMMON, ...CORRECTNESS],
   service: [...COMMON, ...CORRECTNESS],

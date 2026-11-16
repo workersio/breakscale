@@ -392,7 +392,16 @@ interface ShardExt {
   sized: number;
   /** Last time utilisation was integrated. */
   lastIntegrateMs: number;
+  /**
+   * Requests admitted per key, decaying with a two-second time constant, so
+   * the hottest key's share is a reading of the recent past rather than of
+   * the whole run. Indexed by key; never resized.
+   */
+  keyWeight: Float64Array;
 }
+
+/** Time constant of `keyWeight`, ms. */
+const KEY_WINDOW_MS = 2000;
 
 function shardExt(state: NodeStateLike): ShardExt {
   return state.ext as ShardExt;
@@ -409,6 +418,7 @@ function makeShardExt(count: number): ShardExt {
     report: new Array<number>(count).fill(0),
     sized: count,
     lastIntegrateMs: 0,
+    keyWeight: new Float64Array(KEYSPACE),
   };
 }
 
@@ -431,6 +441,8 @@ function ensureSized(state: NodeStateLike, ext: ShardExt): ShardExt {
 
   const next = makeShardExt(want);
   next.lastIntegrateMs = ext.lastIntegrateMs;
+  // Key counts are per key, not per shard, so a resize does not touch them.
+  next.keyWeight = ext.keyWeight;
   // Busy slots belong to requests already in service; their drain callback
   // will decrement whichever shard they were charged to, so carry the counts
   // across for the shards that still exist.
@@ -509,6 +521,7 @@ const shard: ComponentBehaviour = {
   onAdmit(ctx: BehaviourCtx, state: NodeStateLike, req: ReqLike): AdmitAction {
     const ext = ensureSized(state, shardExt(state));
     const count = ext.sized;
+    ext.keyWeight[((req.key % KEYSPACE) + KEYSPACE) % KEYSPACE] += 1;
     const idx = shardIndexFor(ctx, state, req, count);
     const capacity = clampInt(state.config.shardCapacity, 1, MAX_SHARD_CAPACITY);
 
@@ -557,6 +570,8 @@ const shard: ComponentBehaviour = {
     // integrate this node as idle. Report the real total, or an autoscaler
     // watching a melting sharded store reads 0.0 and scales it down.
     ctx.reportOccupancy(state, busy, ext.sized * capacity);
+    const fade = exp(-dt / KEY_WINDOW_MS);
+    for (let k = 0; k < KEYSPACE; k++) ext.keyWeight[k] *= fade;
   },
 
   decorateStats(ctx: BehaviourCtx, state: NodeStateLike, stats: NodeStats): void {
@@ -587,6 +602,27 @@ const shard: ComponentBehaviour = {
     stats.queued = queued;
     ctx.reportShardUtilization(state, ext.report);
     stats.shardUtilization = ext.report;
+
+    // Published only while a client skews its keys. With an even spread the
+    // hottest of 64 keys is noise around 1.6%, and leaving the field off
+    // keeps every snapshot from before skew existed byte for byte the same.
+    if (ctx.keysSkewed()) {
+      let total = 0;
+      let top = 0;
+      let topKey = 0;
+      for (let k = 0; k < KEYSPACE; k++) {
+        const w = ext.keyWeight[k];
+        total += w;
+        if (w > top) {
+          top = w;
+          topKey = k;
+        }
+      }
+      if (total > 0) {
+        stats.hottestKeyShare = top / total;
+        stats.hottestKeyShard = topKey % n;
+      }
+    }
   },
 };
 

@@ -372,6 +372,13 @@
   max-width: 100%;
 }
 
+/* A select holds a word, not a figure: wide enough for "Thundering herd". */
+select.ins-number {
+  width: auto;
+  min-width: 84px;
+  max-width: 100%;
+}
+
 /* A mixed multi-selection shows a placeholder rather than one node's value
    dressed up as everyone's. */
 .ins-number[data-mixed] {
@@ -639,6 +646,110 @@
   color: var(--text-faint);
   text-transform: none;
   letter-spacing: 0;
+}
+
+/* What clients really sent while a traffic shape moves the rate around the
+   base, with the word "base" that says what the big figure is. Kept at
+   every width, unlike the unit: it is a measurement. */
+.traffic-load-now {
+  color: var(--text-dim);
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+/* Wide enough for the longest rate ("250k/s"), so the chip after it stays
+   put while a spike or a herd moves the figure. */
+.traffic-load-now .num {
+  display: inline-block;
+  min-width: 6ch;
+  color: var(--text);
+}
+
+/* The load as a multiple of the design's 1x. Sized to sit on the numeral's
+   line without growing the bar; the hit area is widened by ::after so it
+   still meets the touch floor. */
+.traffic-multiple-wrap {
+  position: relative;
+  align-self: center;
+  margin-left: var(--sp-1);
+}
+
+.traffic-multiple {
+  position: relative;
+  height: 22px;
+  padding: 0 var(--sp-1);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+button.traffic-multiple {
+  background: var(--surface-2);
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+button.traffic-multiple::after {
+  content: '';
+  position: absolute;
+  inset: -11px -4px;
+}
+
+button.traffic-multiple:hover,
+button.traffic-multiple[aria-expanded='true'] {
+  background: var(--surface-3);
+}
+
+.traffic-multiple.is-static {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-dim);
+}
+
+.traffic-multiple-panel {
+  position: absolute;
+  top: calc(100% + var(--sp-2));
+  /* Centred under the chip, so on a phone, where the chip sits mid-row, the
+     panel stays on screen on both sides. */
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  width: 15rem;
+  max-width: calc(100vw - 32px);
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  background: var(--surface);
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+}
+
+.traffic-multiple-text {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.traffic-multiple-text .num {
+  color: var(--text);
+}
+
+.traffic-multiple-quick {
+  display: flex;
+  gap: var(--sp-1);
+}
+
+.traffic-multiple-quick .btn {
+  flex: 1 1 0;
+}
+
+.traffic-multiple-reset {
+  justify-content: center;
 }
 
 .traffic-load-track {
