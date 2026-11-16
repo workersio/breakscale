@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PRESETS } from '../sim/presets';
 import { CHALLENGES } from '../sim/challenges';
+import { INCIDENTS } from '../sim/incidents';
 import { LEARNING_PATH } from './learningPath';
 
 const steps = LEARNING_PATH.flatMap((t) => t.steps);
@@ -14,6 +15,23 @@ describe('the learning path', () => {
   it('has every challenge exactly once', () => {
     const ids = steps.filter((s) => s.kind === 'challenge').map((s) => s.id);
     expect([...ids].sort()).toEqual(CHALLENGES.map((c) => c.id).sort());
+  });
+
+  it('has every incident exactly once', () => {
+    const ids = steps.filter((s) => s.kind === 'incident').map((s) => s.id);
+    expect([...ids].sort()).toEqual(INCIDENTS.map((i) => i.id).sort());
+  });
+
+  /* A real outage is met by someone who has already fixed its kind of
+     problem in a challenge, so each incident comes after one in its track. */
+  it('puts every incident after a challenge in the same track', () => {
+    for (const track of LEARNING_PATH) {
+      track.steps.forEach((s, i) => {
+        if (s.kind !== 'incident') return;
+        const before = track.steps.slice(0, i).some((p) => p.kind === 'challenge');
+        expect(before, `${s.id} in ${track.id}`).toBe(true);
+      });
+    }
   });
 
   /* A brief is set in an example's system. Meeting the system first is the

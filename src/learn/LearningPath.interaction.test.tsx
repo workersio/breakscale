@@ -6,6 +6,7 @@ import App from '../App';
 import { CHALLENGES_KEY } from '../challengeWorkspace';
 import { PRESETS, makeNode } from '../sim/presets';
 import { challengeById } from '../sim/challenges';
+import { incidentById } from '../sim/incidents';
 import type { Topology } from '../sim/types';
 import { PATH_KEY } from './pathProgress';
 
@@ -136,7 +137,7 @@ describe('the learning path', () => {
     const d = openPath();
     expect(document.activeElement?.textContent).toBe('Open Single server');
     expect(d.querySelector('.ex-sub')?.textContent).toBe(
-      'Every example and challenge in an order that builds up. You have done 0 of 42.',
+      'Every example, challenge and real incident in an order that builds up. You have done 0 of 48.',
     );
     expect(d.querySelector('.lp-step[data-next] .lp-status')?.textContent).toBe(
       'Up next',
@@ -227,6 +228,88 @@ describe('the learning path', () => {
     advance(400);
     expect(dialog()).toBeNull();
     expect(document.querySelector('.app-toast')).toBeNull();
+  });
+
+  it('opens an incident step to its story, not straight into the brief', () => {
+    mount();
+    const d = openPath();
+    const s3 = incidentById('incident-s3-2017')!;
+    const row = must(s3.name, d);
+    expect(row.querySelector('.lp-kind')?.textContent).toBe('Incident');
+    press(row);
+    advance(400);
+    expect(dialog()).toBeNull();
+    const p = document.querySelector('section.chal');
+    expect(p?.textContent).toContain(s3.name);
+    expect(p?.textContent).toContain('Watch it happen');
+    expect(p?.textContent).not.toContain(s3.brief.brief);
+    // Opening it changes nothing on the canvas.
+    expect(canvasIds()).toEqual(['mine-client', 'mine-svc']);
+    expect(document.activeElement).toBe(p?.querySelector('h2'));
+
+    // Open now while its panel is up.
+    const again = openPath();
+    expect(must(s3.name, again).querySelector('.lp-status')?.textContent).toBe(
+      'Open now',
+    );
+  });
+
+  it('counts an incident once its brief is passed', () => {
+    const s3 = incidentById('incident-s3-2017')!;
+    localStorage.setItem(
+      CHALLENGES_KEY,
+      JSON.stringify({
+        active: null,
+        attempts: {},
+        progress: {
+          [s3.id]: {
+            version: s3.brief.version,
+            passedAt: '2026-11-01T00:00:00Z',
+            hintsUsed: 0,
+          },
+        },
+      }),
+    );
+    mount();
+    const d = openPath();
+    expect(d.querySelector('.ex-sub')?.textContent).toContain('You have done 1 of 48.');
+    expect(must(s3.name, d).getAttribute('data-status')).toBe('done');
+    expect(must(s3.name, d).querySelector('.lp-status')?.textContent).toBe('Done');
+  });
+
+  it('leaves a live brief to open an incident, and puts the design back', () => {
+    mount();
+    press(must('Hold the line', openPath()));
+    advance(400);
+    expect(document.querySelector('section.chal')?.textContent).toContain(
+      'Hold the line',
+    );
+    const s3 = incidentById('incident-s3-2017')!;
+    press(must(s3.name, openPath()));
+    advance(400);
+    const p = document.querySelector('section.chal');
+    expect(p?.textContent).toContain(s3.name);
+    expect(p?.textContent).not.toContain('Hold the line');
+    expect(canvasIds()).toEqual(['mine-client', 'mine-svc']);
+  });
+
+  it('marks an incident open now while its brief is live, and goes back to it', () => {
+    mount();
+    const s3 = incidentById('incident-s3-2017')!;
+    press(must(s3.name, openPath()));
+    advance(400);
+    press(must('Fix it'));
+    advance(400);
+    const d = openPath();
+    const row = must(s3.name, d);
+    expect(row.querySelector('.lp-status')?.textContent).toBe('Open now');
+    press(row);
+    advance(400);
+    // Still in the brief, with its attempt as it was.
+    expect(document.querySelector('section.chal')?.textContent).toContain(
+      s3.brief.name,
+    );
+    expect(canvasIds()).toEqual(s3.scene.nodes.map((n) => n.id));
   });
 
   it('works with a finger', () => {

@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Check } from 'lucide-react';
 import type { Challenge } from '../sim/challenge';
+import type { Incident } from '../sim/incidents';
 import type { Preset } from '../sim/presets';
 import type { ChallengeBadge } from '../challengeWorkspace';
 import { LEARNING_PATH, type PathStep } from '../content/learningPath';
@@ -19,6 +20,10 @@ import './LearningPath.css';
    is an order and a record: the step to do next, and how far through each
    track the student is.
 
+   An incident step opens the incident's panel, not its brief, so the story
+   and the replay come before the fix, as they do from the gallery. It is
+   done once its brief is passed.
+
    A list, not a grid of cards. A path is read top to bottom, and numbered
    rows say that where a grid would not.
    ========================================================================== */
@@ -28,15 +33,23 @@ export interface LearningPathProps {
   onClose: () => void;
   presets: readonly Preset[];
   challenges: readonly Challenge[];
+  incidents: readonly Incident[];
   explored: ReadonlySet<string>;
   badgeOf: (challenge: Challenge) => ChallengeBadge;
   activePresetId: string | null;
   activeChallengeId: string | null;
+  /** The incident whose panel is open, or null. */
+  activeIncidentId: string | null;
   onLoadExample: (preset: Preset) => void;
   onStartChallenge: (id: string) => void;
+  onOpenIncident: (id: string) => void;
 }
 
-const KIND_TEXT = { example: 'Example', challenge: 'Challenge' } as const;
+const KIND_TEXT = {
+  example: 'Example',
+  challenge: 'Challenge',
+  incident: 'Incident',
+} as const;
 
 const STATUS_TEXT: Record<Exclude<StepStatus, 'todo'>, string> = {
   done: 'Done',
@@ -48,12 +61,15 @@ export function LearningPath({
   onClose,
   presets,
   challenges,
+  incidents,
   explored,
   badgeOf,
   activePresetId,
   activeChallengeId,
+  activeIncidentId,
   onLoadExample,
   onStartChallenge,
+  onOpenIncident,
 }: LearningPathProps) {
   const { mounted, closing, unmount } = usePresence(open);
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -76,9 +92,10 @@ export function LearningPath({
 
   if (!mounted) return null;
 
-  const badge = badgeById(challenges, badgeOf);
+  const badge = badgeById([...challenges, ...incidents.map((i) => i.brief)], badgeOf);
   const presetById = new Map(presets.map((p) => [p.id, p]));
   const challengeById = new Map(challenges.map((c) => [c.id, c]));
+  const incidentById = new Map(incidents.map((i) => [i.id, i]));
   const next = nextStep(explored, badge);
   /* Numbered through the whole path, not per track, so "step 12" means one
      place. */
@@ -95,10 +112,13 @@ export function LearningPath({
   const nameOf = (step: PathStep): string =>
     (step.kind === 'example'
       ? presetById.get(step.id)?.name
-      : challengeById.get(step.id)?.name) ?? step.id;
+      : step.kind === 'incident'
+        ? incidentById.get(step.id)?.name
+        : challengeById.get(step.id)?.name) ?? step.id;
 
   const openStep = (step: PathStep) => {
     if (step.kind === 'challenge') onStartChallenge(step.id);
+    else if (step.kind === 'incident') onOpenIncident(step.id);
     else {
       const preset = presetById.get(step.id);
       if (preset) onLoadExample(preset);
@@ -109,7 +129,9 @@ export function LearningPath({
   const isOpenNow = (step: PathStep) =>
     step.kind === 'challenge'
       ? step.id === activeChallengeId
-      : activeChallengeId === null && step.id === activePresetId;
+      : step.kind === 'incident'
+        ? step.id === activeChallengeId || step.id === activeIncidentId
+        : activeChallengeId === null && step.id === activePresetId;
 
   return createPortal(
     <div
@@ -141,7 +163,8 @@ export function LearningPath({
               Learning path
             </h2>
             <p className="ex-sub">
-              Every example and challenge in an order that builds up. You have done{' '}
+              Every example, challenge and real incident in an order that builds up. You
+              have done{' '}
               <span className="lp-num">
                 {done} of {total}
               </span>
@@ -179,7 +202,8 @@ export function LearningPath({
           )}
           <p className="lp-rule">
             An example counts as done once you run it at twice its starting load for 10
-            seconds. A challenge counts once you pass it.
+            seconds. A challenge counts once you pass it. An incident counts once you
+            fix it.
           </p>
 
           {LEARNING_PATH.map((track) => {

@@ -297,6 +297,8 @@ function unjudgeableLine(why: Unjudgeable, nameOf: (id: string) => string): stri
         : `A new ${KIND_NAME[why.kind].toLowerCase()} would answer requests before the work behind it is done, and this brief does not allow one. Take it out.`;
     case 'dead-end-added':
       return `${nameOf(why.nodeId)} answers requests without passing them on, so they never reach the rest of the system. Connect it onward or take it out.`;
+    case 'standby-first':
+      return `${nameOf(why.regionId)} serves from ${nameOf(why.activeId)} from the start, so its requests skip ${nameOf(why.nodeId)} and the fault in the brief never touches them. Have ${nameOf(why.regionId)} serve from ${nameOf(why.nodeId)} first.`;
   }
 }
 
