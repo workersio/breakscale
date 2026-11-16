@@ -90,7 +90,7 @@ function suggestion(): string | null {
 
 /** Whether the panel is showing a headroom reading at all. */
 function showsHeadroom(): boolean {
-  return (document.body.textContent ?? '').includes('Spare capacity');
+  return (document.body.textContent ?? '').includes('Can keep up with');
 }
 
 describe('the suggested fix in the inspector', () => {

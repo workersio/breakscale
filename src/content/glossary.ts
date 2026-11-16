@@ -195,11 +195,11 @@ export const GLOSSARY: GlossaryEntry[] = [
   },
   {
     id: 'dropped',
-    term: 'Dropped',
-    short: 'Requests that arrived but were never served successfully',
+    term: 'Lost',
+    short: 'Requests that arrived but did not succeed',
     why: 'The gap between offered and goodput. Some were shed on purpose to protect the system, some timed out, some hit errors. The failure breakdown tells you which.',
     category: 'failure',
-    aliases: ['lost'],
+    aliases: ['dropped'],
     see: ['shed', 'timeout', 'error-rate'],
   },
 
@@ -215,11 +215,11 @@ export const GLOSSARY: GlossaryEntry[] = [
   },
   {
     id: 'shed',
-    term: 'Shed',
-    short: 'Turned away immediately because the queue was full',
+    term: 'Turned away',
+    short: 'Refused at once: every slot busy and the line full',
     why: 'A deliberate defence, not a malfunction. Refusing a request instantly is far cheaper than accepting it, making it wait, and failing anyway, and it keeps the system responsive for everyone else.',
     category: 'failure',
-    aliases: ['load shedding'],
+    aliases: ['shed', 'load shedding'],
     see: ['queue-limit', 'rate-limiter'],
   },
   {
@@ -355,11 +355,11 @@ export const GLOSSARY: GlossaryEntry[] = [
   },
   {
     id: 'capacity',
-    term: 'Capacity',
+    term: 'Slots',
     short: 'How many requests a component can work on at once',
     why: 'Think of it as the number of checkout tills open; each one is a slot. Anything beyond that waits in line. Capacity times (1000 ÷ service time) gives the most requests per second a component can possibly handle.',
     category: 'capacity',
-    aliases: ['slots', 'concurrency'],
+    aliases: ['capacity', 'concurrency'],
     see: ['service-time', 'utilisation', 'instances'],
   },
   {
@@ -801,11 +801,11 @@ export const GLOSSARY: GlossaryEntry[] = [
   },
   {
     id: 'headroom',
-    term: 'Spare capacity',
-    short: 'How many times more traffic this could take',
-    why: 'The ceiling divided by what is actually arriving. Above 1x it is keeping up, below 1x it cannot, and the component with the smallest number is your bottleneck. This is the fastest way to find one without reading a chart.',
+    term: 'Can keep up with',
+    short: 'How many times the arriving traffic this could take',
+    why: 'The ceiling divided by what is actually arriving. Above 1× it is keeping up, below 1× it cannot, and the component with the smallest number is your bottleneck. This is the fastest way to find one without reading a chart.',
     category: 'capacity',
-    aliases: ['headroom', 'spare', 'margin'],
+    aliases: ['headroom', 'spare capacity', 'room to spare', 'margin'],
     see: ['bottleneck', 'capacity', 'utilisation'],
   },
   {
@@ -1043,7 +1043,7 @@ export const GLOSSARY: GlossaryEntry[] = [
   },
   {
     id: 'rejected',
-    term: 'Rejected',
+    term: 'Refused (circuit open)',
     short: 'Refused by an open circuit breaker',
     why: 'The breaker had already decided the dependency was unhealthy, so it failed immediately without calling it. This is the breaker doing its job: the dependency gets quiet time to recover.',
     category: 'failure',

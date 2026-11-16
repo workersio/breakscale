@@ -1899,10 +1899,10 @@ function StatRow({
  */
 function formatMultiple(v: number): string {
   if (!Number.isFinite(v) || v < 0) return NA;
-  if (v === 0) return '0x';
-  if (v < 0.1) return '<0.1x';
-  if (v < 10) return `${v.toFixed(1).replace(/\.0$/, '')}x`;
-  return `${formatCount(v)}x`;
+  if (v === 0) return '0×';
+  if (v < 0.1) return '<0.1×';
+  if (v < 10) return `${v.toFixed(1).replace(/\.0$/, '')}×`;
+  return `${formatCount(v)}×`;
 }
 
 /**
@@ -3422,7 +3422,7 @@ function SingleInspector({
       : null;
 
   // One suggestion, only once this node is actually the thing that cannot
-  // keep up -- below 1.0x headroom, same threshold the "Spare capacity"
+  // keep up -- below 1.0x headroom, same threshold the "Can keep up with"
   // reading itself is toned by. A blocking node cannot keep up once every
   // slot is held and work is waiting in line for one.
   const outOfSlots = blocking && heldShare >= 1 && (stats?.queued ?? 0) >= 1;
@@ -3670,7 +3670,7 @@ function SingleInspector({
               />
               <p className="ins-expr">
                 {fleet > 1
-                  ? `${formatCount(up)} ${down > 0 ? 'running ' : ''}${up === 1 ? 'instance' : 'instances'} x ${formatCount(cfg.capacity)} slots ÷ ${serviceMsLabel}ms each`
+                  ? `${formatCount(up)} ${down > 0 ? 'running ' : ''}${up === 1 ? 'instance' : 'instances'} × ${formatCount(cfg.capacity)} slots ÷ ${serviceMsLabel}ms each`
                   : `${formatCount(cfg.capacity)} at once ÷ ${serviceMsLabel}ms each`}
                 {blocking && ', if everything it calls answered instantly'}
               </p>
@@ -3682,12 +3682,19 @@ function SingleInspector({
                 />
               )}
               {headroom !== null && (
-                <StatRow
-                  label="Spare capacity"
-                  term="headroom"
-                  value={formatMultiple(headroom)}
-                  tone={toneClass(healthOfLoad(arrivals / maxThroughput))}
-                />
+                <>
+                  <StatRow
+                    label="Can keep up with"
+                    term="headroom"
+                    value={formatMultiple(headroom)}
+                    tone={toneClass(healthOfLoad(arrivals / maxThroughput))}
+                  />
+                  <p className={headroom < 1 ? 'ins-hint is-danger' : 'ins-hint'}>
+                    {headroom < 1
+                      ? `It can finish ${formatPct(headroom)} of what arrives. The rest waits or fails.`
+                      : 'The load arriving now, with room to spare.'}
+                  </p>
+                </>
               )}
             </div>
           </Section>
@@ -4386,7 +4393,18 @@ export function TrafficControl({
    */
   const p99 = system.p99 === 0 && system.goodputRps === 0 ? null : system.p99;
   // Settled like the chart line, which shares the threshold and the rule.
-  const p99Tone = toneClass(useSettledHealth(healthOfLatency(p99), system.timeMs));
+  const latencyHealth = useSettledHealth(healthOfLatency(p99), system.timeMs);
+  /* A crash must never read as a speed-up. With a twentieth of requests
+     failing, the survivors are the quick ones and p99 falls, so the hero
+     takes the failing tone whenever that is the worse of the two. */
+  const failHealth = useSettledHealth(
+    healthOfErr(system.errorRate) === 'danger' ? 'danger' : 'ok',
+    system.timeMs,
+  );
+  const p99Tone = toneClass(failHealth === 'danger' ? 'danger' : latencyHealth);
+  /* Shown beside p99 where the bar is too narrow for the full group, and
+     only while something is failing, so a narrow bar still says so. */
+  const failingNow = system.errorRate >= 0.0005;
 
   return (
     <div className="traffic">
@@ -4454,7 +4472,8 @@ export function TrafficControl({
                 ) : (
                   <span className="label traffic-load-unit">
                     <Term id="rps">
-                      <span className="traffic-unit-long">requests </span>/ sec
+                      <span className="traffic-unit-long">requests a second</span>
+                      <span className="traffic-unit-short">/s</span>
                     </Term>
                   </span>
                 )}
@@ -4550,9 +4569,9 @@ export function TrafficControl({
       {/* Effect. p99 is the number students should watch, so it carries the
           only other hero, toned by the same threshold as the chart line.
 
-          Every metric slot is ALWAYS rendered, including "Dropped" at zero.
+          Every metric slot is ALWAYS rendered, including "Lost" at zero.
           It used to mount only once dropped traffic appeared, which meant
-          Goodput and Errors jumped sideways at the exact moment a system
+          Goodput and Failing jumped sideways at the exact moment a system
           started failing — motion arriving precisely when the student needs
           to read the numbers, not watch them move. */}
       <div className="traffic-headline">
@@ -4579,6 +4598,17 @@ export function TrafficControl({
               )}
             </div>
 
+            {failingNow ? (
+              <div className="traffic-metric traffic-failing">
+                <span className="label">
+                  <Term id="error-rate">Failing</Term>
+                </span>
+                <span className="num num-md is-danger">
+                  {formatPct(system.errorRate)}
+                </span>
+              </div>
+            ) : null}
+
             <div className="traffic-metric-group">
               <div className="traffic-metric">
                 <span className="label">
@@ -4588,7 +4618,7 @@ export function TrafficControl({
               </div>
               <div className="traffic-metric">
                 <span className="label">
-                  <Term id="error-rate">Errors</Term>
+                  <Term id="error-rate">Failing</Term>
                 </span>
                 <span className={errTone ? `num num-md ${errTone}` : 'num num-md'}>
                   {formatPct(system.errorRate)}
@@ -4596,7 +4626,7 @@ export function TrafficControl({
               </div>
               <div className="traffic-metric">
                 <span className="label">
-                  <Term id="dropped">Dropped</Term>
+                  <Term id="dropped">Lost</Term>
                 </span>
                 <span className={showDropped ? 'num num-md is-danger' : 'num num-md'}>
                   {formatRate(dropped)}

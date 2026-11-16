@@ -1239,7 +1239,7 @@ button.traffic-multiple[aria-expanded='true'] {
           student drives, so the figures go and the slider springs back.
           The charts strip still carries every one of these numbers.
      620  the slider's floor comes down to 232 and the headline tightens.
-     560  the "requests / sec" unit and the spacer gap go to zero, and the
+     560  the "requests a second" unit and the spacer gap go to zero, and the
           slider may reach 220. The slider's aria-valuetext still says the
           unit, and this fires only in sub-900px windows where the p99
           hero, the slider and the transport are worth more than a word.
@@ -1247,9 +1247,31 @@ button.traffic-multiple[aria-expanded='true'] {
    Never dropped: the load slider, the p99 hero, the transport.
    -------------------------------------------------------------------------- */
 
+/* The failing figure that stands in for the whole group once it is hidden. */
+.traffic-failing {
+  display: none;
+}
+
+.traffic-unit-short {
+  display: none;
+}
+
+/* The top bar's captions are names, not section headings, so they are
+   sentence case: "System p99", "Offered load". */
+.traffic-load-head > .label,
+.traffic-metric .label {
+  font-size: var(--fs-sm);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 @container traffic (max-width: 860px) {
   .traffic-metric-group {
     display: none;
+  }
+
+  .traffic-failing {
+    display: flex;
   }
 
   /* The empty canvas says the same thing in its own middle, and here the
@@ -1557,10 +1579,14 @@ button.traffic-multiple[aria-expanded='true'] {
 }
 
 /* At the narrowest phones the step buttons need the room "requests" took;
-   the unit still reads "/ sec" and its definition is one tap away. */
+   the unit still reads "/s" and its definition is one tap away. */
 @media (max-width: 409px) and (pointer: coarse) {
   .traffic-unit-long {
     display: none;
+  }
+
+  .traffic-unit-short {
+    display: inline;
   }
 }
 

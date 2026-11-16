@@ -154,7 +154,7 @@ describe('the fleet in the inspector', () => {
     expect(button('One instance down')?.getAttribute('aria-disabled')).toBe('true');
     expect(button('One instance down')?.getAttribute('aria-pressed')).toBe('true');
     // The ceiling counts the machines still up.
-    expect(container.textContent).toContain('2 running instances x 12 slots');
+    expect(container.textContent).toContain('2 running instances × 12 slots');
   });
 
   it('does not offer it on a node with one machine, where it would be Crash', () => {
