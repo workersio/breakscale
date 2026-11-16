@@ -173,7 +173,7 @@ export function faultStatus(fault: ActiveFailure | null): string {
     case 'errors':
       return `Failing ${formatPct(fault.rate ?? 1)} of requests since ${since}. It stays up, so callers keep sending it work.`;
     case 'partition':
-      return `Cut off from the network since ${since}. Anything sent over its cut cables fails until you fix it, and the cables below show which ones.`;
+      return `Cut off from the network since ${since}. Anything sent over its cut connections fails until you fix it, and the connections below show which ones.`;
     case 'crash-instance':
       return `One instance crashed at ${since}. The work it held was lost, and the others carry its share with fewer slots until you fix it. If it was the only one, nothing is serving.`;
     case 'restart': {

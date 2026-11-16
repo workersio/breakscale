@@ -3686,7 +3686,7 @@ export default function App() {
         const e =
           topology.edges.find((x) => x.id === id) ??
           ranDesign?.edges.find((x) => x.id === id);
-        return e ? `the cable from ${label(e.from)} to ${label(e.to)}` : id;
+        return e ? `the connection from ${label(e.from)} to ${label(e.to)}` : id;
       },
     };
   }, [nodeNames, topology.edges, ranDesign]);

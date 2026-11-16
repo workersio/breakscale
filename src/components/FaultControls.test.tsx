@@ -287,15 +287,15 @@ describe('fault controls on a selected node', () => {
       b.getAttribute('aria-label'),
     );
     expect(names).toEqual([
-      'Cut cable from API Server',
+      'Cut connection from API Server',
       'Duplicate 5% of requests from API Server',
       'Cut answers only from API Server',
-      'Cut cable to Payments API',
+      'Cut connection to Payments API',
       'Duplicate 5% of requests to Payments API',
       'Cut answers only to Payments API',
     ]);
 
-    press(button('Cut cable to Payments API'));
+    press(button('Cut connection to Payments API'));
     expect(engine.activeCuts()).toEqual(['breaker->payments']);
     expect(button('Restore to Payments API')).toBeTruthy();
   });
@@ -314,7 +314,7 @@ describe('fault controls on a selected node', () => {
 });
 
 describe('fault controls on a selected cable', () => {
-  it('Cut cable and Restore record against the edge and the canvas shows the break', () => {
+  it('Cut connection and Restore record against the edge and the canvas shows the break', () => {
     const { engine } = mount();
     press(hit('edge', 'breaker->payments'));
     expect(container.querySelector('.ins-empty-hint')?.textContent).toBe(
@@ -323,14 +323,14 @@ describe('fault controls on a selected cable', () => {
     expect(status()).toBe('Connected.');
 
     const now = engine.snapshot().system.timeMs;
-    press(button('Cut cable'));
+    press(button('Cut connection'));
     expect(engine.faultSchedule()).toEqual([
       { atMs: now, action: 'cut', edgeId: 'breaker->payments' },
     ]);
     const wire = hit('edge', 'breaker->payments').closest('.cv-edge');
     expect(wire?.classList.contains('is-state-cut')).toBe(true);
     expect(wire?.querySelector('.cv-edge-break')).not.toBeNull();
-    expect(status()).toBe('Cut. Nothing crosses this cable until you restore it.');
+    expect(status()).toBe('Cut. Nothing crosses this connection until you restore it.');
 
     press(button('Restore'));
     expect(engine.faultSchedule().at(-1)).toEqual({
@@ -342,7 +342,7 @@ describe('fault controls on a selected cable', () => {
     expect(wire?.classList.contains('is-state-cut')).toBe(false);
   });
 
-  it('a cable cut by a node partition points at the node instead of offering Restore', () => {
+  it('a connection cut by a node partition points at the node instead of offering Restore', () => {
     const made = circuitBreaker();
     made.engine.injectFailure('payments', 'partition', {
       edgeIds: ['breaker->payments'],
@@ -350,7 +350,7 @@ describe('fault controls on a selected cable', () => {
     act(() => root.render(<Harness engine={made.engine} topology={made.topology} />));
     press(hit('edge', 'breaker->payments'));
     expect(status()).toBe(
-      'Cut because Payments API is cut off from its cables. Fix Payments API to reconnect it.',
+      'Cut because Payments API is cut off from its connections. Fix Payments API to reconnect it.',
     );
     const restore = button('Restore');
     expect(restore.getAttribute('aria-disabled')).toBe('true');
@@ -427,7 +427,7 @@ describe('forgetting the saved faults', () => {
   it('is offered for a selected cable too', () => {
     const { engine } = mount();
     press(hit('edge', 'api->breaker'));
-    press(button('Cut cable'));
+    press(button('Cut connection'));
     expect(container.querySelector('.ins-fault-recorded')?.textContent).toContain(
       '1 fault is saved',
     );

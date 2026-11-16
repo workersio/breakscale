@@ -1466,9 +1466,10 @@ button.traffic-multiple[aria-expanded='true'] {
 /* --------------------------------------------------------------------------
    Fault controls ("Break it on purpose")
 
-   The buttons use the shared .btn-danger outline, so breaking a component
-   reads as a deliberate, destructive act and never as the happy path. Fix
-   is the plain .btn, because it is the way back.
+   Calm at rest: every fault is undoable, so the buttons are the plain .btn
+   until one is in force, when it takes the pressed danger look below. Fix
+   is the primary button while something is broken, because it is the way
+   back.
    -------------------------------------------------------------------------- */
 
 .ins-fault {

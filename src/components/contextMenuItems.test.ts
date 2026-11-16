@@ -86,22 +86,22 @@ describe('a part menu', () => {
   });
 });
 
-describe('a cable menu', () => {
+describe('a connection menu', () => {
   const E: MenuTarget = { kind: 'edge', id: 's->d' };
   it('offers cut, loss and delete for a working cable', () => {
     expect(labels(E, facts({ cable: 'connected' }))).toEqual([
       'Inspect',
-      'Cut cable',
+      'Cut connection',
       'Add 10% packet loss',
       'Delete connection',
     ]);
     expect(menuTitle(E, facts())).toBe('API Server to Database');
   });
-  it('offers Restore for a cut cable and nothing for a partitioned one', () => {
-    expect(labels(E, facts({ cable: 'cut' }))).toContain('Restore cable');
+  it('offers Restore for a cut connection and nothing for a partitioned one', () => {
+    expect(labels(E, facts({ cable: 'cut' }))).toContain('Restore connection');
     const part = labels(E, facts({ cable: 'partitioned' }));
-    expect(part).not.toContain('Restore cable');
-    expect(part).not.toContain('Cut cable');
+    expect(part).not.toContain('Restore connection');
+    expect(part).not.toContain('Cut connection');
   });
   it('offers to remove loss that is set', () => {
     expect(labels(E, facts({ cable: 'connected', lossRate: 0.05 }))).toContain(

@@ -7,7 +7,7 @@ import type { Names } from './breakCopy';
 
 const NAMES: Names = {
   node: (id) => ({ api: 'Checkout API', pay: 'Payments' })[id] ?? id,
-  edge: () => 'the cable from Checkout API to Payments',
+  edge: () => 'the connection from Checkout API to Payments',
 };
 
 describe('duplicate delivery in words', () => {
@@ -18,7 +18,7 @@ describe('duplicate delivery in words', () => {
         NAMES,
       ),
     ).toBe(
-      'make the cable from Checkout API to Payments deliver 5% of requests twice at 10s for 0.5s',
+      'make the connection from Checkout API to Payments deliver 5% of requests twice at 10s for 0.5s',
     );
   });
 
@@ -45,7 +45,7 @@ describe('duplicate delivery in words', () => {
     expect(lines).toEqual([
       {
         t: 10_300,
-        text: "The cable delivers Checkout API's call to Payments a second time.",
+        text: "The connection delivers Checkout API's call to Payments a second time.",
         tag: null,
       },
     ]);

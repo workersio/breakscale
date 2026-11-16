@@ -253,8 +253,8 @@ export function singlePointLines(
   }
   // Parts first, cables after, so the sentence reads boxes then wires.
   return [...byClient].map(([c, parts]) => {
-    const boxes = parts.filter((x) => !x.startsWith('the cable'));
-    const cables = parts.filter((x) => x.startsWith('the cable'));
+    const boxes = parts.filter((x) => !x.startsWith('the connection'));
+    const cables = parts.filter((x) => x.startsWith('the connection'));
     return `Every request from ${names.node(c)} has to pass through ${listed([...boxes, ...cables])}.`;
   });
 }
@@ -272,7 +272,7 @@ function lostHow(reason: FailureReason, at: string): string {
     case 'crashed':
       return `when ${at} crashed`;
     case 'partitioned':
-      return `on a cut cable from ${at}`;
+      return `on a cut connection from ${at}`;
     case 'packet-loss':
       return `on a lossy link from ${at}`;
     case 'timeout':
@@ -353,7 +353,7 @@ function eventLine(e: TimelineEvent, names: Names, v?: Violation): TimelineLine 
       );
     case 'duplicate':
       return line(
-        `The cable delivers ${n(e.from)}'s call to ${n(e.to)} a second time.`,
+        `The connection delivers ${n(e.from)}'s call to ${n(e.to)} a second time.`,
       );
     case 'timeout':
       return line(
@@ -466,7 +466,7 @@ export const TRUNCATED_LINE =
  */
 export function nothingRetriesLine(charged: readonly string[], names: Names): string {
   const parts = listed(charged.map(names.node));
-  return `Nothing on the way to ${parts} sends a call again, and no cable was tried delivering a call twice, so nothing tried could charge twice. Turn on retries before it, or let the search deliver requests twice, to test it.`;
+  return `Nothing on the way to ${parts} sends a call again, and no connection was tried delivering a call twice, so nothing tried could charge twice. Turn on retries before it, or let the search deliver requests twice, to test it.`;
 }
 
 /**

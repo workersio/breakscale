@@ -302,18 +302,18 @@ describe('Cut answers only, on a selected cable', () => {
     const engine = new Engine(preset.topology);
     act(() => root.render(<Harness engine={engine} topology={preset.topology} />));
     press(hit('edge', 'scaler->api'));
-    expect(button('Cut cable')).toBeDefined();
+    expect(button('Cut connection')).toBeDefined();
     expect(button('Cut answers only')).toBeUndefined();
   });
 });
 
-describe('cable faults from a part, without selecting the cable', () => {
-  it('duplicates and cuts answers from the cable list, and stops them again', () => {
+describe('cable faults from a part, without selecting the connection', () => {
+  it('duplicates and cuts answers from the connection list, and stops them again', () => {
     entries.length = 0;
     const { engine } = mount();
     press(hit('node', 'payments'));
     const dup = button('Duplicate 5% of requests from Circuit Breaker');
-    if (!dup) throw new Error('no Duplicate in the cable list');
+    if (!dup) throw new Error('no Duplicate in the connection list');
     // A real button, so Tab reaches it.
     expect(dup.tagName).toBe('BUTTON');
     const now = engine.snapshot().system.timeMs;
@@ -322,12 +322,12 @@ describe('cable faults from a part, without selecting the cable', () => {
       { atMs: now, action: 'duplicate', edgeId: 'breaker->payments', rate: 0.05 },
     ]);
     const once = button('Deliver once from Circuit Breaker');
-    if (!once) throw new Error('no Deliver once in the cable list');
+    if (!once) throw new Error('no Deliver once in the connection list');
     press(once);
     expect(engine.activeDuplicates()).toEqual([]);
 
     const cut = button('Cut answers only from Circuit Breaker');
-    if (!cut) throw new Error('no Cut answers in the cable list');
+    if (!cut) throw new Error('no Cut answers in the connection list');
     press(cut);
     expect(engine.activeReplyCuts().map((r) => r.edgeId)).toEqual([
       'breaker->payments',
@@ -343,7 +343,7 @@ describe('cable faults from a part, without selecting the cable', () => {
     expect(entries.map((e) => e.target)).toEqual(['dup', 'dup', 'replies', 'replies']);
   });
 
-  it('offers only Cut cable on a controller cable', () => {
+  it('offers only Cut connection on a controller cable', () => {
     const preset = PRESETS.find((p) => p.id === 'autoscaling-service');
     if (!preset) throw new Error('autoscaling-service preset missing');
     const engine = new Engine(preset.topology);
@@ -354,7 +354,7 @@ describe('cable faults from a part, without selecting the cable', () => {
     );
     if (!row) throw new Error('no autoscaler cable row');
     expect([...row.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
-      'Cut cable',
+      'Cut connection',
     ]);
   });
 });

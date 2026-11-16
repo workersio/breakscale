@@ -230,7 +230,7 @@ describe('wantsAttention', () => {
   });
 });
 
-describe('timeline: a cable delivering twice', () => {
+describe('timeline: a connection delivering twice', () => {
   it('says when a link starts delivering twice and when it stops', () => {
     const top = preset('circuit-breaker');
     const r = run(top, 4, (engine, _t, ms) => {

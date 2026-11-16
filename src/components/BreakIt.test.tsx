@@ -79,7 +79,7 @@ const names: Names = {
   node: (id) => t.nodes.find((n) => n.id === id)?.label ?? id,
   edge: (id) => {
     const e = t.edges.find((x) => x.id === id);
-    return e ? `the cable from ${names.node(e.from)} to ${names.node(e.to)}` : id;
+    return e ? `the connection from ${names.node(e.from)} to ${names.node(e.to)}` : id;
   },
 };
 const goal: Goal = { metric: 'errorRate', max: 1 };
@@ -156,7 +156,7 @@ describe('BreakPanel', () => {
     expect(text).toContain('Keep everyone up');
     expect(text).toContain('Stay fast');
     expect(text).toContain(
-      'Every request from Client has to pass through API Server, Database and the cable from API Server to Database.',
+      'Every request from Client has to pass through API Server, Database and the connection from API Server to Database.',
     );
     expect(container.querySelector('fieldset legend')?.textContent).toBe(
       'What has to hold',
@@ -387,7 +387,7 @@ describe('break copy', () => {
       ),
     ).toMatch(/Requests started to pile up\.$/);
     expect(lines[0]).toBe(
-      'Crash Database at 10s for 0.5s and cut the cable from API Server to Database at 10s, then make API Server fail 50% of requests at 12s for 2s, then take down one machine of API Server at 15s.',
+      'Crash Database at 10s for 0.5s and cut the connection from API Server to Database at 10s, then make API Server fail 50% of requests at 12s for 2s, then take down one machine of API Server at 15s.',
     );
   });
 });

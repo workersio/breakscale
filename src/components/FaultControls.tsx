@@ -149,7 +149,7 @@ export function NodeFaultControls({
       <div className="ins-fault-row">
         <button
           type="button"
-          className="btn btn-sm btn-danger"
+          className="btn btn-sm"
           aria-disabled={crashed}
           aria-pressed={crashed}
           aria-describedby={`${id}-crash`}
@@ -181,7 +181,7 @@ export function NodeFaultControls({
           </select>
           <button
             type="button"
-            className="btn btn-sm btn-danger"
+            className="btn btn-sm"
             aria-disabled={restartInert}
             aria-describedby={`${id}-restart`}
             onClick={guarded(restartInert, () => onRestart(downMs))}
@@ -199,7 +199,7 @@ export function NodeFaultControls({
         <div className="ins-fault-row">
           <button
             type="button"
-            className="btn btn-sm btn-danger"
+            className="btn btn-sm"
             aria-disabled={oneDown}
             aria-pressed={oneDown}
             aria-describedby={`${id}-crash-one`}
@@ -234,7 +234,7 @@ export function NodeFaultControls({
           </select>
           <button
             type="button"
-            className="btn btn-sm btn-danger"
+            className="btn btn-sm"
             aria-disabled={slowInert}
             aria-pressed={slowSame}
             aria-describedby={`${id}-slow`}
@@ -270,7 +270,7 @@ export function NodeFaultControls({
             </select>
             <button
               type="button"
-              className="btn btn-sm btn-danger"
+              className="btn btn-sm"
               aria-disabled={paused}
               aria-describedby={`${id}-pause-hint`}
               onClick={guarded(paused, () => onPause(pauseMs))}
@@ -305,7 +305,7 @@ export function NodeFaultControls({
           </select>
           <button
             type="button"
-            className="btn btn-sm btn-danger"
+            className="btn btn-sm"
             aria-disabled={glitchSame}
             aria-pressed={glitchSame}
             aria-describedby={`${id}-glitch`}
@@ -320,9 +320,10 @@ export function NodeFaultControls({
       </div>
 
       <div className="ins-fault-row">
+        {/* The way back is the one next step while something is broken. */}
         <button
           type="button"
-          className="btn btn-sm"
+          className={healthy ? 'btn btn-sm' : 'btn btn-sm btn-primary'}
           aria-disabled={healthy}
           onClick={guarded(healthy, onFix)}
         >
@@ -332,7 +333,7 @@ export function NodeFaultControls({
 
       {cables.length > 0 && (
         <div className="ins-fault-cables">
-          <h3 className="label ins-fault-sub">Cables</h3>
+          <h3 className="label ins-fault-sub">Connections</h3>
           <ul className="ins-fault-list">
             {cables.map((c) => (
               <li key={c.id} className="ins-fault-cable">
@@ -361,8 +362,8 @@ export function NodeFaultControls({
           </ul>
           {onDuplicate && cables.some((c) => c.carriesRequests) ? (
             <p className="ins-hint">
-              Duplicate delivers {formatPct(DEFAULT_DUP_RATE)} of a cable&rsquo;s
-              requests twice. Select the cable itself to pick another share.
+              Duplicate delivers {formatPct(DEFAULT_DUP_RATE)} of a connection&rsquo;s
+              requests twice. Select the connection itself to pick another share.
             </p>
           ) : null}
         </div>
@@ -438,11 +439,11 @@ function CableButton({
     return (
       <button
         type="button"
-        className="btn btn-sm btn-danger"
-        aria-label={named ? `Cut cable${suffix}` : undefined}
+        className="btn btn-sm"
+        aria-label={named ? `Cut connection${suffix}` : undefined}
         onClick={() => onCut(cable.id)}
       >
-        Cut cable
+        Cut connection
       </button>
     );
   }
@@ -489,7 +490,7 @@ function CableExtras({
       ) : (
         <button
           type="button"
-          className="btn btn-sm btn-danger"
+          className="btn btn-sm"
           aria-label={`Duplicate ${formatPct(DEFAULT_DUP_RATE)} of requests ${named}`}
           onClick={() => onDuplicate(cable.id, DEFAULT_DUP_RATE)}
         >
@@ -508,7 +509,7 @@ function CableExtras({
       ) : (
         <button
           type="button"
-          className="btn btn-sm btn-danger"
+          className="btn btn-sm"
           aria-label={`Cut answers only ${named}`}
           onClick={() => onCutReplies(cable.id)}
         >
@@ -576,10 +577,10 @@ export function EdgeFaultControls({
         ? 'Requests get through.'
         : 'Connected.'
       : cable.state === 'cut'
-        ? 'Cut. Nothing crosses this cable until you restore it.'
+        ? 'Cut. Nothing crosses this connection until you restore it.'
         : cutBy
-          ? `Cut because ${cutBy} is cut off from its cables. Fix ${cutBy} to reconnect it.`
-          : 'Cut because a component at one end is cut off from its cables. Fix that component to reconnect it.';
+          ? `Cut because ${cutBy} is cut off from its connections. Fix ${cutBy} to reconnect it.`
+          : 'Cut because a component at one end is cut off from its connections. Fix that component to reconnect it.';
   return (
     <div className="ins-fault">
       <p
@@ -682,7 +683,7 @@ function DuplicateRows({
           </select>
           <button
             type="button"
-            className="btn btn-sm btn-danger"
+            className="btn btn-sm"
             aria-disabled={same}
             aria-describedby={`${id}-dup-hint`}
             onClick={guarded(same, () => onDuplicate(edgeId, rate))}
@@ -742,7 +743,7 @@ function ReplyCutRow({
       ) : (
         <button
           type="button"
-          className="btn btn-sm btn-danger"
+          className="btn btn-sm"
           aria-describedby={id}
           onClick={() => onCutReplies(edgeId)}
         >
@@ -809,7 +810,7 @@ export function LinkLossControls({ lossRate, onLoss }: LinkLossControlsProps) {
           </select>
           <button
             type="button"
-            className={rate > 0 ? 'btn btn-sm btn-danger' : 'btn btn-sm'}
+            className="btn btn-sm"
             aria-disabled={same}
             aria-describedby={`${id}-hint`}
             onClick={guarded(same, () => onLoss(rate))}

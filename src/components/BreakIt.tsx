@@ -80,10 +80,10 @@ export interface ReplayWatch {
 
 const KIND_LABEL: Record<AttackKind, string> = {
   crash: 'Crashes',
-  'crash-instance': 'Losing one machine',
+  'crash-instance': 'Losing one instance',
   slow: 'Slowdowns',
-  errors: 'Glitches (errors)',
-  cut: 'Cut cables',
+  errors: 'Random errors',
+  cut: 'Cut connections',
   duplicate: 'Requests delivered twice',
   pause: 'Stalls (a process pauses)',
   'cut-replies': 'Answers lost on the way back',

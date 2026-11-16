@@ -7,7 +7,7 @@ import type { Names } from './breakCopy';
 
 const NAMES: Names = {
   node: (id) => ({ api: 'Checkout API', pay: 'Payments' })[id] ?? id,
-  edge: () => 'the cable from Checkout API to Payments',
+  edge: () => 'the connection from Checkout API to Payments',
 };
 
 describe('a pause and lost answers in words', () => {
@@ -17,14 +17,14 @@ describe('a pause and lost answers in words', () => {
     ).toBe('stall Payments at 10s for 2s');
   });
 
-  it('names a cable that loses its answers', () => {
+  it('names a connection that loses its answers', () => {
     expect(
       attackPhrase(
         { kind: 'cut-replies', target: 'api->pay', atMs: 12_000, forMs: 500 },
         NAMES,
       ),
     ).toBe(
-      'make the cable from Checkout API to Payments lose its answers at 12s for 0.5s',
+      'make the connection from Checkout API to Payments lose its answers at 12s for 0.5s',
     );
   });
 

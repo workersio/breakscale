@@ -339,13 +339,13 @@ describe('what the rows do', () => {
     expect(rows()).toContain('Crash');
   });
 
-  it('cuts and restores a cable, and deletes it', () => {
+  it('cuts and restores a connection, and deletes it', () => {
     mount();
     rightClick(edgeHit('mine-svc->mine-db'));
     expect(menu()?.getAttribute('aria-label')).toBe('My service to My db');
-    click(row('Cut cable'));
+    click(row('Cut connection'));
     rightClick(edgeHit('mine-svc->mine-db'));
-    click(row('Restore cable'));
+    click(row('Restore connection'));
     rightClick(edgeHit('mine-svc->mine-db'));
     expect(rows()).toContain('Add 10% packet loss');
     click(row('Delete connection'));

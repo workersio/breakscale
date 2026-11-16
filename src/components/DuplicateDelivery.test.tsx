@@ -210,7 +210,7 @@ describe('requests delivered twice, on a selected cable', () => {
   it('is not offered on a controller cable, which carries no requests', () => {
     mount('autoscaling-service');
     press(hit('scaler->api'));
-    expect(button('Cut cable')).toBeDefined();
+    expect(button('Cut connection')).toBeDefined();
     expect(button('Duplicate')).toBeUndefined();
     press(hit('api->db'));
     expect(button('Duplicate')).toBeDefined();

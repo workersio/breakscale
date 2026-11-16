@@ -3826,7 +3826,7 @@ function SingleInspector({
         />
 
         {/* At the end of the content, not pinned under it: a pinned footer
-            sat over Fix and Cut cable as the panel scrolled. Undo brings a
+            sat over Fix and Cut connection as the panel scrolled. Undo brings a
             deleted component back, and the toast says so. */}
         <div className="ins-foot">
           <CopyActions onDuplicate={onDuplicate} onCopy={onCopy} />

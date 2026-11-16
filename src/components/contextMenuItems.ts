@@ -163,9 +163,9 @@ export function menuItems(target: MenuTarget, facts: MenuFacts): ContextMenuItem
     // A cable cut by its node's own fault is healed by fixing that node, so
     // neither Cut nor Restore is offered for it.
     if (facts.cable === 'connected')
-      push({ action: 'cut', label: 'Cut cable', group: 1 });
+      push({ action: 'cut', label: 'Cut connection', group: 1 });
     if (facts.cable === 'cut') {
-      push({ action: 'restore', label: 'Restore cable', group: 1 });
+      push({ action: 'restore', label: 'Restore connection', group: 1 });
     }
     push(
       facts.lossRate > 0

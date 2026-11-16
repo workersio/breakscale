@@ -248,7 +248,7 @@ describe('correctness evidence', () => {
     expect(goneLine('saved')).toMatch(/no saved write can be lost/);
     expect(goneLine('up:checkout')).toBe('That traffic source is gone.');
     expect(nothingRetriesLine(['pay'], namesOf(CHECKOUT))).toBe(
-      'Nothing on the way to Payment Provider sends a call again, and no cable was tried delivering a call twice, so nothing tried could charge twice. Turn on retries before it, or let the search deliver requests twice, to test it.',
+      'Nothing on the way to Payment Provider sends a call again, and no connection was tried delivering a call twice, so nothing tried could charge twice. Turn on retries before it, or let the search deliver requests twice, to test it.',
     );
   });
 });
