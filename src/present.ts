@@ -4,7 +4,9 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
  * Presenting mode: the canvas and the live numbers, big, for a room.
  *
  * A session preference like the play speed: in no link, no saved file and
- * no layout, so a reload always comes back to the normal app. P toggles it.
+ * no layout, so a reload always comes back to the normal app. Shift+P
+ * toggles it: a bare P was too easy to hit by accident, and the mode hides
+ * the side panels, which reads as the app breaking.
  * While it is on, X, W and R crash, slow and fix the part in hand (the one
  * selected, or the one keyboard focus is on), so a teacher can break a
  * design without opening a panel in front of the class. Those three keys do
@@ -24,12 +26,15 @@ export function isTypingTarget(t: EventTarget | null): boolean {
 
 /** What a key press means here, or null for a key this mode leaves alone. */
 export function presentKeyAction(
-  e: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'target'>,
+  e: Pick<
+    KeyboardEvent,
+    'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'target'
+  >,
   presenting: boolean,
 ): PresentAction | null {
   if (e.metaKey || e.ctrlKey || e.altKey || isTypingTarget(e.target)) return null;
   const k = e.key.toLowerCase();
-  if (k === 'p') return 'toggle';
+  if (k === 'p') return e.shiftKey ? 'toggle' : null;
   if (!presenting) return null;
   if (k === 'x') return 'crash';
   if (k === 'w') return 'slow';

@@ -229,7 +229,7 @@ export function buildCommands(
     label: f.presenting ? 'Stop presenting' : 'Start presenting',
     group: 'View',
     keywords: ['present', 'teach', 'projector', 'class', 'big', 'lecture'],
-    hint: key('P'),
+    hint: key('Shift+P'),
     run: a.togglePresenting,
   });
   if (f.canFullscreen) {

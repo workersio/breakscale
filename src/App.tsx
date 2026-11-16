@@ -4306,7 +4306,7 @@ export default function App() {
     () => ({
       label: presenting ? 'Stop presenting' : 'Start presenting',
       icon: 'M3 4h18v12H3zM12 16v4M8 20h8',
-      ...(coarse ? {} : { hint: 'P' }),
+      ...(coarse ? {} : { hint: 'Shift+P' }),
       onSelect: togglePresenting,
       divider: true,
     }),

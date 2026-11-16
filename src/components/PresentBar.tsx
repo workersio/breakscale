@@ -151,10 +151,10 @@ export function PresentBar({
         <button
           type="button"
           className="btn pb-btn"
-          aria-keyshortcuts={coarse ? undefined : 'P'}
+          aria-keyshortcuts={coarse ? undefined : 'Shift+P'}
           onClick={onStop}
         >
-          Stop presenting {key('P')}
+          Stop presenting {key('Shift+P')}
         </button>
       </div>
     </div>

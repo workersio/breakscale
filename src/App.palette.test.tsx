@@ -220,13 +220,16 @@ describe('command palette', () => {
 describe('presenting', () => {
   const app = () => document.querySelector('.app');
 
-  it('P turns it on and off, closing the side panels only while it is on', () => {
+  it('Shift+P turns it on and off, closing the side panels only while it is on', () => {
     mount();
+    expect(app()?.classList.contains('is-presenting')).toBe(false);
+    // A bare P is not the shortcut: it was too easy to press by accident.
+    key('p');
     expect(app()?.classList.contains('is-presenting')).toBe(false);
     const railWas = document
       .querySelector('.app-body')
       ?.classList.contains('has-library');
-    key('p');
+    key('P', { shiftKey: true });
     expect(app()?.classList.contains('is-presenting')).toBe(true);
     expect(document.querySelector('.app-body')?.classList.contains('has-library')).toBe(
       false,
@@ -243,7 +246,7 @@ describe('presenting', () => {
 
   it('X, W and R break and fix the focused part, and say why when they cannot', () => {
     mount();
-    key('p');
+    key('P', { shiftKey: true });
     const svc = document.querySelector<SVGGElement>(
       '[data-hit="node"][data-id="mine-svc"]',
     );
@@ -276,7 +279,7 @@ describe('presenting', () => {
     act(() => svc?.focus());
     key('x');
     expect(svc?.classList.contains('is-faulted')).toBe(false);
-    key('p');
+    key('P', { shiftKey: true });
     key('k', { code: 'KeyK', ctrlKey: true });
     // Typed into the palette's box, so it is text, not a crash.
     key('x');

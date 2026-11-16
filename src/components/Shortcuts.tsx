@@ -131,7 +131,7 @@ const GROUPS: Group[] = [
     title: 'Search and present',
     rows: [
       { keys: ['Ctrl+K'], does: 'Search every action by name' },
-      { keys: ['P'], does: 'Start or stop presenting' },
+      { keys: ['Shift+P'], does: 'Start or stop presenting' },
       {
         keys: ['X', 'W', 'R'],
         does: 'While presenting: crash, slow or fix the part in hand',
