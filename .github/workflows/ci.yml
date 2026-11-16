@@ -81,6 +81,23 @@ jobs:
       - name: Install Playwright browsers
         run: bunx playwright install --with-deps chromium
 
+      # The --mono stack every numeric readout renders in resolves against the
+      # system font set, and Linux hosts disagree about it: the committed
+      # Linux baselines were generated on a stock WSL2 Ubuntu where the stack
+      # lands on DejaVu Sans Mono, but a runner has Liberation Mono installed
+      # and lands there instead, which fails all six shots on digits alone.
+      # Pin the whole stack to DejaVu Sans Mono so the runner renders the
+      # digits the baselines were rendered with. The fc-match output is the
+      # receipt: anything other than DejaVu Sans Mono here is the reason a
+      # pixel diff is failing.
+      - name: Pin the mono font to the baseline family
+        run: |
+          sudo apt-get install -y --no-install-recommends fonts-dejavu-core
+          sudo cp tests/visual/fontconfig-monospace.conf /etc/fonts/local.conf
+          fc-cache -f
+          fc-match monospace
+          fc-match Consolas
+
       # Diff against the committed Linux baselines. There is no baseline
       # generation step in CI: regenerating the references immediately
       # before diffing against them compares them to themselves and can

@@ -77,7 +77,7 @@ exist because the primary maintainer develops there.
 ### Generating Linux baselines from Windows (WSL2)
 
 The Linux baselines have to come from a Linux renderer. On a Windows machine
-with WSL2, three things bite; all three were hit building the committed set.
+with WSL2, four things bite; all four were hit building the committed set.
 
 1. WSL's PATH inherits Windows programs, so `bun` inside WSL resolves to the
    Windows bun.exe and any "Linux" run silently uses the Windows node
@@ -102,6 +102,18 @@ with WSL2, three things bite; all three were hit building the committed set.
    mkdir -p ~/debs ~/libs && cd ~/debs
    apt-get download libnspr4 libnss3 libasound2t64
    for f in *.deb; do dpkg -x "$f" ~/libs; done
+   ```
+
+4. The readouts render in a monospace system stack, and WSL resolves it
+   differently from CI: a stock WSL2 Ubuntu has no Liberation Mono, so the
+   stack lands on DejaVu Sans Mono, while the runner has it and lands there.
+   Pin the whole stack with the same file the CI job uses, or a freshly
+   generated set will not match what CI renders:
+
+   ```bash
+   mkdir -p ~/.config/fontconfig
+   cp tests/visual/fontconfig-monospace.conf ~/.config/fontconfig/fonts.conf
+   fc-cache -f
    ```
 
 Then, in one WSL session (the server dies with it otherwise):
