@@ -108,6 +108,10 @@
   --lh-prose: 1.65;
   --lh-num: 1.15;
   --lh-hero: 1;
+  /* Aliases for names some components reach for. Without them a reference
+     silently falls back to the inherited line height. */
+  --lh-body: var(--lh-base);
+  --lh-tight: var(--lh-num);
 
   /* Three weights. 450 reads lighter and friendlier than 500 on a light
      background, where type appears optically heavier than on a dark one. */
@@ -116,13 +120,14 @@
   --fw-num: 650;
 
   /* ------------------------------------------------------------------------
-     Spacing — strict 4px grid, seven tokens.
+     Spacing — strict 4px grid, eight tokens.
 
        4   number-to-unit gap, icon-to-text, tick clearance
        8   compact control padding, stacked legend rows
        12  list row padding, label-to-control gap
        16  panel padding on narrow rails
        20  panel padding, default
+       24  dialog widths and offsets that sit between 20 and 28
        28  between sections within a panel
        40  between top-level bar regions only
      ------------------------------------------------------------------------ */
@@ -131,6 +136,7 @@
   --sp-3: 12px;
   --sp-4: 16px;
   --sp-5: 20px;
+  --sp-6: 24px;
   --sp-7: 28px;
   --sp-10: 40px;
 

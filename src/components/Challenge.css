@@ -75,7 +75,7 @@
   margin: 0;
   font-size: var(--fs-lg);
   font-weight: var(--fw-med);
-  line-height: var(--lh-tight);
+  line-height: var(--lh-num);
 }
 
 /* Focus lands here when a brief starts. It is a heading, not a control, so

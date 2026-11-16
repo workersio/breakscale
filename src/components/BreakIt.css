@@ -45,7 +45,7 @@
 .brk-goal-sentence {
   margin: 0;
   font-size: var(--fs-sm);
-  line-height: 2;
+  line-height: var(--lh-prose);
 }
 
 .brk-num {
