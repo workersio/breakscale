@@ -6,7 +6,7 @@ import type { ReactNode } from 'react';
  * (each button holds one <svg> of its own), and the package is marked
  * side-effect-free so the build keeps only these four.
  */
-import { Minus, Pause, Play, Plus, RotateCcw, StepForward } from 'lucide-react';
+import { Info, Minus, Pause, Play, Plus, RotateCcw, StepForward } from 'lucide-react';
 import { cycleSpeed, formatSpeed, type Speed } from '../speed';
 import { useCoarsePointer } from '../useCoarsePointer';
 import type {
@@ -1884,6 +1884,7 @@ function ToggleRow({
   checked,
   locked,
   onChange,
+  about,
 }: {
   label: ReactNode;
   hint: string;
@@ -1891,6 +1892,8 @@ function ToggleRow({
   /** Held still by a challenge. See SliderRow. */
   locked?: string;
   onChange: (on: boolean) => void;
+  /** Names the setting for the info mark, since `label` may hold markup. */
+  about?: string;
 }) {
   const hintId = useId();
   return (
@@ -1905,9 +1908,13 @@ function ToggleRow({
         />
         <span>{label}</span>
       </label>
-      <p id={hintId} className="ins-hint">
-        {locked ?? hint}
-      </p>
+      {locked ? (
+        <p id={hintId} className="ins-hint">
+          {locked}
+        </p>
+      ) : (
+        <HintLine id={hintId} text={hint} about={about ?? 'this setting'} />
+      )}
     </div>
   );
 }
@@ -1920,18 +1927,40 @@ function ToggleRow({
 function KindWhat({ kind }: { kind: NodeKind }) {
   const id = KIND_TERM[kind];
   const what = GLOSSARY_BY_ID.get(id)?.intro?.what;
-  if (!what) return null;
+  const noteId = useId();
+  if (!what) {
+    return (
+      <p className="ins-blurb">
+        <Term id={id}>{KIND_NAME[kind]}</Term>. {KIND_BLURB[kind]}
+      </p>
+    );
+  }
+  /* The plain sentence is what a beginner needs; how the simulator models
+     the kind sits behind the info mark, so the panel opens on one line. */
   return (
     <p className="ins-what">
       {what}{' '}
-      <button
-        type="button"
-        className="ins-learn"
-        aria-label={`Learn more about ${KIND_NAME[kind]}`}
-        onClick={() => openGlossaryEntry(id)}
-      >
-        Learn more
-      </button>
+      <span className="ins-more">
+        <button
+          type="button"
+          className="ins-learn"
+          aria-label={`Learn more about ${KIND_NAME[kind]}`}
+          onClick={() => openGlossaryEntry(id)}
+        >
+          Learn more
+        </button>{' '}
+        <button
+          type="button"
+          className="ins-more-btn"
+          aria-label={`How ${KIND_NAME[kind]} behaves here`}
+          aria-describedby={noteId}
+        >
+          <Info size={14} strokeWidth={2} aria-hidden="true" />
+        </button>
+        <span id={noteId} role="tooltip" className="ins-more-pop">
+          {KIND_BLURB[kind]}
+        </span>
+      </span>
     </p>
   );
 }
@@ -3493,11 +3522,6 @@ function SingleInspector({
         {/* Outside the pinned header, which stays one line tall. */}
         <KindWhat kind={node.kind} />
 
-        <p className="ins-blurb">
-          <Term id={KIND_TERM[node.kind]}>{KIND_NAME[node.kind]}</Term>.{' '}
-          {KIND_BLURB[node.kind]}
-        </p>
-
         {/* The headline meter, chosen per kind: utilisation where slots are
             real, tokens for a bucket, pool fill for a bulkhead, lag against
             retention for a broker, held connections for a websocket gateway,
@@ -3568,6 +3592,7 @@ function SingleInspector({
             <div className="ins-fields">
               <ToggleRow
                 label="Each finished call charges money"
+                about="charging"
                 hint="Only the correctness checks in Can you break it? read this. It changes nothing about how the run plays."
                 checked={node.config.chargeable === 1}
                 locked={lockedFields?.includes('chargeable') ? lockNote : undefined}
@@ -3580,7 +3605,8 @@ function SingleInspector({
                     <Term id="idempotency-key">idempotency key</Term>
                   </>
                 }
-                hint="Every request carries a key, the same on each retry. A key whose call succeeded here gets that answer again instead of doing the work twice. One still being worked on is refused, so the caller tries again, and one whose call failed is forgotten, so a retry does the work. Turn this on where the card is charged. On a part in front of it, a call that charged and then failed on the way back is forgotten, and the retry charges again. Keys are forgotten after 65,536 newer requests."
+                about="idempotency keys"
+                hint="Retries with the same key are answered from memory instead of charging again. Every request carries a key, the same on each retry. A key whose call succeeded here gets that answer again instead of doing the work twice. One still being worked on is refused, so the caller tries again, and one whose call failed is forgotten, so a retry does the work. Turn this on where the card is charged. On a part in front of it, a call that charged and then failed on the way back is forgotten, and the retry charges again. Keys are forgotten after 65,536 newer requests."
                 checked={node.config.idempotencyKeys === 1}
                 locked={
                   lockedFields?.includes('idempotencyKeys') ? lockNote : undefined
