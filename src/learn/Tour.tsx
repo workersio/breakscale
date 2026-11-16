@@ -13,6 +13,7 @@ import {
   totalSlots,
 } from './tourSteps';
 import type { TourState } from './useTour';
+import { scrollWithin } from './scrollWithin';
 import './Tour.css';
 
 interface TourProps {
@@ -94,7 +95,7 @@ export function Tour({
     if (prev === next) return;
     prev?.removeAttribute('data-tour-ring');
     next?.setAttribute('data-tour-ring', '');
-    if (next && stage.kind === 'fix') next.scrollIntoView?.({ block: 'center' });
+    if (next && stage.kind === 'fix') scrollWithin(next);
     ringRef.current = next;
   });
   useEffect(

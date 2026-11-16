@@ -25,6 +25,9 @@ import type {
 } from './sim/types';
 import { useCoarsePointer } from './useCoarsePointer';
 import { useGithubStars, useCountUp, formatStars } from './useGithubStars';
+import { useBarFit } from './useBarFit';
+import { SpeedMeter, advanceAtSpeed, shortfall, stepSpeed, type Speed } from './speed';
+import type { PinnedRun } from './components/pinnedRun';
 import { Engine } from './sim/engine';
 import { PRESETS, makeNode } from './sim/presets';
 import { CHALLENGES, challengeById } from './sim/challenges';
@@ -71,11 +74,13 @@ import Canvas, {
   readoutFor,
   sourceBacklogs,
 } from './components/Canvas';
-import { Inspector, TrafficControl } from './components/Inspector';
+import { Inspector, TrafficControl, slowable } from './components/Inspector';
 import { RouteAlert } from './components/RouteAlert';
 import {
+  DEFAULT_SLOW_FACTOR,
   asReplacement,
   faultActionsFor,
+  formatFactor,
   faultViewFor,
   withEdgeLoss,
   withSchedule,
@@ -85,9 +90,33 @@ import { Metrics } from './components/Metrics';
 import { Palette } from './components/Palette';
 import { Glossary } from './components/Glossary';
 import { Shortcuts } from './components/Shortcuts';
+import { StripCue } from './components/StripCue';
+import { isMac, shortcutLabel } from './modKey';
 import { Examples } from './components/Examples';
-import { cloneSubgraph, isTopology, selectionSubgraph } from './clipboard';
+import {
+  buildClipboardText,
+  cloneSubgraph,
+  isTopology,
+  parseClipboardText,
+  selectionSubgraph,
+} from './clipboard';
 import type { ClipboardSubgraph } from './clipboard';
+import { CanvasMenu } from './components/CanvasMenu';
+import { CommandPalette } from './components/CommandPalette';
+import { PresentBar, type PresentPart } from './components/PresentBar';
+import { buildCommands, type CommandActions, type CommandFacts } from './appCommands';
+import { loadRecent, pushRecent, saveRecent, type Command } from './commands';
+import {
+  canFullscreen,
+  toggleFullscreen,
+  useFocusedPart,
+  useFullscreen,
+  usePresenting,
+} from './present';
+import { pinRun, trailingWindow } from './components/pinnedRun';
+import type { CanvasMenuActions } from './components/CanvasMenu';
+import type { CanvasMenuApi } from './components/Canvas';
+import type { CanvasMenuRequest } from './components/contextMenuItems';
 import {
   NOTE_DEFAULT_WIDTH,
   NOTE_MAX_CHARS,
@@ -115,9 +144,11 @@ import { LearningPath } from './learn/LearningPath';
 import { usePathProgress } from './learn/pathProgress';
 import { Tour } from './learn/Tour';
 import { useTour } from './learn/useTour';
-import { togglePreference, usePreference } from './content/preferences';
+import { setPreference, togglePreference, usePreference } from './content/preferences';
+import { GLOSSARY } from './content/glossary';
+import { KIND_GROUPS, KIND_NAME } from './components/nodeVisuals';
 import { Settings } from './components/Settings';
-import { MainMenu } from './components/MainMenu';
+import { MainMenu, type MenuItem } from './components/MainMenu';
 import { Designs } from './components/Designs';
 import { getDesign, saveDesign } from './savedDesigns';
 import { downloadBackup, restoreBackup } from './backup';
@@ -128,6 +159,7 @@ import { SessionHistory, syncEngine } from './history';
 import type { FaultApplier, HistoryEntry, HistorySnapshot } from './history';
 import { ShareLinkTooLargeError, decodeTopology, hasShareHash } from './share';
 import { ID_PARAM, ShareStoreError, fetchStored, hasStoredLink } from './share/store';
+import { challengeLink, exampleParam, routedHref } from './urlRoute';
 import {
   buildLink,
   designTopology,
@@ -137,7 +169,13 @@ import {
 import { Share, type ShareKind, type ShareResult } from './components/Share';
 import { DESIGN_FILE_ACCEPT, downloadDesign, readDesignFile } from './designFile';
 import { downloadBlob, svgToPng } from './imageExport';
+import { PHONE_QUERY } from './phoneQuery';
+import { isOneRail, libraryShown, useOneRail } from './oneRail';
+import { cycleRegion, focusDiagram } from './keyboardNav';
+import { revealTarget } from './revealTarget';
 import './App.css';
+import './App.phone.css';
+import './App.present.css';
 
 /* ------------------------------------------------------------------ *
  * Persistence
@@ -161,6 +199,10 @@ const STORAGE_KEY = 'breakscale.session.v1';
  * ------------------------------------------------------------------ */
 
 const LAYOUT_KEY = 'breakscale.layout.v1';
+
+/** Presenting's bar goes to two rows before its load slider is narrower
+    than this, so the room can see it move. */
+const PRESENT_MIN_SLIDER_PX = 240;
 
 /**
  * How far a sheet must be pulled down before releasing closes it.
@@ -229,11 +271,11 @@ const clampPanel = (key: PanelKey, v: unknown): number => {
  * exist to explain), and the components rail must not boot open, which is a
  * default rather than a style.
  *
- * A media query rather than a device or touch test. The question is how much
- * room the shell has, and a small desktop window has exactly the same
- * problem as a phone; a tablet in landscape has neither.
+ * A media query rather than a device test. The question is how much room the
+ * shell has, and a small desktop window has exactly the same problem as a
+ * phone; a tablet in landscape has neither. A phone on its side is the one
+ * place a pointer test joins in; see phoneQuery.ts.
  */
-const PHONE_QUERY = '(max-width: 720px)';
 
 const SOURCE_URL = 'https://github.com/workersio/breakscale';
 
@@ -369,10 +411,18 @@ function PanelSlot({
   edge,
   children,
   onDismiss,
+  scrim = true,
 }: {
   open: boolean;
   edge: 'left' | 'right' | 'bottom';
   children: ReactNode;
+  /**
+   * Dim the canvas behind the sheet and close it on a tap there. Off for
+   * the inspector, whose sheet leaves the diagram above it in use: a tap on
+   * another part selects that part, and a tap on empty canvas clears the
+   * selection, which closes the sheet anyway.
+   */
+  scrim?: boolean;
   /**
    * Close this panel from inside it. Phone only: on a desktop a rail sits
    * BESIDE the canvas and dismissing it by touching the canvas would fight
@@ -473,7 +523,7 @@ function PanelSlot({
           anywhere off the sheet closes it, and dims what is behind so the
           sheet reads as the layer in front. Hidden above the breakpoint by
           CSS, where the panels are rails and there is nothing to dismiss. */}
-      {onDismiss ? (
+      {onDismiss && scrim ? (
         <div
           className={`app-scrim${closing ? ' is-closing' : ''}`}
           onPointerDown={onDismiss}
@@ -694,6 +744,11 @@ function clientRps(t: Topology): number {
  */
 const IN_PLACE = 'in place of your design. Undo brings yours back.';
 
+/* What makes two incident scenes the same run: boxes, settings and
+   connections, not where the boxes sit. */
+const sceneKey = (t: Topology) =>
+  canonical({ nodes: t.nodes.map((n) => [n.id, n.kind, n.config]), edges: t.edges });
+
 /** The reader's own design, held while a challenge has the canvas. */
 interface Aside extends Session {
   /**
@@ -868,6 +923,22 @@ export default function App() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  /* The command palette (Ctrl+K), and what it ran last, newest first. */
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [recentCommands, setRecentCommands] = useState<string[]>(loadRecent);
+  /* The menu and the chord are wired above the palette's builder; they
+     reach it through these. */
+  const openPaletteRef = useRef<() => void>(() => {});
+  const paletteOpenRef = useRef(false);
+  /* Presenting mode (present.ts). The fault keys are bound once, here, and
+     reach the fault controls declared further down through this ref. */
+  const presentFaultRef = useRef<(kind: 'crash' | 'slow' | 'fix') => void>(() => {});
+  const presentChangeRef = useRef<(on: boolean) => void>(() => {});
+  const { presenting, togglePresenting, stopPresenting } = usePresenting(
+    useCallback((kind: 'crash' | 'slow' | 'fix') => presentFaultRef.current(kind), []),
+    useCallback((on: boolean) => presentChangeRef.current(on), []),
+  );
+  const fullscreen = useFullscreen();
   const [designsOpen, setDesignsOpen] = useState(false);
 
   /**
@@ -981,6 +1052,9 @@ export default function App() {
    */
   const barRef = useRef<HTMLElement | null>(null);
   const [barBottom, setBarBottom] = useState<number | null>(null);
+  /* Below the width where the islands fit on one row, the load island moves
+     to a row of its own and GitHub moves into the menu (see useBarFit). */
+  const barCompact = useBarFit(barRef, presenting ? PRESENT_MIN_SLIDER_PX : 0);
 
   useLayoutEffect(() => {
     const el = barRef.current;
@@ -1023,14 +1097,17 @@ export default function App() {
      and the reader loses the thing they changed it to see. The inspector is
      part of this too, and was not before, which is how three could stack.
      On a desktop they are rails on three different edges and coexist. */
-  const toggleLibrary = useCallback(() => {
-    setLayout((l) => ({
-      ...l,
-      library: !l.library,
-      metrics: !l.library && phone ? false : l.metrics,
-    }));
-    if (phone) setInspectorHidden(true);
-  }, [phone]);
+  /* Folded by an automatic fit that could not show the whole diagram beside
+     it (see handleFitClipped). Kept apart from layout.library, so the
+     reader's saved choice is never rewritten by it, and cleared by the next
+     design or by the reader opening the rail. */
+  const [railMadeRoom, setRailMadeRoom] = useState(false);
+  /* With room for one rail (a tablet held upright, see oneRail.ts) the
+     components rail starts closed for this visit. Kept apart from
+     layout.library for the same reason as railMadeRoom. */
+  const oneRail = useOneRail() && !phone;
+  const [railFolded, setRailFolded] = useState(() => isOneRail() && !isPhone());
+  const libraryWanted = layout.library && !railMadeRoom && !railFolded;
 
   const toggleMetrics = useCallback(() => {
     setLayout((l) => ({
@@ -1057,11 +1134,20 @@ export default function App() {
    * settings back. Deliberately not persisted, for the same reason.
    */
 
+  /* Set by an add from the components rail, so the part it adds does not
+     put the rail away where only one fits (see libraryShown). */
+  const keepRailRef = useRef(false);
   useEffect(() => {
-    if (selectedIds.size > 0) setInspectorHidden(false);
+    const keep = keepRailRef.current;
+    keepRailRef.current = false;
+    if (selectedIds.size > 0 && !keep) setInspectorHidden(false);
   }, [selectedIds]);
 
   const toggleInspector = useCallback(() => setInspectorHidden((h) => !h), []);
+  /* Tapping the part that is already selected brings its settings back. On a
+     phone that is how a closed sheet is reopened: the selection never
+     changed, so nothing else would. */
+  const showInspector = useCallback(() => setInspectorHidden(false), []);
 
   /**
    * The selection, split into the three things it can hold. Node ids and
@@ -1091,7 +1177,31 @@ export default function App() {
    * produces a blank panel.
    */
   const hasSelection = selectedNodes.length + selectedEdgeCount > 0;
-  const inspectorVisible = hasSelection && !inspectorHidden;
+  /* Presenting puts both side panels away without touching the saved
+     layout, so leaving it puts back whatever was open. */
+  const inspectorVisible = hasSelection && !inspectorHidden && !presenting;
+  const libraryOpen =
+    !presenting && libraryShown(libraryWanted, oneRail, inspectorVisible);
+
+  /**
+   * Where the next component picked from the rail lands, set by the canvas
+   * menu's "Add component here". Spent by that pick, and dropped when the
+   * rail closes without one.
+   */
+  const addAtRef = useRef<{ x: number; y: number } | null>(null);
+
+  const toggleLibrary = useCallback(() => {
+    const open = libraryOpen;
+    if (open) addAtRef.current = null;
+    setLayout((l) => ({
+      ...l,
+      library: !open,
+      metrics: !open && phone ? false : l.metrics,
+    }));
+    setRailMadeRoom(false);
+    setRailFolded(false);
+    if (phone || (oneRail && !open)) setInspectorHidden(true);
+  }, [phone, oneRail, libraryOpen]);
 
   /**
    * The uncovered-canvas sentinel (see .stage-safe in App.css): an inert div
@@ -1185,7 +1295,7 @@ export default function App() {
             {
               label: 'Keyboard shortcuts',
               icon: 'M2 5.5A2.5 2.5 0 0 1 4.5 3h15A2.5 2.5 0 0 1 22 5.5v13a2.5 2.5 0 0 1-2.5 2.5h-15A2.5 2.5 0 0 1 2 18.5zM6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M9 13h6M7 17h10',
-              hint: 'Ctrl+/',
+              hint: shortcutLabel('Ctrl+/'),
               onSelect: () => setShortcutsOpen(true),
             },
           ]),
@@ -1196,7 +1306,7 @@ export default function App() {
       },
       /* The phone header has no room for the GitHub link, so it moves here
          rather than going missing. */
-      ...(phone
+      ...(phone || barCompact
         ? [
             {
               label: 'Source on GitHub',
@@ -1208,7 +1318,7 @@ export default function App() {
           ]
         : []),
     ],
-    [openGlossary, coarse, phone],
+    [openGlossary, coarse, phone, barCompact],
   );
 
   /**
@@ -1247,6 +1357,24 @@ export default function App() {
   useEffect(() => {
     runningRef.current = running;
   }, [running]);
+
+  /* Play speed (speed.ts). A preference of this tab, not of the design: it
+     is in no link and no saved file, and every load starts at 1x. The loop
+     reads the ref; `slowAt` is the speed this machine really manages, shown
+     only when it falls clearly short of the one asked for. */
+  const [speed, setSpeedState] = useState<Speed>(1);
+  const [slowAt, setSlowAt] = useState<number | null>(null);
+  const speedRef = useRef<Speed>(1);
+  const speedMeterRef = useRef(new SpeedMeter());
+  const setSpeed = useCallback((next: Speed) => {
+    speedRef.current = next;
+    speedMeterRef.current.clear();
+    setSpeedState(next);
+    setSlowAt(null);
+  }, []);
+
+  /* A run held still to compare against (PinBar). Session only. */
+  const [pinned, setPinned] = useState<PinnedRun | null>(null);
 
   /* ---------------- per-node sparkline history ----------------
    *
@@ -1318,7 +1446,29 @@ export default function App() {
       if (!runningRef.current) return;
 
       // Clamp so a long tab-away does not replay minutes of simulated time.
-      engine.advance(Math.min(dt, MAX_FRAME_MS));
+      const frameMs = Math.min(dt, MAX_FRAME_MS);
+      const s = speedRef.current;
+      if (s === 1) {
+        engine.advance(frameMs);
+      } else {
+        const done = advanceAtSpeed(
+          (d) => engine.advance(d),
+          frameMs,
+          s,
+          () => performance.now(),
+        );
+        // At most once a second, and only when what is shown would change.
+        const measured = speedMeterRef.current.add(done, frameMs);
+        if (measured !== null) {
+          const short = shortfall(s, measured);
+          setSlowAt((prev) =>
+            prev === short ||
+            (prev !== null && short !== null && Math.abs(prev - short) < 0.05)
+              ? prev
+              : short,
+          );
+        }
+      }
 
       // React re-renders at ~10Hz, not once per frame. The engine keeps
       // full temporal resolution regardless.
@@ -1445,11 +1595,17 @@ export default function App() {
    * that something happened. `id` keys the element so consecutive undos
    * restart the entrance animation instead of freezing on one message.
    */
-  const [toast, setToast] = useState<{ text: string; id: number } | null>(null);
+  const [toast, setToast] = useState<{
+    text: string;
+    id: number;
+    /** A button in the toast, such as Undo after a delete. */
+    action?: { label: string; run: () => void };
+  } | null>(null);
   const toastSeq = useRef(0);
   useEffect(() => {
     if (!toast) return;
-    const t = window.setTimeout(() => setToast(null), 2200);
+    // Long enough to reach for the button when there is one.
+    const t = window.setTimeout(() => setToast(null), toast.action ? 5000 : 2200);
     return () => window.clearTimeout(t);
   }, [toast]);
 
@@ -1476,6 +1632,17 @@ export default function App() {
    * student, and add/delete/undo must not move it.
    */
   const [fitNonce, setFitNonce] = useState(0);
+  /* Presenting frees the width the panels held, so the diagram is fitted
+     again to fill it, and again on the way out. */
+  /* Two frames late: the bar grows with the mode's larger figures, and the
+     clearance the fit frames under is measured from it a frame after. */
+  useEffect(() => {
+    presentChangeRef.current = () => {
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => setFitNonce((n) => n + 1)),
+      );
+    };
+  }, []);
 
   /**
    * The challenge sheet's size, kept in the uncovered-canvas sentinel.
@@ -1585,7 +1752,10 @@ export default function App() {
       setRoutes(engine.routes());
       // An answer read from the run that just ended would carry its numbers.
       setFinding(null);
-      if (fit) setFitNonce((n) => n + 1);
+      if (fit) {
+        setFitNonce((n) => n + 1);
+        setRailMadeRoom(false);
+      }
     },
     [engine, resetLostRate],
   );
@@ -2075,6 +2245,16 @@ export default function App() {
     [applyTopology, history],
   );
 
+  /** A part dragged from the components rail onto the canvas. */
+  const handleDropNode = useCallback(
+    (kind: NodeKind, x: number, y: number) => {
+      addAtRef.current = null;
+      if (oneRail && libraryOpen) keepRailRef.current = true;
+      handleAddNode(kind, x, y);
+    },
+    [handleAddNode, oneRail, libraryOpen],
+  );
+
   /**
    * Filled by the canvas with a "world point at the centre of the current
    * view" getter. A palette CLICK has no drop point of its own; the old
@@ -2104,7 +2284,9 @@ export default function App() {
   /** Palette click (no drop point): place at the centre of the current view. */
   const handlePaletteAdd = useCallback(
     (kind: NodeKind) => {
-      const centre = viewCenterRef.current?.();
+      if (oneRail && libraryOpen) keepRailRef.current = true;
+      const centre = addAtRef.current ?? viewCenterRef.current?.();
+      addAtRef.current = null;
       if (!centre) {
         // No canvas yet (should not happen in practice): old fallback.
         const maxX = topology.nodes.reduce((m, n) => Math.max(m, n.x), 0);
@@ -2137,7 +2319,7 @@ export default function App() {
       const spot = ring.find(([dx, dy]) => !occupied(cx + dx, cy + dy)) ?? [0, 0];
       handleAddNode(kind, cx + spot[0], cy + spot[1]);
     },
-    [handleAddNode, topology.nodes],
+    [handleAddNode, topology.nodes, oneRail, libraryOpen],
   );
 
   const handleConnect = useCallback(
@@ -2207,8 +2389,28 @@ export default function App() {
         for (const id of dropAnns) next.delete(id);
         return next;
       });
+      // No confirm before a delete; the toast offers the undo instead.
+      if (nodeIds.length > 0) {
+        const only =
+          nodeIds.length === 1 ? topology.nodes.find((n) => n.id === nodeIds[0]) : null;
+        // Only while the delete is still the last thing done: a later edit,
+        // settled or still settling, would be what Undo took back.
+        const entry = history.lastEntry;
+        toastSeq.current += 1;
+        setToast({
+          text: only ? `Deleted ${only.label}` : `Deleted ${nodeIds.length} components`,
+          id: toastSeq.current,
+          action: {
+            label: 'Undo',
+            run: () => {
+              if (!history.settling && history.lastEntry === entry) handleUndo();
+              else setToast(null);
+            },
+          },
+        });
+      }
     },
-    [applyTopology, setAnnotations, topology, history],
+    [applyTopology, setAnnotations, topology, history, handleUndo],
   );
 
   /** The Inspector's single-node delete routes through the same path. */
@@ -2254,13 +2456,20 @@ export default function App() {
    * small enough that the copy reads as "yours, here" and large enough that
    * it never lands exactly on its source and looks like nothing happened.
    */
-  const handleDuplicate = useCallback(() => {
-    const sub = selectionSubgraph(topology, selectedIds);
-    if (!sub) return;
-    // ONE entry for the whole duplicate, selection included.
-    history.commit('duplicate', snapRef.current);
-    appendClones(cloneSubgraph(sub, topology, GRID * 2, GRID * 2));
-  }, [topology, selectedIds, history, appendClones]);
+  const duplicateIds = useCallback(
+    (ids: ReadonlySet<string>) => {
+      const sub = selectionSubgraph(topology, ids);
+      if (!sub) return;
+      // ONE entry for the whole duplicate, selection included.
+      history.commit('duplicate', snapRef.current);
+      appendClones(cloneSubgraph(sub, topology, GRID * 2, GRID * 2));
+    },
+    [topology, history, appendClones],
+  );
+  const handleDuplicate = useCallback(
+    () => duplicateIds(selectedIds),
+    [duplicateIds, selectedIds],
+  );
 
   /**
    * Alt+drag: the same duplication as Ctrl+D, but born under the pointer as
@@ -2327,6 +2536,115 @@ export default function App() {
       appendClones(cloneSubgraph(sub, topology, dx, dy));
     },
     [topology, history, appendClones],
+  );
+
+  /* ---------------- context menu ---------------- */
+
+  /**
+   * The last thing copied in this tab, beside the system clipboard. Paste
+   * here reads it first: reading the system clipboard on a phone raises a
+   * permission prompt, and on some browsers it is not allowed at all.
+   */
+  const [copied, setCopied] = useState<string | null>(null);
+
+  /** Copy from the menu or the inspector, where there is no copy event. */
+  const handleCopyIds = useCallback(
+    (ids: readonly string[]) => {
+      const text = buildClipboardText(topology, new Set(ids));
+      if (!text) return;
+      setCopied(text);
+      // Best effort, so Ctrl+V in another tab finds it too.
+      void navigator.clipboard?.writeText(text).catch(() => {});
+      const only =
+        ids.length === 1 ? topology.nodes.find((n) => n.id === ids[0]) : null;
+      const what = only ? only.label : `${ids.length} components`;
+      toastSeq.current += 1;
+      setToast({
+        text: coarse
+          ? `Copied ${what}. Press and hold the canvas to paste.`
+          : `Copied ${what}. ${shortcutLabel('Ctrl+V')} pastes at the pointer.`,
+        id: toastSeq.current,
+      });
+    },
+    [topology, coarse, setCopied],
+  );
+
+  const handleCopySelection = useCallback(
+    () =>
+      handleCopyIds(
+        topology.nodes.filter((n) => selectedIds.has(n.id)).map((n) => n.id),
+      ),
+    [handleCopyIds, topology.nodes, selectedIds],
+  );
+
+  const handlePasteAt = useCallback(
+    async (at: { x: number; y: number }) => {
+      let text = copied;
+      if (!text && navigator.clipboard?.readText) {
+        try {
+          text = await navigator.clipboard.readText();
+        } catch {
+          text = null;
+        }
+      }
+      const sub = text ? parseClipboardText(text) : null;
+      if (!sub) {
+        toastSeq.current += 1;
+        setToast({
+          text: 'Nothing to paste yet. Copy a component first.',
+          id: toastSeq.current,
+        });
+        return;
+      }
+      handlePaste(sub, at);
+    },
+    [copied, handlePaste],
+  );
+
+  const [menu, setMenu] = useState<{ req: CanvasMenuRequest; seq: number } | null>(
+    null,
+  );
+  const menuSeq = useRef(0);
+  const menuApiRef = useRef<CanvasMenuApi | null>(null);
+  const handleCanvasMenu = useCallback((req: CanvasMenuRequest | null) => {
+    menuSeq.current += 1;
+    setMenu(req ? { req, seq: menuSeq.current } : null);
+  }, []);
+  const closeMenu = useCallback(() => setMenu(null), []);
+
+  const menuActions = useMemo<CanvasMenuActions>(
+    () => ({
+      inspect: (ids) => {
+        if (ids.length !== selectedIds.size || ids.some((id) => !selectedIds.has(id))) {
+          setSelectedIds(new Set(ids));
+        }
+        showInspector();
+      },
+      duplicate: (ids) => duplicateIds(new Set(ids)),
+      copy: handleCopyIds,
+      connect: (id, keyboard) => menuApiRef.current?.startLink(id, keyboard),
+      remove: (nodeIds, edgeIds) => handleDeleteSelection(nodeIds, edgeIds),
+      setLoss: handleEdgeLoss,
+      paste: (at) => void handlePasteAt(at),
+      add: (at) => {
+        addAtRef.current = at;
+        if (!libraryOpen) toggleLibrary();
+        toastSeq.current += 1;
+        setToast({ text: 'Pick a component and it lands here.', id: toastSeq.current });
+      },
+      fit: () => menuApiRef.current?.fitAll(),
+    }),
+    [
+      selectedIds,
+      showInspector,
+      duplicateIds,
+      handleCopyIds,
+      handleDeleteSelection,
+      handleEdgeLoss,
+      handlePasteAt,
+      libraryOpen,
+      toggleLibrary,
+    ],
   );
 
   /* ---------------- live config edits ---------------- */
@@ -2655,6 +2973,21 @@ export default function App() {
     toastSeq.current += 1;
     setToast({ text, id: toastSeq.current });
   }, []);
+
+  /* A design opened too wide for the canvas beside the components rail,
+     even at the lowest zoom a card still says what it is at. The rail folds
+     for this design and the fit runs again; the reader is told, once, how
+     to get it back. A phone's rail is a sheet that starts closed. */
+  const handleFitClipped = useCallback(() => {
+    if (phone || !libraryOpen) return;
+    setRailMadeRoom(true);
+    setFitNonce((n) => n + 1);
+    say(
+      coarse
+        ? 'Hid components to fit the diagram. The button at the top left shows them.'
+        : 'Hid components to fit the diagram. Press C to show them.',
+    );
+  }, [phone, libraryOpen, coarse, say]);
   // Once, for what boot did before there was a toast to say it with.
   const bootNotice = boot.notice;
   useEffect(() => {
@@ -2742,6 +3075,10 @@ export default function App() {
       updateStore((s) =>
         withPass(s, brief, attemptFor(s, brief)?.hintsShown ?? 0, new Date()),
       );
+      // On a phone the inspector's sheet covers the brief's. The pass is what
+      // the reader was working for, so the inspector steps down for it; the
+      // selection stays, and tapping the part brings its settings back.
+      if (phoneRef.current) setInspectorHidden(true);
     },
     [updateStore],
   );
@@ -3034,20 +3371,101 @@ export default function App() {
     // reload the link over the change they had just made.
   }, [switchWorkspace, installDesign]);
 
-  /* A `?challenge=<id>` link has done its job once boot has followed it.
-     Taken off the URL so a reload after leaving the brief does not put the
-     reader straight back into it. The location is outside React, which is
-     why this is an effect. */
+  /* The address bar says what is open: `?challenge=<id>` inside a brief,
+     `?example=<id>` while an example is open and unchanged, which an edit
+     ends by clearing presetId. Entering or leaving a brief is a step Back
+     can undo, so it pushes; the example only ever replaces, since a Back
+     press that quietly took an example off the canvas would be a surprise.
+     A share link on screen keeps its own URL. The location is outside
+     React, which is why this is an effect. */
+  const routedChallenge = useRef<string | null | undefined>(undefined);
   useEffect(() => {
     try {
-      const url = new URL(window.location.href);
-      if (!url.searchParams.has('challenge')) return;
-      url.searchParams.delete('challenge');
-      window.history.replaceState(window.history.state, '', url.toString());
+      const linked = shareHashPresent();
+      if (sharePending && linked) return;
+      const href = window.location.href;
+      const example = challengeId === null ? presetId : null;
+      const next = routedHref(href, {
+        challengeId,
+        exampleId: example,
+        dropShare: example !== null && linked,
+      });
+      const moved =
+        routedChallenge.current !== undefined &&
+        routedChallenge.current !== challengeId;
+      routedChallenge.current = challengeId;
+      if (next === href) return;
+      if (moved) window.history.pushState(null, '', next);
+      else window.history.replaceState(window.history.state, '', next);
     } catch {
-      // A locked-down location: the link stays, and only costs a resume.
+      // A locked-down location: the address stays as it was.
     }
-  }, []);
+  }, [challengeId, presetId, sharePending]);
+
+  /* An `?example=<id>` link opens that example, through the same undoable
+     load as the picker, unless a share link or a brief's link is on the URL
+     too: those go first, as boot puts them first. Read at mount, before
+     the effect above rewrites the query. */
+  const [linkedExample] = useState(() => {
+    try {
+      if (shareHashPresent() || challengeParam(window.location.search)) return null;
+      const id = exampleParam(window.location.search);
+      return PRESETS.find((p) => p.id === id) ?? null;
+    } catch {
+      // No DOM (a test importing App): no link to follow.
+      return null;
+    }
+  });
+  const followedExample = useRef(false);
+  useEffect(() => {
+    if (!linkedExample || followedExample.current) return;
+    followedExample.current = true;
+    const own = snapRef.current;
+    if (own.challengeId === null && own.presetId === linkedExample.id) return;
+    handleLoadPreset(linkedExample);
+    // From a brief, the load has said so itself. From the reader's own
+    // design it says how to get that back; a fresh example needs no word.
+    if (own.challengeId === null && own.presetId === null) {
+      say(`Opened ${linkedExample.name}. Undo brings your design back.`);
+    }
+  }, [linkedExample, handleLoadPreset, say]);
+
+  /* Back and Forward through a brief. The URL has already moved; this
+     moves the canvas to match, by the same paths the buttons use. */
+  useEffect(() => {
+    const onPop = () => {
+      let id: string | null = null;
+      try {
+        id = challengeParam(window.location.search);
+      } catch {
+        return;
+      }
+      const want = id && challengeById(id) ? id : null;
+      if (want === challengeLiveRef.current) return;
+      if (want) handleStartChallenge(want);
+      else handleLeaveChallenge();
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [handleStartChallenge, handleLeaveChallenge]);
+
+  const handleCopyChallengeLink = useCallback(() => {
+    if (!challengeId) return;
+    let link: string;
+    try {
+      link = challengeLink(window.location.href, challengeId);
+    } catch {
+      return;
+    }
+    const failed = () => say('Could not copy the link. It is in the address bar.');
+    try {
+      void navigator.clipboard
+        .writeText(link)
+        .then(() => say('Copied a link to this challenge.'), failed);
+    } catch {
+      failed();
+    }
+  }, [challengeId, say]);
 
   /**
    * Open the share dialog without building anything. The design is only
@@ -3317,11 +3735,9 @@ export default function App() {
   const breakWatchLine = useMemo(() => {
     if (!breakWatch || breakWatchSec < 0) return null;
     const now = engine.now;
-    const { firstMs, goal } = breakWatch;
-    const until = ` The first fault lands at ${secs(firstMs)} (in ${Math.ceil((firstMs - now) / 1000)}s).`;
+    const { goal } = breakWatch;
     const tally = now < BREAK_WARMUP_MS ? null : engine.readTally();
-    if (!tally)
-      return `Replay: the first fault lands at ${secs(firstMs)} (in ${Math.ceil((firstMs - now) / 1000)}s).`;
+    if (!tally) return `Measuring starts at ${secs(BREAK_WARMUP_MS)}.`;
     const run = measureSeed(goal, tally, 0);
     // The verdict's own order: nothing through, then a backlog, then the
     // goal. Partway through, requests still on their way look like a
@@ -3340,9 +3756,19 @@ export default function App() {
               ? `the slowest took ${run.actual === null ? 'nothing yet' : formatGoalMs(run.actual)}`
               : `${run.actual ?? 0} lost`;
     return now >= BREAK_END_MS
-      ? `Replay: between ${secs(BREAK_WARMUP_MS)} and ${secs(BREAK_END_MS)}, ${figure}.`
-      : `Replay: in the window so far, ${figure}.${now < firstMs ? until : ''}`;
+      ? `Between ${secs(BREAK_WARMUP_MS)} and ${secs(BREAK_END_MS)}, ${figure}.`
+      : `In the window so far, ${figure}.`;
   }, [breakWatchSec, breakWatch, engine]);
+  /* The countdown reads the replay's own clock on every render rather than
+     riding in the memo above, so it can never be left showing a second that
+     has already gone. */
+  const breakWatchView = useMemo(
+    () =>
+      breakWatch && breakWatchLine !== null
+        ? { line: breakWatchLine, firstMs: breakWatch.firstMs, endMs: BREAK_END_MS }
+        : null,
+    [breakWatch, breakWatchLine],
+  );
 
   const handleBreakLink = useCallback(() => {
     const r = breakReplay();
@@ -3373,48 +3799,125 @@ export default function App() {
 
   /** Bumped when a card is opened, to move focus to the panel. */
   const [incidentFocus, setIncidentFocus] = useState(0);
-  /** The scene as it was installed by Watch, or null when not watching. */
+  /** The scene as opening or Watch installed it, or null. */
   const [incidentScene, setIncidentScene] = useState<Topology | null>(null);
+  /**
+   * The undo depth right after an incident's scene was put on the canvas by
+   * opening it, or null. Fix it uses it to tell an untouched scene, whose
+   * undo is the reader's own design, from one they have since worked on.
+   */
+  const incidentOpenDepthRef = useRef<number | null>(null);
+  /** The scene opening installed has not been played yet. */
+  const incidentUnplayedRef = useRef(false);
+  /** Whether the run was playing before opening paused it. */
+  const runningBeforeIncidentRef = useRef(true);
+  /* Leaving the panel without playing the scene gives back the run's state
+     from before it opened: the pause was for Watch, not for what comes
+     next. */
+  const resumeAfterIncident = useCallback(() => {
+    const unplayed = incidentUnplayedRef.current;
+    incidentUnplayedRef.current = false;
+    // Played from the bar instead of Watch: the reader has taken over.
+    if (!unplayed || runningRef.current || engine.now > 0) return;
+    setRunning(runningBeforeIncidentRef.current);
+    runningRef.current = runningBeforeIncidentRef.current;
+  }, [engine]);
 
+  /* Opening an incident puts its scene on the canvas, paused at the start,
+     as one undo step, the way an example opens: the panel is about that
+     diagram, and leaving the reader's own under it told them nothing. Paused
+     so Watch plays it from the top with the captions, on the same scene
+     and seed Watch has always installed. */
   const handleOpenIncident = useCallback(
     (id: string) => {
       if (challengeLiveRef.current !== null) return;
+      const picked = incidentById(id);
+      if (!picked) return;
       if (breakShown) handleCloseBreak();
+      const scene = structuredClone(picked.scene);
+      replaceDesign(scene, null, 'incident');
+      incidentOpenDepthRef.current = history.undoDepth;
+      if (!incidentUnplayedRef.current)
+        runningBeforeIncidentRef.current = runningRef.current;
+      incidentUnplayedRef.current = true;
+      setRunning(false);
+      runningRef.current = false;
       setIncidentId(id);
-      setIncidentScene(null);
+      setIncidentScene(scene);
       setIncidentFocus((n) => n + 1);
+      say(`Opened ${picked.name}. Undo brings your design back.`);
     },
-    [breakShown, handleCloseBreak],
+    [breakShown, handleCloseBreak, replaceDesign, history, say],
   );
 
-  /* A loaded example, one undo step back to what was there. */
+  /* The scene opening installed, still at its first instant, only needs
+     playing; anything else (a watched run, an edited scene) is put back as
+     a fresh copy, as one undo step back to what was there. */
   const handleWatchIncident = useCallback(() => {
     if (!incident) return;
-    const scene = structuredClone(incident.scene);
-    replaceDesign(scene, null, 'incident replay');
-    setIncidentScene(scene);
+    const unplayed = incidentUnplayedRef.current;
+    incidentUnplayedRef.current = false;
+    if (
+      unplayed &&
+      engine.now === 0 &&
+      sceneKey(topoLiveRef.current) === sceneKey(incident.scene)
+    ) {
+      setIncidentScene(structuredClone(incident.scene));
+    } else {
+      const scene = structuredClone(incident.scene);
+      replaceDesign(scene, null, 'incident replay');
+      setIncidentScene(scene);
+    }
     setRunning(true);
     runningRef.current = true;
-  }, [incident, replaceDesign]);
+  }, [incident, replaceDesign, engine]);
 
+  /* Fixing it sets aside the reader's own design, not the scene opening put
+     over it, so Back to my design brings theirs back. While the scene is
+     untouched, its open is undone first; once they have worked on it, what
+     is on the canvas is theirs, and that is what is set aside. */
   const handleFixIncident = useCallback(() => {
     if (!incident) return;
+    const depth = incidentOpenDepthRef.current;
+    incidentOpenDepthRef.current = null;
+    if (
+      depth !== null &&
+      depth === history.undoDepth &&
+      !history.settling &&
+      sceneKey(topoLiveRef.current) === sceneKey(incident.scene)
+    ) {
+      const entry = history.undo(snapRef.current);
+      if (entry) {
+        // The brief starts from here in this same handler, before React has
+        // rendered the undo, so the mirrors it reads are brought up to date
+        // by hand.
+        topoLiveRef.current = entry.topology;
+        snapRef.current = {
+          topology: entry.topology,
+          selectedIds: new Set(entry.selectedIds),
+          rps: entry.rps,
+          presetId: entry.presetId,
+          challengeId: entry.challengeId,
+        };
+      }
+    }
+    resumeAfterIncident();
     setIncidentId(null);
     setIncidentScene(null);
     handleStartChallenge(incident.brief.id);
-  }, [incident, handleStartChallenge]);
+  }, [incident, handleStartChallenge, history, resumeAfterIncident]);
 
   const handleCloseIncident = useCallback(() => {
+    incidentOpenDepthRef.current = null;
+    resumeAfterIncident();
     setIncidentId(null);
     setIncidentScene(null);
     menuBtnRef.current?.focus();
-  }, []);
+  }, [resumeAfterIncident]);
 
   /* The captions follow the run only while the canvas is still the scene
      that was installed. Moved boxes keep them; a changed design ends them,
      because the story no longer describes what is playing. */
-  const sceneKey = (t: Topology) =>
-    canonical({ nodes: t.nodes.map((n) => [n.id, n.kind, n.config]), edges: t.edges });
   const incidentPlaying = useMemo(
     () =>
       incident !== undefined &&
@@ -3422,7 +3925,55 @@ export default function App() {
       sceneKey(topology) === sceneKey(incidentScene),
     [incident, incidentScene, topology],
   );
-  const incidentSec = incidentPlaying && snapshot ? Math.floor(engine.now / 1000) : -1;
+  // No caption before the scene has started: paused at its first instant,
+  // the panel offers Watch rather than a story that has not begun.
+  const incidentSec =
+    incidentPlaying && snapshot && (running || engine.now > 0)
+      ? Math.floor(engine.now / 1000)
+      : -1;
+
+  /* What the canvas keeps in view as panels open: see revealTarget.ts. */
+  const chartsUp = layout.metrics && snapshot !== null;
+  const brokeTargets = useMemo(
+    () =>
+      breakShown && breakView.status === 'done' && breakView.result.status === 'broke'
+        ? breakView.result.attacks.map((a) => a.target)
+        : null,
+    [breakShown, breakView],
+  );
+  const breaking = useMemo(
+    () => (breakShown && !brokeTargets ? topology.nodes.map((n) => n.id) : null),
+    [breakShown, brokeTargets, topology.nodes],
+  );
+  const inspecting = useMemo(
+    () => (inspectorVisible ? selectedNodes.map((n) => n.id) : null),
+    [inspectorVisible, selectedNodes],
+  );
+  const reveal = useMemo(
+    () =>
+      revealTarget({
+        inspecting,
+        broke: brokeTargets,
+        breaking,
+        verdict:
+          challenge && check?.view.status === 'verdict' ? check.view.verdict : null,
+        incident:
+          incident && incidentPlaying
+            ? { id: incident.id, faults: incident.scene.faults ?? [] }
+            : null,
+        charts: chartsUp,
+      }),
+    [
+      inspecting,
+      brokeTargets,
+      breaking,
+      challenge,
+      check,
+      incident,
+      incidentPlaying,
+      chartsUp,
+    ],
+  );
   const incidentCaption = useMemo(() => {
     if (!incident || incidentSec < 0) return null;
     const c = captionAt(incident, incidentSec * 1000);
@@ -3459,7 +4010,75 @@ export default function App() {
     setRoutes(engine.routes());
   }, [engine]);
 
+  /**
+   * The transport again, first in the menu. The bar's own buttons are the
+   * quick way, but a touch screen has no Space or S key, and the menu is
+   * the one place every layout can always reach.
+   */
+  const runMenuItems = useMemo<MenuItem[]>(
+    () => [
+      {
+        label: running ? 'Pause' : 'Play',
+        icon: running ? 'M6 4h4v16H6zM14 4h4v16h-4z' : 'M6 3l14 9-14 9z',
+        ...(coarse ? {} : { hint: 'Space' }),
+        onSelect: handleToggleRun,
+      },
+      {
+        label: 'Step',
+        icon: 'M6 4v16M10 4l10 8-10 8z',
+        ...(coarse ? {} : { hint: 'S' }),
+        onSelect: handleStep,
+      },
+      {
+        label: 'Reset',
+        icon: 'M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5',
+        onSelect: handleReset,
+        divider: true,
+      },
+    ],
+    [running, coarse, handleToggleRun, handleStep, handleReset],
+  );
+  /* The palette heads the menu, so it can be found without its chord.
+     Presenting follows the run controls: it is how they get shown to a
+     room. */
+  const searchMenuItem = useMemo<MenuItem>(
+    () => ({
+      label: 'Search actions',
+      icon: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-4.35-4.35',
+      ...(coarse ? {} : { hint: shortcutLabel('Ctrl+K') }),
+      onSelect: () => openPaletteRef.current(),
+      divider: true,
+    }),
+    [coarse],
+  );
+  const presentMenuItem = useMemo<MenuItem>(
+    () => ({
+      label: presenting ? 'Stop presenting' : 'Start presenting',
+      icon: 'M3 4h18v12H3zM12 16v4M8 20h8',
+      ...(coarse ? {} : { hint: 'P' }),
+      onSelect: togglePresenting,
+      divider: true,
+    }),
+    [coarse, presenting, togglePresenting],
+  );
+  const allMenuItems = useMemo(
+    () => [searchMenuItem, ...runMenuItems, presentMenuItem, ...menuItems],
+    [searchMenuItem, runMenuItems, presentMenuItem, menuItems],
+  );
+
   /* ---------------- keyboard ---------------- */
+
+  /* F6 steps between the bar, the diagram and the open panels, Shift+F6
+     back. Before the typing guard below: no field uses F6, and a reader in
+     the inspector's name box is exactly who wants to get out of it. */
+  useEffect(() => {
+    const onF6 = (e: KeyboardEvent) => {
+      if (e.key !== 'F6' || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (cycleRegion(e.shiftKey ? -1 : 1) >= 0) e.preventDefault();
+    };
+    window.addEventListener('keydown', onF6);
+    return () => window.removeEventListener('keydown', onF6);
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -3523,6 +4142,14 @@ export default function App() {
       if (e.code === 'Space') {
         e.preventDefault();
         setRunning((r) => !r);
+        return;
+      }
+
+      // Slower and faster, by the character so it works on any layout that
+      // types a bracket. A held modifier is left to the browser.
+      if ((e.key === '[' || e.key === ']') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        setSpeed(stepSpeed(speedRef.current, e.key === ']' ? 1 : -1));
         return;
       }
 
@@ -3603,6 +4230,17 @@ export default function App() {
           }
           return;
         }
+        // In a challenge the key used to do nothing at all, which reads as
+        // broken. Say why instead.
+        if (e.key === 'f' || e.key === 'F') {
+          e.preventDefault();
+          toastSeq.current += 1;
+          setToast({
+            text: 'Can you break it? is off during a challenge.',
+            id: toastSeq.current,
+          });
+          return;
+        }
         if (e.key === 'g' || e.key === 'G') {
           e.preventDefault();
           togglePreference('snapToGrid');
@@ -3622,6 +4260,7 @@ export default function App() {
     handleUndo,
     handleRedo,
     handleDuplicate,
+    setSpeed,
     glossaryOpen,
     openGlossary,
     closeGlossary,
@@ -3771,9 +4410,227 @@ export default function App() {
     setLostRps(delta > 0 ? (delta * 1000) / dtMs : 0);
   }, [cumulativeLost, simTimeMs]);
 
+  /* ---------------- presenting and the command palette ---------------- */
+
+  /* The part X, W and R act on while presenting: the one keyboard focus is
+     on, so Tab is enough, or else the one selected. */
+  const focusedPart = useFocusedPart(presenting);
+  const presentId = focusedPart ?? selectedNode?.id ?? null;
+  const presentPart = useMemo<PresentPart | null>(() => {
+    if (!presenting || presentId === null) return null;
+    const n = topology.nodes.find((x) => x.id === presentId);
+    if (!n) return null;
+    return {
+      id: n.id,
+      label: n.label,
+      fault: snapshot?.activeFailures.find((f) => f.nodeId === n.id) ?? null,
+      canSlow: slowable(n.kind),
+    };
+  }, [presenting, presentId, topology.nodes, snapshot]);
+
+  const presentCrash = useCallback(
+    (id: string) => faultActions.onInject(id, 'crash'),
+    [faultActions],
+  );
+  const presentSlow = useCallback(
+    (id: string) => faultActions.onInject(id, 'slow', { factor: DEFAULT_SLOW_FACTOR }),
+    [faultActions],
+  );
+  const presentFix = useCallback(
+    (id: string) => faultActions.onFix(id),
+    [faultActions],
+  );
+
+  /* A key that cannot act says why, rather than doing nothing: a teacher
+     pressing X in front of a room needs to know it was heard. */
+  useEffect(() => {
+    presentFaultRef.current = (kind) => {
+      const p = presentPart;
+      if (!p) {
+        say('Pick a part first. Click one or Tab to it.');
+        return;
+      }
+      const f = p.fault;
+      if (kind === 'crash') {
+        if (f?.kind === 'crash') say(`${p.label} is already crashed. R fixes it.`);
+        else presentCrash(p.id);
+      } else if (kind === 'slow') {
+        if (!p.canSlow) say(`${p.label} does no work of its own to slow down.`);
+        else if (f !== null) say(`Fix ${p.label} first. R fixes it.`);
+        else presentSlow(p.id);
+      } else if (f === null) {
+        say(`${p.label} has nothing to fix.`);
+      } else presentFix(p.id);
+    };
+  }, [presentPart, presentCrash, presentSlow, presentFix, say]);
+
+  /* Ctrl+K, or Cmd+K on a Mac. Before any typing guard on purpose: the
+     palette is how you get out of a field and do something else. By e.code
+     for the same layout reasons as undo. */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.code !== 'KeyK')
+        return;
+      e.preventDefault();
+      if (paletteOpenRef.current) setPaletteOpen(false);
+      else openPaletteRef.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const snapToGrid = usePreference('snapToGrid');
+  /*
+   * The rows are built when the palette opens, from an event, not on every
+   * render: a palette left open would otherwise rebuild a hundred rows ten
+   * times a second as snapshots land, and nothing in it is read live. The
+   * builder is refreshed after each render so the open press sees the
+   * latest state.
+   */
+  const buildCommandsRef = useRef<() => Command[]>(() => []);
+  useEffect(() => {
+    buildCommandsRef.current = () => {
+      const sel = selectedNode?.id ?? null;
+      const ordered = sel
+        ? [
+            ...topology.nodes.filter((n) => n.id === sel),
+            ...topology.nodes.filter((n) => n.id !== sel),
+          ]
+        : topology.nodes;
+      const parts = ordered.map((n) => ({
+        id: n.id,
+        label: n.label,
+        fault: snapshot?.activeFailures.find((f) => f.nodeId === n.id)?.kind ?? null,
+        canSlow: slowable(n.kind),
+      }));
+      const hasClient = topology.nodes.some((n) => n.kind === 'client');
+      const facts: CommandFacts = {
+        running,
+        speed,
+        canUndo,
+        canRedo,
+        empty: topology.nodes.length === 0,
+        inChallenge: challenge !== undefined,
+        breakBlocked,
+        canPin: hasClient && (snapshot?.history.length ?? 0) > 0,
+        pinned: pinned !== null,
+        libraryOpen,
+        metricsOpen: layout.metrics,
+        snapToGrid,
+        theme: themeChoice,
+        presenting,
+        canFullscreen: canFullscreen(),
+        fullscreen,
+        parts,
+        selectedId: selectedNode?.id ?? null,
+        kinds: KIND_GROUPS.flatMap((g) =>
+          g.kinds.map((kind) => ({ kind, name: KIND_NAME[kind], group: g.title })),
+        ),
+        examples: PRESETS.map((p) => ({ id: p.id, name: p.name, tagline: p.tagline })),
+        challenges: CHALLENGES.map((c) => ({ id: c.id, name: c.name })),
+        incidents: INCIDENTS.map((i) => ({ id: i.id, name: i.name })),
+        glossary: GLOSSARY,
+        mac: isMac(),
+        coarse,
+      };
+      const select = (id: string) => setSelectedIds(new Set([id]));
+      const actions: CommandActions = {
+        toggleRun: handleToggleRun,
+        step: handleStep,
+        reset: handleReset,
+        setSpeed,
+        undo: handleUndo,
+        redo: handleRedo,
+        add: handlePaletteAdd,
+        openExample: (id) => {
+          const p = PRESETS.find((x) => x.id === id);
+          if (p) handleLoadPreset(p);
+        },
+        startChallenge: handleStartChallenge,
+        openIncident: handleOpenIncident,
+        // The part is selected as well, so the change is seen where it lands.
+        crash: (id) => {
+          select(id);
+          presentCrash(id);
+        },
+        slow: (id) => {
+          select(id);
+          presentSlow(id);
+        },
+        fix: (id) => {
+          select(id);
+          presentFix(id);
+        },
+        pin: () => {
+          if (!snapshot) return;
+          setPinned(
+            pinRun(snapshot.system, trailingWindow(snapshot.history), offeredRps),
+          );
+          if (!layout.metrics) toggleMetrics();
+        },
+        clearPin: () => setPinned(null),
+        toggleLibrary,
+        toggleMetrics,
+        toggleSnap: () => togglePreference('snapToGrid'),
+        setTheme: (t) => setPreference('theme', t),
+        togglePresenting,
+        toggleFullscreen,
+        fit: () => menuApiRef.current?.fitAll(),
+        share: handleOpenShare,
+        breakIt: () => {
+          setBreakOpen(true);
+          setIncidentId(null);
+        },
+        glossary: openGlossary,
+        examples: () => setExamplesOpen(true),
+        challenges: () => setChallengesOpen(true),
+        path: () => setPathOpen(true),
+        designs: () => setDesignsOpen(true),
+        shortcuts: () => setShortcutsOpen(true),
+        settings: () => setSettingsOpen(true),
+      };
+      return buildCommands(facts, actions, formatFactor(DEFAULT_SLOW_FACTOR));
+    };
+  });
+  const [paletteCommands, setPaletteCommands] = useState<Command[]>([]);
+  useEffect(() => {
+    paletteOpenRef.current = paletteOpen;
+    openPaletteRef.current = () => {
+      setMenuOpen(false);
+      setPaletteCommands(buildCommandsRef.current());
+      setPaletteOpen(true);
+    };
+  }, [paletteOpen]);
+
+  const runCommand = useCallback(
+    (cmd: Command) => {
+      const next = pushRecent(recentCommands, cmd.id);
+      setRecentCommands(next);
+      saveRecent(next);
+      cmd.run();
+    },
+    [recentCommands],
+  );
+
   return (
-    <div className="app">
-      <header className="app-bar" ref={barRef}>
+    <div className={presenting ? 'app is-presenting' : 'app'}>
+      {/* The first stop for Tab, shown only when it has focus. Without it
+          the diagram was behind the bar and every row of the rail. */}
+      <a
+        className="app-skip"
+        href="#diagram"
+        onClick={(e) => {
+          e.preventDefault();
+          focusDiagram();
+        }}
+      >
+        Skip to diagram
+      </a>
+      <header
+        className="app-bar"
+        ref={barRef}
+        data-fit={barCompact ? 'compact' : 'row'}
+      >
         <div className="app-island app-island-brand">
           {/* The wordmark is the one place the product speaks in its own
             voice. Two words, sentence case, no abbreviation — a student
@@ -3819,7 +4676,7 @@ export default function App() {
               className="btn btn-sm btn-icon"
               disabled={!canUndo}
               aria-label="Undo"
-              title="Undo (Ctrl+Z)"
+              title={`Undo (${shortcutLabel('Ctrl+Z')})`}
               onClick={handleUndo}
             >
               <svg
@@ -3842,7 +4699,7 @@ export default function App() {
               className="btn btn-sm btn-icon"
               disabled={!canRedo}
               aria-label="Redo"
-              title="Redo (Ctrl+Shift+Z)"
+              title={`Redo (${shortcutLabel('Ctrl+Shift+Z')})`}
               onClick={handleRedo}
             >
               <svg
@@ -3871,6 +4728,9 @@ export default function App() {
             onToggleRun={handleToggleRun}
             onStep={handleStep}
             onReset={handleReset}
+            speed={speed}
+            slowAt={slowAt}
+            onSpeedChange={setSpeed}
             system={snapshot?.system ?? EMPTY_SYSTEM}
             lost={lostRps}
             empty={topology.nodes.length === 0}
@@ -3940,6 +4800,13 @@ export default function App() {
                   </svg>
                 </span>
                 {formatStars(stars)}
+              </span>
+            )}
+            {/* Until a count arrives, or when it never does, the reserved
+                room carries the name instead of standing empty. */}
+            {stars === null && (
+              <span className="app-source-name" aria-hidden="true">
+                GitHub
               </span>
             )}
           </a>
@@ -4033,7 +4900,7 @@ export default function App() {
             <MainMenu
               open={menuOpen}
               onClose={() => setMenuOpen(false)}
-              items={menuItems}
+              items={allMenuItems}
             />
           </div>
         </div>
@@ -4049,7 +4916,7 @@ export default function App() {
       <div
         className={
           'app-body' +
-          (layout.library ? ' has-library' : '') +
+          (libraryOpen ? ' has-library' : '') +
           (inspectorVisible ? ' has-inspector' : '') +
           (metricsVisible ? ' has-metrics' : '') +
           (challenge || breakShown || incident ? ' has-challenge' : '')
@@ -4071,28 +4938,6 @@ export default function App() {
           } as CSSProperties
         }
       >
-        <PanelSlot
-          open={layout.library}
-          edge="left"
-          onDismiss={phone ? toggleLibrary : undefined}
-        >
-          <Palette
-            onAdd={handlePaletteAdd}
-            onAddAnnotation={handlePaletteAnnotation}
-            armedTool={armedTool}
-          />
-          <PanelResizer
-            edge="left"
-            property="--rail-w"
-            size={layout.railW}
-            min={PANEL_LIMITS.railW.min}
-            max={PANEL_LIMITS.railW.max}
-            onCommit={(railW) => setLayout((l) => ({ ...l, railW }))}
-            onReset={() => setLayout((l) => ({ ...l, railW: PANEL_LIMITS.railW.base }))}
-            label="Resize the components rail"
-          />
-        </PanelSlot>
-
         <main className="app-stage">
           {/*
             The canvas plus the chrome that floats OVER it. The toggles are
@@ -4114,7 +4959,9 @@ export default function App() {
             browser would leave the app to display the JSON.
           */}
           <div
+            id="diagram"
             className="stage-canvas"
+            tabIndex={-1}
             onDragOver={handleFileDragOver}
             onDrop={handleFileDrop}
           >
@@ -4139,10 +4986,13 @@ export default function App() {
               onMoveEnd={handleMoveEnd}
               onConnect={handleConnect}
               onDeleteSelection={handleDeleteSelection}
-              onDropNode={handleAddNode}
+              onDropNode={handleDropNode}
               onRename={handleRename}
               onDuplicateForDrag={handleDuplicateForDrag}
               onPaste={handlePaste}
+              onContextMenu={handleCanvasMenu}
+              onClipboardWrite={setCopied}
+              menuApiRef={menuApiRef}
               onMoveAnnotation={handleMoveAnnotation}
               onResizeSection={handleResizeSection}
               onResizeNote={handleResizeNote}
@@ -4160,16 +5010,33 @@ export default function App() {
               exportSvgRef={exportSvgRef}
               onToolChange={setArmedTool}
               fitSignal={fitNonce}
+              frameKey={barBottom}
               visibleRef={stageSafeRef}
               breakMarks={breakMarks}
               emptyActions={emptyActions}
-              fitTight={challenge !== undefined}
+              narrowFit={phone}
+              onFitClipped={handleFitClipped}
+              reveal={reveal}
+              onReselect={showInspector}
               spotlightId={
                 (tourShown ? tour.spotlight : null) ?? spotlightOf(shownFinding)
               }
               spotlightKey={shownFinding?.atMs ?? null}
             />
             <RouteAlert routes={routes} nodeNames={nodeNames} />
+            {presenting ? (
+              <PresentBar
+                part={presentPart}
+                coarse={coarse}
+                canFullscreen={canFullscreen()}
+                fullscreen={fullscreen}
+                onCrash={presentCrash}
+                onSlow={presentSlow}
+                onFix={presentFix}
+                onFullscreen={toggleFullscreen}
+                onStop={stopPresenting}
+              />
+            ) : null}
             {/* Hidden in a challenge, where finding it is the exercise. */}
             {!challenge && topology.nodes.length > 0 ? (
               <FindProblem
@@ -4210,11 +5077,13 @@ export default function App() {
                 onStartOver={check.key !== freshKey ? handleStartOver : null}
                 onNext={next ? handleNextChallenge : null}
                 onLeave={handleLeaveChallenge}
+                onCopyLink={handleCopyChallengeLink}
                 focusSignal={panelFocus}
                 nameOf={nameOf}
                 besideInspector={inspectorVisible && !phone}
-                foldOnStart={phone}
                 onSheetResize={handleSheetResize}
+                fresh={check.key === freshKey}
+                liveMs={snapshot ? snapshot.system.timeMs : null}
               />
             ) : null}
             {incident ? (
@@ -4237,7 +5106,9 @@ export default function App() {
                 onClose={handleCloseBreak}
                 onWatch={handleWatchBreak}
                 onReplayLink={handleBreakLink}
-                watchLine={breakWatchLine}
+                watch={breakWatchView}
+                watchAtMs={breakWatchView ? engine.now : 0}
+                onStopWatch={endBreakWatch}
                 foldOnStart={false}
                 onSheetResize={handleSheetResize}
               />
@@ -4246,9 +5117,9 @@ export default function App() {
               type="button"
               className="btn btn-sm btn-icon stage-toggle stage-toggle-library"
               data-chrome="layout"
-              aria-expanded={layout.library}
-              aria-label={layout.library ? 'Hide components' : 'Show components'}
-              title={layout.library ? 'Hide components (C)' : 'Show components (C)'}
+              aria-expanded={libraryOpen}
+              aria-label={libraryOpen ? 'Hide components' : 'Show components'}
+              title={libraryOpen ? 'Hide components (C)' : 'Show components (C)'}
               onClick={toggleLibrary}
             >
               <PanelGlyph edge="left" />
@@ -4296,6 +5167,9 @@ export default function App() {
                 nodeNames={nodeNames}
                 nodes={topology.nodes}
                 routes={routes}
+                pin={pinned}
+                rps={offeredRps}
+                onPin={setPinned}
                 idle={
                   !topology.nodes.some((n) => n.kind === 'client')
                     ? 'no-client'
@@ -4305,6 +5179,7 @@ export default function App() {
                 }
               />
             ) : null}
+            {snapshot ? <StripCue /> : null}
             <PanelResizer
               edge="bottom"
               property="--strip-h"
@@ -4320,10 +5195,39 @@ export default function App() {
           </PanelSlot>
         </main>
 
+        {/*
+          The rails come after the canvas in the page, though the components
+          rail is drawn on its left: Tab goes bar, diagram, then panels, and
+          the canvas was 82 presses in behind 33 rail rows. They float, so the
+          order changes nothing on screen.
+        */}
+        <PanelSlot
+          open={libraryOpen}
+          edge="left"
+          onDismiss={phone ? toggleLibrary : undefined}
+        >
+          <Palette
+            onAdd={handlePaletteAdd}
+            onAddAnnotation={handlePaletteAnnotation}
+            armedTool={armedTool}
+          />
+          <PanelResizer
+            edge="left"
+            property="--rail-w"
+            size={layout.railW}
+            min={PANEL_LIMITS.railW.min}
+            max={PANEL_LIMITS.railW.max}
+            onCommit={(railW) => setLayout((l) => ({ ...l, railW }))}
+            onReset={() => setLayout((l) => ({ ...l, railW: PANEL_LIMITS.railW.base }))}
+            label="Resize the components rail"
+          />
+        </PanelSlot>
+
         <PanelSlot
           open={inspectorVisible}
           edge="right"
           onDismiss={phone ? toggleInspector : undefined}
+          scrim={false}
         >
           <Inspector
             node={selectedNode}
@@ -4339,6 +5243,8 @@ export default function App() {
             suggestions={challenge === undefined}
             faults={inspectorFaults}
             onEdgeLoss={handleEdgeLoss}
+            onDuplicate={handleDuplicate}
+            onCopy={handleCopySelection}
           />
           <PanelResizer
             edge="right"
@@ -4351,6 +5257,73 @@ export default function App() {
             label="Resize the inspector"
           />
         </PanelSlot>
+
+        {/*
+        The toasts sit inside .app-body so its has-* classes can centre them
+        on the uncovered canvas, above the zoom row, and on a phone just
+        under the header (App.css). Fixed at the window's foot they covered
+        the stats bar, the charts toggle and the phone's tab bar.
+      */}
+        {toast || importError ? (
+          <div className="app-toast-dock" data-chrome="toast">
+            {/*
+            Undo/redo receipt. role="status" (polite live region) so a screen
+            reader hears the same confirmation a sighted user sees; keyed by id
+            so rapid consecutive undos restart the entrance rather than sitting
+            still on a message that appears not to change.
+          */}
+            {toast ? (
+              <div key={`toast-${toast.id}`} className="app-toast" role="status">
+                {toast.text}
+                {toast.action ? (
+                  <button
+                    type="button"
+                    className="btn btn-sm app-toast-action"
+                    onClick={toast.action.run}
+                  >
+                    {toast.action.label}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            {/*
+            A refused import. role="alert" rather than "status" because this
+            reports a failure the student needs to notice, and it sits longer
+            than the toast does: the sentence names what was wrong with the
+            file, and there is nothing else on screen that changed to say so.
+            Nothing on the canvas moved, which is the point.
+          */}
+            {importError ? (
+              <div className="app-toast app-toast-error" role="alert">
+                {importError}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <CommandPalette
+          open={paletteOpen}
+          onClose={() => setPaletteOpen(false)}
+          commands={paletteCommands}
+          recent={recentCommands}
+          onRun={runCommand}
+        />
+
+        {menu ? (
+          <CanvasMenu
+            key={menu.seq}
+            request={menu.req}
+            topology={topology}
+            snapshot={snapshot}
+            selectedIds={selectedIds}
+            engine={engine}
+            faults={faultActions}
+            canPaste={copied !== null || (!coarse && !!navigator.clipboard?.readText)}
+            coarse={coarse}
+            actions={menuActions}
+            onClose={closeMenu}
+          />
+        ) : null}
       </div>
 
       {/*
@@ -4371,7 +5344,7 @@ export default function App() {
         <button
           type="button"
           className="app-tab"
-          aria-expanded={layout.library}
+          aria-expanded={libraryOpen}
           onClick={toggleLibrary}
         >
           <PanelGlyph edge="left" />
@@ -4409,31 +5382,6 @@ export default function App() {
         present. Both of these portal to <body>, so their position here is
         about ownership, not stacking.
       */}
-      {/*
-        Undo/redo receipt. role="status" (polite live region) so a screen
-        reader hears the same confirmation a sighted user sees; keyed by id so
-        rapid consecutive undos restart the entrance rather than sitting
-        still on a message that appears not to change.
-      */}
-      {toast ? (
-        <div key={`toast-${toast.id}`} className="app-toast" role="status">
-          {toast.text}
-        </div>
-      ) : null}
-
-      {/*
-        A refused import. role="alert" rather than "status" because this
-        reports a failure the student needs to notice, and it sits longer
-        than the toast does: the sentence names what was wrong with the
-        file, and there is nothing else on screen that changed to say so.
-        Nothing on the canvas moved, which is the point.
-      */}
-      {importError ? (
-        <div className="app-toast app-toast-error" role="alert">
-          {importError}
-        </div>
-      ) : null}
-
       <TooltipLayer />
       <Glossary open={glossaryOpen} onClose={closeGlossary} focusId={glossaryFocusId} />
       <Shortcuts open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />

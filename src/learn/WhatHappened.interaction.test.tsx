@@ -144,6 +144,24 @@ describe('What just happened', () => {
     expect(live?.textContent).toBe('');
   });
 
+  it('reads out the newest line, so a fix is not announced as the crash', () => {
+    const engine = new Engine(topology, 1);
+    play(engine, 2);
+    act(() => {
+      engine.injectFailure(db, 'crash');
+    });
+    play(engine, 0.1);
+    const live = container.querySelector('[role="status"]');
+    expect(live?.textContent).toBe('What just happened: Database crashed.');
+    act(() => {
+      engine.clearFailure(db);
+    });
+    play(engine, 0.1);
+    expect(live?.textContent).toBe(
+      'What just happened: The fault on Database was cleared.',
+    );
+  });
+
   it('folds on Escape and opens again when something new goes wrong', () => {
     const engine = new Engine(topology, 1);
     play(engine, 1);

@@ -22,7 +22,10 @@ import type { CableInfo } from './faultWiring';
  *
  * The buttons that would change nothing are aria-disabled rather than
  * disabled. Pressing Crash turns Crash into a no-op, and a real `disabled`
- * would drop keyboard focus onto the page the moment it was pressed.
+ * would drop keyboard focus onto the page the moment it was pressed. The
+ * fault in force is not greyed out like the rest: it reads as pressed, in
+ * the danger colours, and says what is happening ("Crashed"), since a grey
+ * button read as the one thing you could not do.
  * ------------------------------------------------------------------ */
 
 export interface NodeFaultControlsProps {
@@ -84,7 +87,8 @@ export function NodeFaultControls({
 
   const crashed = fault?.kind === 'crash';
   const oneDown = fault?.kind === 'crash-instance';
-  const slowInert = !canSlow || (fault?.kind === 'slow' && fault.factor === factor);
+  const slowSame = fault?.kind === 'slow' && fault.factor === factor;
+  const slowInert = !canSlow || slowSame;
   const glitchSame = fault?.kind === 'errors' && fault.rate === rate;
   const healthy = fault === null;
 
@@ -102,10 +106,11 @@ export function NodeFaultControls({
           type="button"
           className="btn btn-sm btn-danger"
           aria-disabled={crashed}
+          aria-pressed={crashed}
           aria-describedby={`${id}-crash`}
           onClick={guarded(crashed, onCrash)}
         >
-          Crash
+          {crashed ? 'Crashed' : 'Crash'}
         </button>
         <p id={`${id}-crash`} className="ins-hint">
           Stops it completely. Work it was holding is lost.
@@ -118,10 +123,11 @@ export function NodeFaultControls({
             type="button"
             className="btn btn-sm btn-danger"
             aria-disabled={oneDown}
+            aria-pressed={oneDown}
             aria-describedby={`${id}-crash-one`}
             onClick={guarded(oneDown, onCrashOne)}
           >
-            Crash one instance
+            {oneDown ? 'One instance down' : 'Crash one instance'}
           </button>
           <p id={`${id}-crash-one`} className="ins-hint">
             Stops one of its {instances} machines. The work on that machine is lost, and
@@ -152,10 +158,11 @@ export function NodeFaultControls({
             type="button"
             className="btn btn-sm btn-danger"
             aria-disabled={slowInert}
+            aria-pressed={slowSame}
             aria-describedby={`${id}-slow`}
             onClick={guarded(slowInert, () => onSlow(factor))}
           >
-            Slow
+            {slowSame ? 'Slowed' : 'Slow'}
           </button>
         </div>
         <p id={`${id}-slow`} className="ins-hint">
@@ -186,10 +193,11 @@ export function NodeFaultControls({
             type="button"
             className="btn btn-sm btn-danger"
             aria-disabled={glitchSame}
+            aria-pressed={glitchSame}
             aria-describedby={`${id}-glitch`}
             onClick={guarded(glitchSame, () => onGlitch(rate))}
           >
-            Glitch
+            {glitchSame ? 'Glitching' : 'Glitch'}
           </button>
         </div>
         <p id={`${id}-glitch`} className="ins-hint">

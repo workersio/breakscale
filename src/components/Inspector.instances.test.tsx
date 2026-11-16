@@ -151,7 +151,8 @@ describe('the fleet in the inspector', () => {
       { atMs: 2000, action: 'inject', nodeId: 'db', kind: 'crash-instance' },
     ]);
     expect(container.textContent).toContain('One instance crashed at');
-    expect(button('Crash one instance')?.getAttribute('aria-disabled')).toBe('true');
+    expect(button('One instance down')?.getAttribute('aria-disabled')).toBe('true');
+    expect(button('One instance down')?.getAttribute('aria-pressed')).toBe('true');
     // The ceiling counts the machines still up.
     expect(container.textContent).toContain('2 running instances x 12 slots');
   });

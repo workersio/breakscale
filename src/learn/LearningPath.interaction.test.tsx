@@ -219,14 +219,14 @@ describe('the learning path', () => {
     expect(document.querySelector('[aria-labelledby="ex-title"]')).toBeNull();
   });
 
-  it('goes back to the next step without reloading it when it is already open', () => {
+  it('says the next step is already open instead of offering to reopen it', () => {
     localStorage.clear();
     mount();
     const d = openPath();
-    press(must('Back to Single server', d));
-    advance(400);
-    expect(dialog()).toBeNull();
-    expect(document.querySelector('.app-toast')).toBeNull();
+    expect(d.querySelector('.lp-next-here')?.textContent).toBe(
+      "You're on this one: Single server.",
+    );
+    expect(d.querySelector('.lp-next-open')).toBeNull();
   });
 
   it('works with a finger', () => {

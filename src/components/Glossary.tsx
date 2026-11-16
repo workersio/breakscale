@@ -10,6 +10,7 @@ import {
 } from '../content/glossary';
 import { closeTooltip } from './Tooltip';
 import { usePresence } from './presence';
+import { isCoarsePointer } from '../useCoarsePointer';
 import './Glossary.css';
 
 /* ==========================================================================
@@ -183,7 +184,9 @@ export function Glossary({ open, onClose, focusId }: GlossaryProps) {
 
     // Focus the search box: the panel's primary job is lookup, and a student
     // who opened it almost always arrived with a word in mind.
-    searchRef.current?.focus();
+    // Not on a touch screen, where it raises the keyboard over the list.
+    if (isCoarsePointer()) sheetRef.current?.focus();
+    else searchRef.current?.focus();
 
     /* Captured into locals for the cleanup rather than read off the refs when
        it runs. By then the sheet has unmounted and sheetRef.current is null,
@@ -336,6 +339,7 @@ export function Glossary({ open, onClose, focusId }: GlossaryProps) {
       <div
         ref={sheetRef}
         className="gl-sheet"
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="gl-title"

@@ -76,7 +76,7 @@
   }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   /* A phone has no corner toggles and its panels are sheets, so the line
      takes the width of the screen whatever is open. The canvas already
      starts below the fixed header here, so the offset is only a gap. */

@@ -450,3 +450,8 @@ input.gl-search-input {
     right: calc(var(--sp-1) * -1);
   }
 }
+
+/* Focused as a whole on a touch screen instead of its search field. */
+.gl-sheet:focus {
+  outline: none;
+}

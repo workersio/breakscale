@@ -21,6 +21,7 @@
   align-items: flex-end;
   pointer-events: none;
   transition:
+    left var(--dur-base) var(--ease),
     right var(--dur-base) var(--ease),
     bottom var(--dur-base) var(--ease);
 }
@@ -36,9 +37,25 @@
 /* "Can you break it?" takes the right-hand column under the bar, the way a
    brief does (this panel is hidden in a brief), so this sits beside it. On
    a phone the break panel is a bottom sheet; see the phone block below. */
-@media (min-width: 721px) {
+@media (min-width: 721px) and (min-height: 501px),
+  (min-width: 721px) and (pointer: fine),
+  (min-width: 721px) and (pointer: none) {
   .app-body.has-challenge:not(.has-inspector) .wh {
     right: calc(var(--chal-w) + var(--sp-3) * 2);
+  }
+
+  /* Its left edge is the open rail's, so a narrow window shrinks the panel
+     rather than sliding its title under the rail. */
+  .wh {
+    left: var(--sp-3);
+  }
+
+  .app-body.has-library .wh {
+    left: calc(var(--rail-w) + var(--sp-3) * 2);
+  }
+
+  .wh-panel {
+    max-width: 100%;
   }
 }
 
@@ -121,7 +138,7 @@
   font-weight: var(--fw-med);
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   .wh,
   .app-body.has-inspector .wh,
   .app-body.has-metrics .wh {

@@ -268,7 +268,7 @@
    Settings. Only the list scrolls. The header wraps its buttons under the
    title once both no longer fit on one line, so the title never wraps
    beside them. app-sheet-in / app-sheet-out are declared in App.css. */
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   .ex-root {
     place-items: end stretch;
     padding: 0;
@@ -311,4 +311,9 @@
   .ex-item {
     transition: none;
   }
+}
+
+/* Focused as a whole on a touch screen instead of its search field. */
+.ex-card:focus {
+  outline: none;
 }

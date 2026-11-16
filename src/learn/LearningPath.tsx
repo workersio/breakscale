@@ -157,18 +157,20 @@ export function LearningPath({
           {next ? (
             <div className="lp-next">
               <p className="label lp-next-label">Up next</p>
-              <button
-                ref={nextRef}
-                type="button"
-                className="btn btn-primary lp-next-open"
-                onClick={() => (isOpenNow(next) ? onClose() : openStep(next))}
-              >
-                {/* Already on the canvas: going back to it, not reloading it
-                    over whatever the student has done since. */}
-                {isOpenNow(next)
-                  ? `Back to ${nameOf(next)}`
-                  : `${next.kind === 'challenge' ? 'Start' : 'Open'} ${nameOf(next)}`}
-              </button>
+              {/* Already on the canvas: nothing to open, and a button that
+                  only closed the dialog read like it would reload it. */}
+              {isOpenNow(next) ? (
+                <p className="lp-next-here">{`You're on this one: ${nameOf(next)}.`}</p>
+              ) : (
+                <button
+                  ref={nextRef}
+                  type="button"
+                  className="btn btn-primary lp-next-open"
+                  onClick={() => openStep(next)}
+                >
+                  {`${next.kind === 'challenge' ? 'Start' : 'Open'} ${nameOf(next)}`}
+                </button>
+              )}
               <p className="lp-next-learn">{next.learn}</p>
             </div>
           ) : (

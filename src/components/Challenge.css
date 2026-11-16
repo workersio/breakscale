@@ -238,6 +238,38 @@
   white-space: nowrap;
 }
 
+/* What the goal list measured, so its numbers are never taken for the
+   bar's: the check plays the design on its own, from the start. */
+.chal-goals-title {
+  margin: 0 0 calc(var(--sp-2) * -1);
+  color: var(--text-faint);
+}
+
+/* The bar's reading for the same goal, under the checked one. Dim and
+   without a state: the live run does not get to say a goal is met. */
+.chal-goal-now {
+  grid-column: 1 / -1;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.chal-goal-now .num {
+  font-weight: var(--fw-num);
+}
+
+/* How long until the brief's trouble reaches the run on screen, while the
+   verdict above it is about runs that already went through it. */
+.chal-countdown {
+  margin: calc(var(--sp-2) * -1) 0 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.chal-countdown .num {
+  color: var(--text);
+  font-weight: var(--fw-num);
+}
+
 .chal-verdict {
   margin: 0;
   font-size: var(--fs-sm);
@@ -265,7 +297,8 @@
 
 .chal-verdict.is-ok,
 .chal-verdict.is-danger,
-.chal-verdict.is-warn {
+.chal-verdict.is-warn,
+.chal-verdict.is-base {
   color: var(--text);
 }
 
@@ -404,9 +437,42 @@
 /* There the folded panel is a strip across the top of the uncovered canvas,
    so a fit starts below it. --chal-sheet-h is the panel's measured height,
    written onto the sentinel by the shell (see handleSheetResize). */
-@media (min-width: 721px) {
+@media (min-width: 721px) and (min-height: 501px),
+  (min-width: 721px) and (pointer: fine),
+  (min-width: 721px) and (pointer: none) {
   .app-body.has-challenge.has-inspector .stage-safe {
     top: calc(var(--bar-clear) + var(--chal-sheet-h, 0px) + var(--sp-3));
+  }
+
+  /* The inspector's toggle lives in the same top-right corner as the panel,
+     and the panel covered it, open or folded. It steps to the panel's left
+     edge instead. */
+  .app-body.has-challenge .stage-toggle-inspector {
+    right: calc(var(--chal-w) + var(--sp-3) * 2);
+  }
+
+  .app-body.has-challenge.has-inspector .stage-toggle-inspector {
+    right: calc(var(--ins-w) + var(--chal-w) + var(--sp-3) * 3);
+  }
+
+  /* The panel stops above the zoom row at the canvas's foot, which it ran
+     over at 1024 (Fit and zoom out could not be pressed). --zoom-row is the
+     row's height, set for touch below. */
+  .chal {
+    max-height: calc(100% - var(--bar-clear) - var(--sp-3) * 3 - var(--zoom-row, 32px));
+  }
+
+  .app-body.has-metrics .chal {
+    max-height: calc(
+      100% - var(--bar-clear) - var(--strip-shown) - var(--sp-3) * 4 -
+        var(--zoom-row, 32px)
+    );
+  }
+}
+
+@media (min-width: 721px) and (pointer: coarse) {
+  .app-body {
+    --zoom-row: 52px;
   }
 }
 
@@ -418,7 +484,7 @@
    it. It scrolls inside itself so every button can be reached at 390px.
    Below the other sheets: opening one of those covers this rather than
    stacking two panels on the canvas. */
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   .app-body {
     --chal-fold-h: 60px;
   }

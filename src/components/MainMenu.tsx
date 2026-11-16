@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef } from 'react';
+import { Fragment, useCallback, useEffect, useId, useRef } from 'react';
 import { usePresence } from './presence';
 import './MainMenu.css';
 
@@ -24,6 +24,8 @@ export interface MenuItem {
   /** Printed on the right, so a binding is learnable from the menu itself. */
   hint?: string;
   onSelect: () => void;
+  /** Draws a rule after this row, closing a group. */
+  divider?: boolean;
 }
 
 export interface MainMenuProps {
@@ -125,38 +127,40 @@ export function MainMenu({ open, onClose, items }: MainMenuProps) {
       }}
     >
       {items.map((item) => (
-        <button
-          key={item.label}
-          type="button"
-          role="menuitem"
-          className="mn-item"
-          onClick={() => {
-            // Closed BEFORE the action runs, so a panel the action opens is
-            // not competing with a menu still on screen.
-            onClose();
-            item.onSelect();
-          }}
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
+        <Fragment key={item.label}>
+          <button
+            type="button"
+            role="menuitem"
+            className="mn-item"
+            onClick={() => {
+              // Closed BEFORE the action runs, so a panel the action opens is
+              // not competing with a menu still on screen.
+              onClose();
+              item.onSelect();
+            }}
           >
-            <path d={item.icon} />
-          </svg>
-          <span className="mn-label">{item.label}</span>
-          {item.hint && (
-            <kbd className="mn-hint" aria-hidden="true">
-              {item.hint}
-            </kbd>
-          )}
-        </button>
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d={item.icon} />
+            </svg>
+            <span className="mn-label">{item.label}</span>
+            {item.hint && (
+              <kbd className="mn-hint" aria-hidden="true">
+                {item.hint}
+              </kbd>
+            )}
+          </button>
+          {item.divider && <div className="mn-sep" role="separator" />}
+        </Fragment>
       ))}
     </div>
   );

@@ -2,13 +2,17 @@ import { describe, expect, it } from 'vitest';
 import {
   FIT_MAX,
   FIT_MIN,
+  FIT_MIN_EXPLICIT,
   FIT_MIN_NARROW,
   FIT_MIN_TIGHT,
+  clearOfChrome,
   cuePan,
+  detailBand,
+  fitClips,
   fitViewport,
   overflowOf,
 } from './fit';
-import type { FitBounds, FitRect } from './fit';
+import type { FitBounds, FitHow, FitRect } from './fit';
 
 /* Hold the line's three cards in a row: client at x=40, database at x=660,
    184 wide and 88 tall. 804 x 88 world px. */
@@ -25,8 +29,8 @@ const above = (sheet: number): FitRect => ({
 });
 
 /** The fitted content's rect on screen. */
-function onScreen(b: FitBounds, surface: FitRect, view: FitRect, tight = false) {
-  const v = fitViewport(b, surface, view, tight);
+function onScreen(b: FitBounds, surface: FitRect, view: FitRect, how: FitHow = {}) {
+  const v = fitViewport(b, surface, view, how);
   if (!v) throw new Error('no fit');
   return {
     k: v.k,
@@ -88,11 +92,11 @@ describe('fit with the challenge sheet up on a phone', () => {
 describe('fit on a desktop', () => {
   const surface: FitRect = { left: 0, top: 0, width: 1440, height: 900 };
 
-  it('keeps the 0.7 floor, even when open rails leave less than 720px', () => {
-    // Rail on the left, challenge panel on the right.
-    const view: FitRect = { left: 224, top: 0, width: 500, height: 900 };
+  it('keeps the wide floor, not the phone one, when open rails leave less than 720px', () => {
+    // Rail on the left, challenge panel on the right. 804 world px in 452.
+    const view: FitRect = { left: 224, top: 0, width: 300, height: 900 };
     const r = onScreen(threeInARow, surface, view);
-    expect(r.k).toBe(FIT_MIN);
+    expect(r.k).toBe(FIT_MIN_TIGHT);
   });
 
   it('frames the diagram clear of the side panel when it fits', () => {
@@ -119,23 +123,18 @@ describe('fit during a brief on a desktop', () => {
   const beside: FitRect = { left: 224, top: 80, width: 852, height: 820 };
 
   it('keeps every card clear of the brief, zooming out past 0.7 to do it', () => {
-    const r = onScreen(loudAndQuiet, surface, beside, true);
+    const r = onScreen(loudAndQuiet, surface, beside);
     expect(r.k).toBeLessThan(FIT_MIN);
     expect(r.k).toBeGreaterThanOrEqual(FIT_MIN_TIGHT);
     expect(r.left).toBeGreaterThanOrEqual(beside.left);
     expect(r.right).toBeLessThanOrEqual(beside.left + beside.width);
   });
 
-  it('left the last cards under the brief before, which is the bug', () => {
-    const r = onScreen(loudAndQuiet, surface, beside);
-    expect(r.right).toBeGreaterThan(beside.left + beside.width);
-  });
-
   it('takes a tighter margin first when that keeps the numbers', () => {
     // 760 wide fits a 700px room at 0.7 only with the 24px margin.
     const mid: FitBounds = { minX: 0, minY: 0, maxX: 960, maxY: 88 };
     const room: FitRect = { ...beside, width: 720 };
-    const r = onScreen(mid, surface, room, true);
+    const r = onScreen(mid, surface, room);
     expect(r.k).toBeGreaterThanOrEqual(FIT_MIN);
     expect(r.left).toBeGreaterThanOrEqual(room.left);
     expect(r.right).toBeLessThanOrEqual(room.left + room.width);
@@ -143,22 +142,62 @@ describe('fit during a brief on a desktop', () => {
 
   it('never goes below the tight floor, and starts at the left when it spills', () => {
     const room: FitRect = { ...beside, width: 500 };
-    const r = onScreen(loudAndQuiet, surface, room, true);
+    const r = onScreen(loudAndQuiet, surface, room);
     expect(r.k).toBe(FIT_MIN_TIGHT);
     expect(r.left).toBeCloseTo(room.left + 24, 5);
   });
+});
 
-  it('leaves an example at the 0.7 floor', () => {
-    // FIT_MIN's reason still holds outside a brief: the numbers stay, and
-    // the overflow runs off to the right rather than under the rail.
-    const r = onScreen(loudAndQuiet, surface, beside);
-    expect(r.k).toBe(FIT_MIN);
-    expect(r.left).toBeCloseTo(beside.left + 64, 5);
+describe('a fit the reader asked for', () => {
+  const surface: FitRect = { left: 0, top: 0, width: 1024, height: 768 };
+
+  it('shows the whole diagram past the auto floor', () => {
+    const room: FitRect = { left: 236, top: 120, width: 500, height: 600 };
+    const auto = onScreen(loudAndQuiet, surface, room);
+    expect(auto.k).toBe(FIT_MIN_TIGHT);
+    const asked = onScreen(loudAndQuiet, surface, room, { explicit: true });
+    expect(asked.k).toBeLessThan(FIT_MIN_TIGHT);
+    expect(asked.left).toBeGreaterThanOrEqual(room.left);
+    expect(asked.right).toBeLessThanOrEqual(room.left + room.width);
   });
 
-  it('means nothing on a phone, which has its own floor', () => {
-    const r = onScreen(loudAndQuiet, phoneSurface, above(sheetFolded), true);
-    expect(r.k).toBe(FIT_MIN_NARROW);
+  it('moves the camera on a phone where auto-fit had stopped at its floor', () => {
+    // Wider than 390px at 0.38, so auto-fit stops at its floor and spills.
+    const wide: FitBounds = { minX: 0, minY: 0, maxX: 1200, maxY: 600 };
+    const view = above(sheetFolded);
+    const auto = onScreen(wide, phoneSurface, view);
+    expect(auto.k).toBe(FIT_MIN_NARROW);
+    const asked = onScreen(wide, phoneSurface, view, { explicit: true });
+    expect(asked.k).toBeLessThan(FIT_MIN_NARROW);
+    expect(asked.right).toBeLessThanOrEqual(390);
+  });
+
+  it('stops at its own floor', () => {
+    const huge: FitBounds = { minX: 0, minY: 0, maxX: 20000, maxY: 300 };
+    expect(onScreen(huge, surface, surface, { explicit: true }).k).toBe(
+      FIT_MIN_EXPLICIT,
+    );
+  });
+});
+
+describe('a phone held sideways', () => {
+  // 844x390: the surface is wider than 720 and is still a phone.
+  const surface: FitRect = { left: 0, top: 52, width: 844, height: 282 };
+
+  it('takes the phone floor when the shell says it is narrow', () => {
+    const tall: FitBounds = { minX: 0, minY: 0, maxX: 1900, maxY: 600 };
+    expect(onScreen(tall, surface, surface).k).toBe(FIT_MIN_TIGHT);
+    const r = onScreen(tall, surface, surface, { narrow: true });
+    expect(r.k).toBeLessThan(FIT_MIN_TIGHT);
+    expect(r.k).toBeGreaterThanOrEqual(FIT_MIN_NARROW);
+  });
+});
+
+describe('fitClips', () => {
+  it('says whether the diagram runs past the room at that zoom', () => {
+    const room: FitRect = { left: 0, top: 0, width: 500, height: 400 };
+    expect(fitClips(loudAndQuiet, room, 0.3)).toBe(false);
+    expect(fitClips(loudAndQuiet, room, 0.5)).toBe(true);
   });
 });
 
@@ -196,5 +235,57 @@ describe('edge cues', () => {
   it('pans back the other way', () => {
     const box = { left: -200, top: 400, right: 366, bottom: 600 };
     expect(box.left + cuePan('left', box, view)).toBeCloseTo(24, 5);
+  });
+});
+
+describe('the controls over the canvas', () => {
+  const view: FitRect = { left: 236, top: 80, width: 1204, height: 820 };
+  const hint = { left: 494, top: 80, right: 946, bottom: 112 };
+  const ledger = { left: 292, top: 856, right: 1030, bottom: 888 };
+
+  it('takes a control along the top or foot out of the view', () => {
+    expect(clearOfChrome(view, [hint, ledger])).toEqual({
+      left: 236,
+      top: 120,
+      width: 1204,
+      height: 728,
+    });
+  });
+
+  it('cuts a control near a side from that side when that costs less', () => {
+    const findProblem = { left: 248, top: 120, right: 388, bottom: 152 };
+    // A wide, short diagram gives up height cheaply, a tall one width.
+    expect(clearOfChrome(view, [findProblem], { w: 2000, h: 500 }).top).toBe(160);
+    const tall = clearOfChrome(view, [findProblem], { w: 500, h: 2000 });
+    expect(tall.top).toBe(80);
+    expect(tall.left).toBe(236 + 140 + 20);
+  });
+
+  it('ignores controls outside the view, and never takes half of it', () => {
+    expect(clearOfChrome(view, [{ left: 0, top: 0, right: 100, bottom: 40 }])).toEqual(
+      view,
+    );
+    const huge = { left: 300, top: 80, right: 900, bottom: 600 };
+    expect(clearOfChrome(view, [huge])).toEqual(view);
+  });
+
+  it('names the detail band a zoom falls in', () => {
+    expect([
+      detailBand(0.8),
+      detailBand(0.7),
+      detailBand(0.6),
+      detailBand(0.4),
+    ]).toEqual([2, 2, 1, 0]);
+  });
+});
+
+describe('a diagram too tall for the view', () => {
+  it('starts at the top margin instead of being centred', () => {
+    const surface: FitRect = { left: 0, top: 0, width: 1024, height: 768 };
+    const view: FitRect = { left: 0, top: 168, width: 1024, height: 600 };
+    const tall: FitBounds = { minX: 0, minY: 0, maxX: 800, maxY: 2000 };
+    const v = fitViewport(tall, surface, view)!;
+    expect(v.k).toBe(FIT_MIN_TIGHT);
+    expect(v.y).toBe(168 + 24);
   });
 });

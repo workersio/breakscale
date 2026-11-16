@@ -276,6 +276,18 @@ export class SessionHistory {
     return this.gestureBase !== null;
   }
 
+  /** A streamed edit is waiting to settle into an entry of its own. */
+  get settling(): boolean {
+    return this.pending !== null;
+  }
+
+  /** The newest undoable entry, compared by identity: it says whether a
+   *  given edit is still the one Undo would take back. Depth cannot, since
+   *  the stack stops growing at the limit. */
+  get lastEntry(): Readonly<HistoryEntry> | null {
+    return this.past[this.past.length - 1] ?? null;
+  }
+
   /** Test/introspection accessors; the stacks themselves stay private. */
   get undoDepth(): number {
     return this.past.length;

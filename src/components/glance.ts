@@ -1,12 +1,14 @@
 /**
  * The glance line: a node's name and primary value, counter-scaled so they
- * stay readable when a touch screen is zoomed out past DETAIL_ZOOM.
+ * stay readable when the canvas is zoomed out past DETAIL_ZOOM.
  *
- * Auto-fit on a phone lands between 0.38 and 0.7, where the full card drops
- * its numbers and the name renders at 5 or 6 screen px. A student looking at
- * a phone then sees boxes, not a system under load. Below DETAIL_ZOOM on a
- * coarse pointer the card instead draws two lines sized in SCREEN px: the
- * name at 11 and the value at 12, so "99% busy" reads at any fitted zoom.
+ * Auto-fit on a phone lands between 0.38 and 0.7, and a wide example on a
+ * laptop between 0.5 and 0.7, where the full card drops its numbers and the
+ * name renders at 5 or 6 screen px. The reader then sees boxes, not a
+ * system under load. Below DETAIL_ZOOM the card instead draws two lines
+ * sized in SCREEN px: the name at 11 and the value at 12, so "99% busy"
+ * reads at any fitted zoom. It was touch only, back when a laptop never
+ * fitted below 0.7.
  *
  * Pure arithmetic, kept out of Canvas.tsx so it can be tested without
  * mounting the canvas.
@@ -31,8 +33,8 @@ const METER_Y = 80;
  * else. Quantised to 0.05 so a pinch re-renders the cards at a few dozen
  * steps rather than on every frame.
  */
-export function glanceScale(k: number, coarse: boolean): number {
-  if (!coarse || !(k > 0) || k >= DETAIL_ZOOM) return 0;
+export function glanceScale(k: number): number {
+  if (!(k > 0) || k >= DETAIL_ZOOM) return 0;
   const s = 1 / Math.max(k, FIT_MIN_NARROW);
   return Math.round(s * 20) / 20;
 }
@@ -65,4 +67,17 @@ export function glanceLayout(s: number): GlanceLayout {
     ),
     capGap: 4 * s,
   };
+}
+
+/** The smallest tap target a finger can hit reliably, in screen px. */
+export const MIN_TAP_PX = 44;
+
+/**
+ * World px to add above and below a card so its tap target is at least
+ * MIN_TAP_PX on screen. `s` is glanceScale's world px per screen px; zero
+ * when the card is already tall enough.
+ */
+export function nodeHitPad(s: number, nodeH = 88): number {
+  if (!(s > 0)) return 0;
+  return Math.max(0, (MIN_TAP_PX * s - nodeH) / 2);
 }
