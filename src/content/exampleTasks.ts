@@ -11,11 +11,13 @@ import type {
    The task for each example on the learning path.
 
    Every step ticks off from what the engine measures. The loads, settings
-   and figures below were measured by running each example headless, and
-   exampleTasks.content.test.ts runs every task again with the moves it
-   asks for: each step has to tick within a set time, and none may tick on
-   an untouched run at the example's own load. A claim that stops being
-   true fails the suite rather than the student.
+   and figures below were measured by running each example headless.
+   exampleTasks.walkthrough.test.ts plays every task on seeds 1 to 3 with
+   the moves its own steps ask for: each step has to tick within a set
+   time, and the figures the card shows have to back its text. None may
+   tick on an untouched run at the example's own load
+   (exampleTasks.content.test.ts). A claim that stops being true fails the
+   suite rather than the student.
 
    Holds: a step about a state the system must be in waits for it to last
    3 seconds of simulated time. A part near its limit fills for a moment at
@@ -66,6 +68,17 @@ const FIG_LOAD = fig(LOAD, 'offered load');
 const FIG_FAILING = fig(FAILING, 'failing');
 const FIG_P99 = fig(P99, 'p99');
 
+/**
+ * "Still at about the load the first step asked for", for the steps after
+ * it. The slider is a drag, so a student who set 560 and nudged it lands on
+ * 530 as often as on 560, and a step that wanted 560 exactly never ticked
+ * for them (seen on Load balanced). A tenth under still counts; every
+ * lesson here holds there, which exampleTasks.walkthrough.test.ts checks
+ * by playing each task with the load settled under the ask.
+ */
+const NEAR = 0.9;
+const near = (rps: number): Cond => atLeast(LOAD, Math.round(rps * NEAR));
+
 /** "Raise the load to N": ticks as soon as the slider is there. */
 const raise = (
   rps: number,
@@ -89,11 +102,7 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
       raise(200),
       {
         text: 'Watch Database: every slot fills and requests wait in line.',
-        when: [
-          atLeast(LOAD, 200),
-          atLeast(busy('db'), 0.95),
-          atLeast(waiting('db'), 3),
-        ],
+        when: [near(200), atLeast(busy('db'), 0.95), atLeast(waiting('db'), 3)],
         holdMs: HOLD,
         ring: 'db',
         figs: [
@@ -106,7 +115,7 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
         text: 'Select Database and raise Slots per instance from 6 to 12.',
         field: 'Slots per instance',
         when: [
-          atLeast(LOAD, 200),
+          near(200),
           atLeast(slots('db'), 12),
           below(FAILING, 0.01),
           below(waiting('db'), 3),
@@ -127,16 +136,12 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
       raise(560),
       {
         text: 'Watch Database fill up and turn requests away.',
-        when: [
-          atLeast(LOAD, 560),
-          atLeast(busy('db'), 0.95),
-          atLeast(turnedAway('db'), 5),
-        ],
+        when: [near(560), atLeast(busy('db'), 0.95), atLeast(turnedAway('db'), 5)],
         holdMs: HOLD,
         ring: 'db',
         figs: [
           fig(busy('db'), 'Database busy'),
-          fig(turnedAway('db'), 'turned away'),
+          fig(turnedAway('db'), 'Database turned away'),
           FIG_FAILING,
         ],
       },
@@ -144,7 +149,7 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
         text: 'Try more servers first: give API 1 a second instance. Requests still fail.',
         field: 'Instances',
         when: [
-          atLeast(LOAD, 560),
+          near(560),
           atLeast(setting('api1', 'instances'), 2),
           atLeast(FAILING, 0.05),
         ],
@@ -157,7 +162,7 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
       {
         text: 'Now select Database and raise Slots per instance from 12 to 24.',
         field: 'Slots per instance',
-        when: [atLeast(LOAD, 560), atLeast(slots('db'), 24), below(FAILING, 0.01)],
+        when: [near(560), atLeast(slots('db'), 24), below(FAILING, 0.01)],
         holdMs: HOLD,
         action: { kind: 'select', node: 'db' },
         ring: 'db',
@@ -239,7 +244,7 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
         ring: 'origin',
         figs: [
           fig(waiting('origin'), 'Origin waiting'),
-          fig(turnedAway('origin'), 'turned away'),
+          fig(turnedAway('origin'), 'Origin turned away'),
           FIG_P99,
         ],
       },
@@ -267,22 +272,14 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
       raise(240),
       {
         text: "Watch Message Queue's line grow while nothing fails.",
-        when: [
-          atLeast(LOAD, 240),
-          atLeast(waiting('queue'), 300),
-          below(FAILING, 0.01),
-        ],
+        when: [near(240), atLeast(waiting('queue'), 300), below(FAILING, 0.01)],
         ring: 'queue',
         figs: [fig(waiting('queue'), 'waiting'), FIG_FAILING, FIG_P99],
       },
       {
         text: 'Select Workers and raise Slots per instance from 10 to 20. Watch the line drain.',
         field: 'Slots per instance',
-        when: [
-          atLeast(LOAD, 240),
-          atLeast(slots('worker'), 20),
-          below(waiting('queue'), 20),
-        ],
+        when: [near(240), atLeast(slots('worker'), 20), below(waiting('queue'), 20)],
         holdMs: HOLD,
         action: { kind: 'select', node: 'worker' },
         ring: 'worker',
@@ -299,27 +296,26 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
       raise(135),
       {
         text: 'Watch Audit Log fill up and turn work away while users barely notice.',
-        when: [atLeast(LOAD, 135), atLeast(turnedAway('audit'), 3)],
+        when: [near(135), atLeast(turnedAway('audit'), 3)],
         holdMs: HOLD,
         ring: 'audit',
         figs: [
           fig(busy('audit'), 'Audit Log busy'),
-          fig(turnedAway('audit'), 'turned away'),
+          fig(turnedAway('audit'), 'Audit Log turned away'),
           FIG_FAILING,
         ],
       },
       {
         text: 'Select Audit Log and raise Slots per instance from 2 to 4.',
         field: 'Slots per instance',
-        when: [
-          atLeast(LOAD, 135),
-          atLeast(slots('audit'), 4),
-          below(turnedAway('audit'), 0.5),
-        ],
+        when: [near(135), atLeast(slots('audit'), 4), below(turnedAway('audit'), 0.5)],
         holdMs: HOLD,
         action: { kind: 'select', node: 'audit' },
         ring: 'audit',
-        figs: [fig(slots('audit'), 'slots'), fig(turnedAway('audit'), 'turned away')],
+        figs: [
+          fig(slots('audit'), 'slots'),
+          fig(turnedAway('audit'), 'Audit Log turned away'),
+        ],
       },
     ],
     learned:
@@ -332,14 +328,14 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
       raise(2200),
       {
         text: 'Watch the Offline Store line pass 2,000 messages waiting for their phones.',
-        when: [atLeast(LOAD, 2200), atLeast(waiting('offlineq'), 2000)],
+        when: [near(2200), atLeast(waiting('offlineq'), 2000)],
         ring: 'offlineq',
         figs: [fig(waiting('offlineq'), 'waiting'), FIG_FAILING],
       },
       {
         text: 'Watch Chat Gateway reach 1,800 of 1,800 connections and turn new phones away.',
         when: [
-          atLeast(LOAD, 2200),
+          near(2200),
           atLeast(connections('wsgw'), 1800),
           atLeast(turnedAway('wsgw'), 10),
         ],
@@ -347,7 +343,7 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
         ring: 'wsgw',
         figs: [
           fig(connections('wsgw'), 'connections'),
-          fig(turnedAway('wsgw'), 'turned away'),
+          fig(turnedAway('wsgw'), 'Chat Gateway turned away'),
           FIG_FAILING,
         ],
       },
@@ -398,7 +394,7 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
       raise(600),
       {
         text: 'Watch Rate Limiter let about 200 a second in and refuse the rest at once.',
-        when: [atLeast(LOAD, 600), atLeast(refused('limiter'), 100), below(P99, 200)],
+        when: [near(600), atLeast(refused('limiter'), 100), below(P99, 200)],
         holdMs: HOLD,
         ring: 'limiter',
         figs: [fig(refused('limiter'), 'refused'), FIG_P99],
@@ -507,12 +503,12 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
       raise(900),
       {
         text: 'Watch Replica Set fill up and turn requests away.',
-        when: [atLeast(LOAD, 900), atLeast(turnedAway('replicas'), 10)],
+        when: [near(900), atLeast(turnedAway('replicas'), 10)],
         holdMs: HOLD,
         ring: 'replicas',
         figs: [
           fig(busy('replicas'), 'Replica Set busy'),
-          fig(turnedAway('replicas'), 'turned away'),
+          fig(turnedAway('replicas'), 'Replica Set turned away'),
           FIG_FAILING,
         ],
       },
@@ -520,7 +516,7 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
         text: 'Select Replica Set and raise Read replicas from 3 to 5.',
         field: 'Read replicas',
         when: [
-          atLeast(LOAD, 900),
+          near(900),
           atLeast(setting('replicas', 'replicaCount'), 5),
           below(FAILING, 0.01),
         ],
@@ -537,7 +533,7 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
         text: 'Now lower Reads, as a share of traffic, from 85% to 30%.',
         field: 'Reads, as a share of traffic',
         when: [
-          atLeast(LOAD, 900),
+          near(900),
           below(setting('replicas', 'readFraction'), 0.35),
           atLeast(turnedAway('replicas'), 10),
         ],
@@ -546,7 +542,7 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
         ring: 'replicas',
         figs: [
           fig(setting('replicas', 'readFraction'), 'reads'),
-          fig(turnedAway('replicas'), 'turned away'),
+          fig(turnedAway('replicas'), 'Replica Set turned away'),
           FIG_FAILING,
         ],
       },
@@ -604,18 +600,18 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
       raise(990),
       {
         text: 'Watch Vector Index fill up and turn searches away.',
-        when: [atLeast(LOAD, 990), atLeast(turnedAway('vectors'), 10)],
+        when: [near(990), atLeast(turnedAway('vectors'), 10)],
         holdMs: HOLD,
         ring: 'vectors',
         figs: [
           fig(busy('vectors'), 'Vector Index busy'),
-          fig(turnedAway('vectors'), 'turned away'),
+          fig(turnedAway('vectors'), 'Vector Index turned away'),
           FIG_FAILING,
         ],
       },
       {
         text: 'Now look at Cold Storage: nearly every slot busy, and hardly a request depends on it.',
-        when: [atLeast(LOAD, 990), atLeast(busy('glacier'), 0.9)],
+        when: [near(990), atLeast(busy('glacier'), 0.9)],
         holdMs: HOLD,
         ring: 'glacier',
         figs: [fig(busy('glacier'), 'Cold Storage busy'), FIG_FAILING],
@@ -655,14 +651,14 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
       raise(500),
       {
         text: 'Watch requests fail while Autoscaler decides.',
-        when: [atLeast(LOAD, 500), atLeast(FAILING, 0.1)],
+        when: [near(500), atLeast(FAILING, 0.1)],
         holdMs: 2000,
         ring: 'api',
         figs: [fig(running('api'), 'API instances'), FIG_FAILING],
       },
       {
         text: 'Watch new instances arrive and failing drop back to zero.',
-        when: [atLeast(LOAD, 500), atLeast(running('api'), 5), below(FAILING, 0.01)],
+        when: [near(500), atLeast(running('api'), 5), below(FAILING, 0.01)],
         holdMs: HOLD,
         ring: 'api',
         figs: [fig(running('api'), 'API instances'), FIG_FAILING, FIG_P99],
@@ -678,22 +674,18 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
       raise(2400),
       {
         text: "Watch Job Queue's line pass 2,000 while nothing fails.",
-        when: [
-          atLeast(LOAD, 2400),
-          atLeast(waiting('queue'), 2000),
-          below(FAILING, 0.01),
-        ],
+        when: [near(2400), atLeast(waiting('queue'), 2000), below(FAILING, 0.01)],
         ring: 'queue',
         figs: [fig(waiting('queue'), 'waiting'), FIG_FAILING],
       },
       {
         text: 'Keep watching: the line reaches 5,000 and the queue turns jobs away.',
-        when: [atLeast(LOAD, 2400), atLeast(turnedAway('queue'), 50)],
+        when: [near(2400), atLeast(turnedAway('queue'), 50)],
         holdMs: 2000,
         ring: 'queue',
         figs: [
           fig(waiting('queue'), 'waiting'),
-          fig(turnedAway('queue'), 'turned away'),
+          fig(turnedAway('queue'), 'Job Queue turned away'),
           FIG_FAILING,
         ],
       },
@@ -709,7 +701,7 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
       {
         text: 'Watch Gateway (WS) fill all 1,600 connections and turn new ones away.',
         when: [
-          atLeast(LOAD, 1000),
+          near(1000),
           atLeast(connections('gateway'), 1600),
           atLeast(turnedAway('gateway'), 10),
         ],
@@ -717,7 +709,7 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
         ring: 'gateway',
         figs: [
           fig(connections('gateway'), 'connections'),
-          fig(turnedAway('gateway'), 'turned away'),
+          fig(turnedAway('gateway'), 'Gateway turned away'),
           FIG_FAILING,
         ],
       },
@@ -732,11 +724,7 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
       raise(1720),
       {
         text: 'Watch Kafka Event Bus fall over 2,000 events behind while under 1% fails.',
-        when: [
-          atLeast(LOAD, 1720),
-          atLeast(behind('kafka'), 2000),
-          below(FAILING, 0.01),
-        ],
+        when: [near(1720), atLeast(behind('kafka'), 2000), below(FAILING, 0.01)],
         ring: 'kafka',
         figs: [fig(behind('kafka'), 'events behind'), FIG_FAILING],
       },
@@ -763,12 +751,12 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
       raise(5000),
       {
         text: 'Watch DRM License Svc fill up and turn requests away.',
-        when: [atLeast(LOAD, 5000), atLeast(turnedAway('license'), 10)],
+        when: [near(5000), atLeast(turnedAway('license'), 10)],
         holdMs: HOLD,
         ring: 'license',
         figs: [
           fig(busy('license'), 'DRM busy'),
-          fig(turnedAway('license'), 'turned away'),
+          fig(turnedAway('license'), 'DRM turned away'),
           FIG_FAILING,
         ],
       },
@@ -776,7 +764,7 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
         text: 'Select DRM License Svc and raise Slots per instance from 5 to 10.',
         field: 'Slots per instance',
         when: [
-          atLeast(LOAD, 5000),
+          near(5000),
           atLeast(slots('license'), 10),
           below(turnedAway('license'), 0.5),
         ],
@@ -785,7 +773,7 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
         ring: 'license',
         figs: [
           fig(slots('license'), 'slots'),
-          fig(turnedAway('license'), 'turned away'),
+          fig(turnedAway('license'), 'DRM turned away'),
           FIG_FAILING,
         ],
       },
@@ -800,13 +788,13 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
       raise(5000, 'Raise the load to 5,000 requests a second, the top of the slider.'),
       {
         text: 'Watch Event Delivery fall over 2,000 events behind while p99 stays steady.',
-        when: [atLeast(LOAD, 5000), atLeast(behind('kafka'), 2000)],
+        when: [near(5000), atLeast(behind('kafka'), 2000)],
         ring: 'kafka',
         figs: [fig(behind('kafka'), 'events behind'), FIG_P99],
       },
       {
         text: 'Keep watching: once the stream is full, the oldest events expire.',
-        when: [atLeast(LOAD, 5000), atLeast(expired('kafka'), 5)],
+        when: [near(5000), atLeast(expired('kafka'), 5)],
         holdMs: 2000,
         ring: 'kafka',
         figs: [
@@ -826,7 +814,7 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
       raise(660),
       {
         text: 'Watch Tweet Firehose fall over 250 posts behind. It can take 30 seconds.',
-        when: [atLeast(LOAD, 660), atLeast(behind('firehose'), 250)],
+        when: [near(660), atLeast(behind('firehose'), 250)],
         holdMs: 2000,
         ring: 'firehose',
         figs: [fig(behind('firehose'), 'posts behind'), FIG_P99],
