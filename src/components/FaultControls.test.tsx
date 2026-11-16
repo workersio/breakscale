@@ -193,10 +193,11 @@ describe('fault controls on a selected node', () => {
     press(fix);
     expect(engine.faultSchedule()).toEqual([]);
 
-    // Crash twice.
+    // Crash twice. The second press lands on the pressed "Crashed".
     press(button('Crash'));
-    const crash = button('Crash');
+    const crash = button('Crashed');
     expect(crash.getAttribute('aria-disabled')).toBe('true');
+    expect(crash.getAttribute('aria-pressed')).toBe('true');
     crash.focus();
     press(crash);
     expect(engine.faultSchedule()).toHaveLength(1);

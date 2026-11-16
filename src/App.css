@@ -20,6 +20,8 @@
   /* dvh keeps things reachable on mobile browsers whose toolbars collapse. */
   height: 100dvh;
   overflow: hidden;
+  /* Not a scroll box either; see .app-body. */
+  overflow: clip;
   background: var(--bg);
 }
 
@@ -109,21 +111,31 @@
   color: var(--text);
 }
 
-/* With a star count, the button is no longer a pure icon square: it grows
-   into a pill just wide enough for the mark and the digits, per this app's
-   own rule that every number renders in the mono stack with tabular
-   figures. Width is the only thing that changes, so neighbouring buttons in
-   the bar never shift. */
-.app-source-link.has-stars {
-  width: auto;
+/* A pill wide enough for the mark, a star and four digits ("1.2k" is the
+   widest formatStars returns below a million), whether or not the count has
+   arrived. The count is fetched after first paint, and a button that grew
+   when it landed pushed the load island narrower and slid Pause, Step and
+   Reset sideways under the reader's pointer. Reserved, the count fades into
+   room that was already there. 4ch of the mono stack, because that is the
+   face the digits are drawn in. Doubled to outrank .btn-icon's square. */
+.app-source-link.btn-icon {
+  width: calc(
+    var(--sp-2) + 16px + var(--sp-1) + 16px + 4px + 4ch + var(--sp-3) + 2 * var(--bw)
+  );
   padding: 0 var(--sp-3) 0 var(--sp-2);
   gap: var(--sp-1);
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
 }
 
 .app-source-stars {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  /* Right-aligned in a fixed slot, so the count-up from 0 never moves the
+     mark beside it. */
+  justify-content: flex-end;
+  min-width: calc(16px + 4px + 4ch);
   height: 16px; /* matches the GitHub mark's box exactly, so the two sit on one line */
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
@@ -134,6 +146,12 @@
      it is otherwise static chrome and a number appearing with no transition
      reads as a layout bug rather than as data that just arrived. */
   animation: app-stars-in var(--dur-slow) var(--ease-out);
+}
+
+/* The word, in the text face: it is a name, not a figure. */
+.app-source-name {
+  font-family: var(--sans);
+  font-weight: var(--fw-med);
 }
 
 /* Positioning context for the glyph and its rays, sized to the GitHub
@@ -345,12 +363,13 @@
 
 /* On a phone the star count gives up its room to that label. */
 @media (max-width: 639px) {
-  .app-source-stars {
+  .app-source-stars,
+  .app-source-name {
     display: none;
   }
 
   /* Back to the plain .btn-icon square. */
-  .app-source-link.has-stars {
+  .app-source-link.btn-icon {
     width: 36px;
     padding: 0;
   }
@@ -485,6 +504,11 @@
   display: flex;
   min-height: 0;
   overflow: hidden;
+  /* clip, not just hidden: hidden still leaves a scroll box that focus(),
+     scrollIntoView and an iPad keyboard can scroll, and each did, by 13px,
+     sliding every panel under the bar until reload. Same fix as html and
+     body in index.css. */
+  overflow: clip;
 
   /* Where the floating bar ends, plus a gap: its 12px offset, its 56px
      height, and 12px below it. Everything that must clear the bar reads this
@@ -724,7 +748,9 @@
 
 /* The traffic key sits one row above the ledger and follows it. Not on a
    phone, where the panels are sheets and the key keeps its own corner. */
-@media (min-width: 721px) {
+@media (min-width: 721px) and (min-height: 501px),
+  (min-width: 721px) and (pointer: fine),
+  (min-width: 721px) and (pointer: none) {
   .app-body.has-library .cv-key {
     left: calc(var(--rail-w) + var(--sp-3) * 2);
   }
@@ -807,7 +833,9 @@
 /* The bar floats over the top of the canvas on a desktop, as opaque as any
    panel, and a tall diagram fitted to the full height had its top row under
    it. A phone's header is not over the canvas, so it needs nothing here. */
-@media (min-width: 721px) {
+@media (min-width: 721px) and (min-height: 501px),
+  (min-width: 721px) and (pointer: fine),
+  (min-width: 721px) and (pointer: none) {
   .stage-safe {
     top: var(--bar-clear);
   }
@@ -1025,6 +1053,58 @@
 }
 
 /* --------------------------------------------------------------------------
+   The compact bar: two rows of islands.
+
+   Below the width where the three islands fit side by side, the load
+   island takes a row of its own under the other two, the same shape as the
+   phone header. Whether they fit is MEASURED (useBarFit.ts sets data-fit),
+   not read off a breakpoint: the old 1000px rule assumed the row held down
+   to about 840px, and in fact the transport was drawn under the menu island
+   from about 1180px down, where it could be seen and not pressed.
+
+   On its own row the slider gets the width the row has: it is the control
+   the reader drags, and on a tablet it is dragged with a finger.
+   -------------------------------------------------------------------------- */
+
+@media (min-width: 721px) and (min-height: 501px),
+  (min-width: 721px) and (pointer: fine),
+  (min-width: 721px) and (pointer: none) {
+  .app-bar[data-fit='compact'] {
+    flex-wrap: wrap;
+    row-gap: var(--sp-2);
+  }
+
+  .app-bar[data-fit='compact'] .app-island-load {
+    order: 3;
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
+  .app-bar[data-fit='compact'] .traffic-load {
+    max-width: none;
+  }
+
+  /* Moves into the menu, as it does on a phone. */
+  .app-bar[data-fit='compact'] .app-source-link {
+    display: none;
+  }
+}
+
+/* A phone on its side is about 390px tall, and two rows of 56px islands
+   inside the bar's padding took 158px of it. The padding goes and the
+   identity row comes down to its buttons' height, which gives back about
+   40px of diagram. */
+@media (min-width: 721px) and (max-height: 500px) {
+  .app-bar[data-fit='compact'] {
+    padding-block: 0;
+  }
+
+  .app-bar[data-fit='compact'] .app-island:not(.app-island-load) {
+    min-height: 48px;
+  }
+}
+
+/* --------------------------------------------------------------------------
    Short windows.
 
    Height has a cascade too, or a 1600x700 window loses its canvas to the
@@ -1062,23 +1142,72 @@
 /* --------------------------------------------------------------------------
    Undo / redo receipt.
 
-   Bottom center, floating over the stage: the top bar is where the ACTION
-   lives, but the change it reverted happened on the canvas, so the receipt
-   appears near the work. Plain panel surface and a hairline, no translucency.
-   z-index above the stage chrome (5) and below the tooltip layer (400): a
-   receipt must never cover an explanation the student asked for.
+   Bottom center of the UNCOVERED canvas, just above the zoom row: the top
+   bar is where the ACTION lives, but the change it reverted happened on the
+   canvas, so the receipt appears near the work. The dock spans the same
+   width the .stage-safe sentinel does, from the same has-* classes, so the
+   receipt is never under a rail or over the stats row, the charts toggle
+   or an open brief. Plain panel surface and a hairline, no translucency.
+   z-index above the panels (10) and briefs (20) and below the tooltip
+   layer (400): a receipt must never cover an explanation the student asked
+   for.
 
    Motion: entrance only, 160ms, opacity plus a few px of rise; the exit is
    an unmount because a receipt that lingers while fading invites reading it
    twice. Under prefers-reduced-motion it simply appears.
    -------------------------------------------------------------------------- */
 
-.app-toast {
-  position: fixed;
-  bottom: var(--sp-5);
-  left: 50%;
-  transform: translateX(-50%);
+.app-toast-dock {
+  /* The zoom cluster's height (Canvas.css), the row this clears. */
+  --toast-row-h: calc(32px + var(--sp-1) * 2 + 2px);
+
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--sp-3) + var(--toast-row-h) + var(--sp-2));
   z-index: 300;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+  padding-inline: var(--sp-3);
+  /* Only the toasts take a press; the gap around them is still canvas. */
+  pointer-events: none;
+}
+
+/* The desktop's panels float beside the canvas. A phone's are sheets, and
+   App.phone.css places the dock for those. */
+@media (min-width: 721px) and (min-height: 501px),
+  (min-width: 721px) and (pointer: fine),
+  (min-width: 721px) and (pointer: none) {
+  .app-body.has-library .app-toast-dock {
+    left: calc(var(--rail-w) + var(--sp-3));
+  }
+
+  .app-body.has-inspector .app-toast-dock {
+    right: calc(var(--ins-w) + var(--sp-3));
+  }
+
+  .app-body.has-challenge:not(.has-inspector) .app-toast-dock {
+    right: calc(var(--chal-w) + var(--sp-3) * 2);
+  }
+
+  .app-body.has-challenge.has-inspector .app-toast-dock {
+    right: calc(var(--ins-w) + var(--chal-w) + var(--sp-3) * 3);
+  }
+
+  .app-body.has-metrics .app-toast-dock {
+    bottom: calc(
+      var(--strip-shown) + var(--sp-3) * 2 + var(--toast-row-h) + var(--sp-2)
+    );
+  }
+}
+
+.app-toast {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  max-width: 100%;
   padding: var(--sp-2) var(--sp-4);
   border: var(--bw) solid var(--border-strong);
   border-radius: var(--r-btn);
@@ -1088,17 +1217,25 @@
   font-weight: var(--fw-med);
   line-height: var(--lh-label);
   box-shadow: var(--shadow-sm);
+  pointer-events: auto;
   animation: app-toast-in 160ms var(--ease-out);
+}
+
+/* The toast's one action, such as Undo after a delete. It trims the toast's
+   own padding so the button does not make the toast taller. */
+.app-toast:has(.app-toast-action) {
+  padding-block: var(--sp-1);
+  padding-right: var(--sp-1);
 }
 
 @keyframes app-toast-in {
   from {
     opacity: 0;
-    transform: translateX(-50%) translateY(4px);
+    transform: translateY(4px);
   }
   to {
     opacity: 1;
-    transform: translateX(-50%) translateY(0);
+    transform: translateY(0);
   }
 }
 
@@ -1119,6 +1256,36 @@
   .app-toast {
     animation: none;
   }
+}
+
+/* "Skip to diagram". Out of sight until Tab reaches it, then over the
+   bar's top left corner, where focus would otherwise land next. */
+.app-skip {
+  position: absolute;
+  top: var(--sp-3);
+  left: var(--sp-3);
+  z-index: 500;
+  padding: var(--sp-2) var(--sp-4);
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-btn);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-med);
+  text-decoration: none;
+  box-shadow: var(--shadow-sm);
+  transform: translateY(calc(-100% - var(--sp-5)));
+}
+
+.app-skip:focus {
+  transform: none;
+}
+
+/* The diagram itself takes focus from the skip link on an empty canvas.
+   Its ring is drawn inside it, since outside is under the panels. */
+.stage-canvas:focus-visible {
+  outline-offset: -2px;
+  border-radius: 0;
 }
 
 /* The file picker behind the Open button. Not display:none, because a
@@ -1183,7 +1350,7 @@
    neutralised here, because a sheet is not something to sit beside.
    -------------------------------------------------------------------------- */
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   /* ------------------------------------------------------------------
      A phone is a different application shape, not a narrow desktop.
 
@@ -1465,7 +1632,7 @@
   display: none;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   .app-tabbar {
     position: fixed;
     bottom: 0;
@@ -1542,7 +1709,7 @@
   display: none;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   /* Dims the canvas and catches the tap that closes the sheet. Below the
      slot (z-index 10) and above everything else on the stage. */
   .app-scrim {
@@ -1636,5 +1803,56 @@
 @keyframes app-scrim-out {
   to {
     opacity: 0;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   The ledger never runs under the zoom cluster.
+
+   Both sit on the canvas's bottom edge, the ledger from the left and the
+   zoom from the right, and with the inspector open there was no longer room
+   for both: at 1024 the two overlapped by 34px. The ledger is capped at the
+   room between its corner and the zoom's, and the facts that do not fit
+   drop whole from the end (the clock first, then the connections) instead
+   of being cut mid-word; useLedgerFit.ts counts them. --zoom-w is the cluster's measured width plus a little:
+   169px with a mouse, 205px with 44px touch buttons.
+   -------------------------------------------------------------------------- */
+@media (min-width: 721px) and (min-height: 501px),
+  (min-width: 721px) and (pointer: fine),
+  (min-width: 721px) and (pointer: none) {
+  .app-body {
+    --ledger-left: calc(var(--sp-3) * 2 + 32px);
+    --zoom-right: var(--sp-3);
+    --zoom-w: 176px;
+  }
+
+  .app-body.has-library {
+    --ledger-left: calc(var(--rail-w) + var(--sp-3) * 3 + 32px);
+  }
+
+  .app-body.has-inspector {
+    --zoom-right: calc(var(--ins-w) + var(--sp-3) * 2);
+  }
+
+  .app-body .cv-ledger {
+    max-width: calc(
+      100% - var(--ledger-left) - var(--zoom-right) - var(--zoom-w) - var(--sp-3)
+    );
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  /* data-drop is set by useLedgerFit: how many facts, from the end, do not
+     fit. */
+  .cv-ledger[data-drop='1'] > :nth-last-child(-n + 1),
+  .cv-ledger[data-drop='2'] > :nth-last-child(-n + 2),
+  .cv-ledger[data-drop='3'] > :nth-last-child(-n + 3) {
+    display: none;
+  }
+}
+
+@media (min-width: 721px) and (pointer: coarse) {
+  .app-body {
+    --zoom-w: 212px;
   }
 }

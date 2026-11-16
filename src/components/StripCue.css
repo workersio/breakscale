@@ -1,0 +1,21 @@
+/* Bottom right of the charts strip, over its last row; the strip's own
+   frame clips nothing of it. Phones scroll the strip as a sheet, where the
+   cue would only repeat what a finger already does. */
+.strip-cue {
+  position: absolute;
+  right: var(--sp-4);
+  bottom: var(--sp-3);
+  z-index: 2;
+  box-shadow: var(--shadow-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.strip-cue[hidden] {
+  display: none;
+}
+
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
+  .strip-cue {
+    display: none;
+  }
+}

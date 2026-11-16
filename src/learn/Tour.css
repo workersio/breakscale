@@ -12,7 +12,9 @@
   top: calc(var(--bar-clear) + 32px + var(--sp-2));
   right: var(--sp-3);
   pointer-events: none;
-  transition: right var(--dur-base) var(--ease);
+  transition:
+    left var(--dur-base) var(--ease),
+    right var(--dur-base) var(--ease);
 }
 
 .tour > * {
@@ -21,6 +23,26 @@
 
 .app-body.has-inspector .tour {
   right: calc(var(--ins-w) + var(--sp-3) * 2);
+}
+
+/* Its left edge is the open rail's, so a narrow window shrinks the card
+   rather than sliding it under the rail. The card keeps the right. */
+@media (min-width: 721px) and (min-height: 501px),
+  (min-width: 721px) and (pointer: fine),
+  (min-width: 721px) and (pointer: none) {
+  .tour {
+    left: var(--sp-3);
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .app-body.has-library .tour {
+    left: calc(var(--rail-w) + var(--sp-3) * 2);
+  }
+
+  .tour-card {
+    max-width: 100%;
+  }
 }
 
 .tour-card {
@@ -145,7 +167,13 @@
   display: none;
 }
 
-@media (max-width: 720px) {
+/* "Find the problem" too, for the same reason: it is a second guide. The
+   card sits where the two meet on a narrow window, and covered half of it. */
+.app-body:has(.tour) .fp {
+  display: none;
+}
+
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   /* Docked on the tab bar, where "What just happened" sits: the diagram
      keeps the middle of the screen. Over the inspector sheet too (z 10),
      since step 3 happens in that sheet. */

@@ -148,7 +148,8 @@ export function Settings({
   const cardRef = useRef<HTMLDivElement | null>(null);
   const prefs = usePreferences();
 
-  const rows = toggles(useCoarsePointer());
+  const coarse = useCoarsePointer();
+  const rows = toggles(coarse);
 
   /* Focus lands on the card and returns to the opener, the same contract the
      shortcuts dialog and the glossary both keep. */
@@ -319,7 +320,9 @@ export function Settings({
                     <span className="st-action-text">
                       <span className="st-row-label">Open a file</span>
                       <span className="st-hint">
-                        Or drop one straight onto the canvas.
+                        {coarse
+                          ? 'A design you saved from Breakscale.'
+                          : 'Or drop one straight onto the canvas.'}
                       </span>
                     </span>
                   </button>

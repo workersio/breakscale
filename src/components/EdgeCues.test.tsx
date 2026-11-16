@@ -64,9 +64,11 @@ describe('edge cues', () => {
     expect(cue('right')).not.toBeNull();
     expect(cue('left')).toBeNull();
     expect(cue('right')?.getAttribute('data-chrome')).not.toBeNull();
-    expect(cue('right')?.getAttribute('aria-label')).toBe(
-      'Show more of the diagram on the right',
-    );
+    // Named by its visible words, so a voice command can say what it shows.
+    expect(cue('right')?.textContent).toBe('More on the right');
+    expect(cue('right')?.title).toBe('Show more of the diagram on the right');
+    // Grouped in one corner, not at the middle of each edge.
+    expect(cue('right')?.parentElement?.className).toBe('cv-cues');
   });
 
   it('pans toward the hidden boxes when pressed', async () => {

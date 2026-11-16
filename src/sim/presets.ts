@@ -756,7 +756,7 @@ const singleServer: Topology = {
       'ss-note-db',
       40,
       320,
-      'One server, one database. The database is the smaller of the two: 6 requests at a time at 30ms each, so it runs out near 200 a second. Drag the load past 4x and the wait builds there first, not at the API.',
+      'One server, one database. The database is the smaller of the two: 6 requests at a time at 30ms each, so it runs out near 200 a second. Drag the load past 200 a second and the wait builds there first, not at the API.',
       340,
     ),
   ],

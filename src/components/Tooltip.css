@@ -264,3 +264,30 @@
     transition: none;
   }
 }
+
+/* --------------------------------------------------------------------------
+   Touch targets. A "see also" link was 18px tall and a bar term 13px. The
+   links grow for real, since they sit in their own row; a term sits in a
+   line of text, so its target grows by an invisible margin that reaches
+   above and below the word rather than by moving anything.
+   -------------------------------------------------------------------------- */
+@media (pointer: coarse) {
+  .tip-see {
+    align-items: center;
+  }
+
+  .tip-see-link {
+    min-height: 44px;
+    padding: 0 var(--sp-1);
+  }
+
+  .app-bar .term {
+    position: relative;
+  }
+
+  .app-bar .term::after {
+    content: '';
+    position: absolute;
+    inset: -14px -4px;
+  }
+}

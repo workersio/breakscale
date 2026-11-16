@@ -9,6 +9,7 @@ import {
   KIND_NAME,
   KIND_TERM,
   NODE_DND_MIME,
+  whatIsKind,
 } from './nodeVisuals';
 import type { KindGroup } from './nodeVisuals';
 import { Term } from './Tooltip';
@@ -17,6 +18,7 @@ import { useVendor } from '../content/vendors/useVendor';
 import { nameFor } from '../content/vendors/lookup';
 import type { Vendor } from '../content/vendors/types';
 import { ANN_DND_MIME } from './annotationLayout';
+import { rovingIndex } from './roving';
 import './Palette.css';
 
 /* ------------------------------------------------------------------ *
@@ -368,7 +370,50 @@ export function Palette({ onAdd, onAddAnnotation, armedTool }: PaletteProps) {
   }, []);
 
   /** Escape clears the box, then gives it up. The usual contract for search. */
+  /* The rows are one Tab stop, not 33 (66 with their "?" marks): arrows
+     move between them, Enter or Space adds one, "?" explains the focused
+     one. `active` is the row Tab returns to. */
+  const [active, setActive] = useState<string | null>(null);
+  const rowsRef = useRef<HTMLDivElement | null>(null);
+  const onRowsKeyDown = useCallback((e: KeyboardEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    const item = target.closest('.pal-item');
+    const row = item?.querySelector<HTMLButtonElement>('.pal-row');
+    if (!row) return;
+    if (e.key === '?' && target === row) {
+      // The row's own explanation, not the app's glossary.
+      const term = item?.querySelector<HTMLElement>('.pal-explain');
+      if (!term) return;
+      e.preventDefault();
+      e.stopPropagation();
+      term.focus();
+      return;
+    }
+    if (e.key === 'Escape' && target !== row) {
+      row.focus();
+      return;
+    }
+    const rows = [
+      ...(e.currentTarget.querySelectorAll<HTMLButtonElement>('.pal-row') ?? []),
+    ];
+    const next = rovingIndex(e.key, rows.indexOf(row), rows.length);
+    if (next === null || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    rows[next]?.focus();
+  }, []);
+
   const onSearchKeyDown = useCallback((e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'ArrowDown') {
+      const rows = [
+        ...(rowsRef.current?.querySelectorAll<HTMLButtonElement>('.pal-row') ?? []),
+      ];
+      const to = rows.find((r) => r.tabIndex === 0) ?? rows[0];
+      if (!to) return;
+      e.preventDefault();
+      to.focus();
+      return;
+    }
     if (e.key !== 'Escape') return;
     e.stopPropagation();
     setQuery((q) => {
@@ -393,6 +438,10 @@ export function Palette({ onAdd, onAddAnnotation, armedTool }: PaletteProps) {
     },
     [onAdd],
   );
+
+  const rowKeys: string[] = groups.flatMap((g) => g.kinds as string[]);
+  if (onAddAnnotation) for (const r of ANN_ROWS) rowKeys.push(r.tool);
+  const tabRow = active !== null && rowKeys.includes(active) ? active : rowKeys[0];
 
   return (
     <nav className="pal" aria-label="Components and examples">
@@ -437,7 +486,7 @@ export function Palette({ onAdd, onAddAnnotation, armedTool }: PaletteProps) {
               ref={searchRef}
               type="search"
               className="pal-search-input"
-              placeholder="Search components"
+              placeholder="Search"
               aria-label="Search components"
               value={query}
               onChange={onSearchChange}
@@ -487,12 +536,22 @@ export function Palette({ onAdd, onAddAnnotation, armedTool }: PaletteProps) {
             </p>
           )}
 
-          {groups.map((group) => (
-            <div className="pal-group" key={group.id}>
-              <p className="label pal-group-title">{group.title}</p>
-              <ul className="pal-list">
-                {group.kinds.map((kind) => (
-                  /*
+          {/* One Tab stop for every row below; see onRowsKeyDown. */}
+          <div
+            ref={rowsRef}
+            className="pal-rows"
+            onKeyDown={onRowsKeyDown}
+            onFocus={(e) => {
+              const key = (e.target as HTMLElement).dataset.row;
+              if (key) setActive(key);
+            }}
+          >
+            {groups.map((group) => (
+              <div className="pal-group" key={group.id}>
+                <p className="label pal-group-title">{group.title}</p>
+                <ul className="pal-list">
+                  {group.kinds.map((kind) => (
+                    /*
                     WHY THE EXPLANATION IS NOT ON THE ROW ITSELF.
 
                     Every other surface in the app wraps the label in <Term>.
@@ -510,109 +569,119 @@ export function Palette({ onAdd, onAddAnnotation, armedTool }: PaletteProps) {
                     explains. Hovering anywhere on the row reveals the mark,
                     so it is discoverable without being 33 permanent dots.
                   */
-                  <li key={kind} className="pal-item">
-                    <button
-                      type="button"
-                      className="pal-row"
-                      /* Drives the chip's colour trio in Palette.css. This
+                    <li key={kind} className="pal-item">
+                      <button
+                        type="button"
+                        className="pal-row"
+                        /* Drives the chip's colour trio in Palette.css. This
                          is the same `data-kind` contract the canvas uses,
                          so a kind is coloured by one rule per surface
                          rather than by an inline style computed in JS. */
-                      data-kind={kind}
-                      draggable
-                      onDragStart={(e) => handleDragStart(e, kind)}
-                      onDragEnd={endCarry}
-                      onClick={() => onAdd(kind)}
-                      onKeyDown={(e) => onRowKeyDown(e, kind)}
-                      title={KIND_HINT[kind]}
-                    >
-                      <span className="pal-glyph">
-                        <Glyph kind={kind} />
-                      </span>
-                      {/* The generic name stays the heading and the vendor's
+                        data-kind={kind}
+                        data-row={kind}
+                        tabIndex={kind === tabRow ? 0 : -1}
+                        draggable
+                        onDragStart={(e) => handleDragStart(e, kind)}
+                        onDragEnd={endCarry}
+                        onClick={() => onAdd(kind)}
+                        onKeyDown={(e) => onRowKeyDown(e, kind)}
+                        title={KIND_HINT[kind]}
+                      >
+                        <span className="pal-glyph">
+                          <Glyph kind={kind} />
+                        </span>
+                        {/* The generic name stays the heading and the vendor's
                           product goes beneath it. Swapping them outright made
                           two rows read "Amazon EC2" (a service and a worker
                           are both an instance) and truncated the longer
                           names, which is worse than useless in a rail whose
                           job is telling components apart. */}
-                      <span className="pal-names">
-                        <span className="pal-name">{KIND_NAME[kind]}</span>
-                        {vendor && nameFor(kind, vendor) !== KIND_NAME[kind] && (
-                          <span className="pal-vendor">{nameFor(kind, vendor)}</span>
-                        )}
-                      </span>
-                    </button>
-                    {/*
+                        <span className="pal-names">
+                          <span className="pal-name">{KIND_NAME[kind]}</span>
+                          {vendor && nameFor(kind, vendor) !== KIND_NAME[kind] && (
+                            <span className="pal-vendor">{nameFor(kind, vendor)}</span>
+                          )}
+                        </span>
+                      </button>
+                      {/*
                       `bare` because the row is already a strong affordance
                       and a dotted underline on a lone question mark would be
                       noise on top of noise. The tooltip itself is unchanged.
                     */}
-                    {hintsOn && (
-                      <Term id={KIND_TERM[kind]} className="pal-explain" bare>
-                        <span aria-hidden="true">?</span>
-                        <span className="sr-only">What is a {KIND_NAME[kind]}?</span>
-                      </Term>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
+                      {hintsOn && (
+                        <Term
+                          id={KIND_TERM[kind]}
+                          className="pal-explain"
+                          bare
+                          tabIndex={-1}
+                        >
+                          <span aria-hidden="true">?</span>
+                          <span className="sr-only">{whatIsKind(kind)}</span>
+                        </Term>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
 
-          {/*
+            {/*
             Annotation rows: the documentation layer. Same affordances as a
             component row (drag onto the canvas, or click to place at the
             centre of the view), so nothing new has to be learned; the
             neutral chip is what says "not a component". The keyboard route
             (N / B arming a tool) is printed in each row's title.
           */}
-          {onAddAnnotation && (
-            <div className="pal-group">
-              <p className="label pal-group-title">Annotate</p>
-              <ul className="pal-list">
-                {ANN_ROWS.map((row) => (
-                  <li key={row.tool} className="pal-item">
-                    <button
-                      type="button"
-                      className={`pal-row${armedTool === row.tool ? ' is-armed' : ''}`}
-                      aria-pressed={armedTool === row.tool}
-                      draggable
-                      onDragStart={(e) => handleAnnDragStart(e, row.tool)}
-                      onDragEnd={endCarry}
-                      onClick={() => onAddAnnotation(row.tool)}
-                      onKeyDown={(e) => {
-                        if (e.key === ' ' || e.key === 'Spacebar') {
-                          e.preventDefault();
-                          onAddAnnotation(row.tool);
-                        }
-                      }}
-                      title={row.hint}
-                    >
-                      <span className="pal-glyph">
-                        <svg
-                          width="1.1em"
-                          height="1.1em"
-                          viewBox={`0 0 ${ICON_BOX} ${ICON_BOX}`}
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth={ICON_STROKE}
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          role="presentation"
-                          aria-hidden="true"
-                        >
-                          {row.icon.map((d) => (
-                            <path key={d} d={d} />
-                          ))}
-                        </svg>
-                      </span>
-                      <span className="pal-name">{row.name}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+            {onAddAnnotation && (
+              <div className="pal-group">
+                <p className="label pal-group-title">Annotate</p>
+                <ul className="pal-list">
+                  {ANN_ROWS.map((row) => (
+                    <li key={row.tool} className="pal-item">
+                      <button
+                        type="button"
+                        className={`pal-row${armedTool === row.tool ? ' is-armed' : ''}`}
+                        aria-pressed={armedTool === row.tool}
+                        data-row={row.tool}
+                        tabIndex={row.tool === tabRow ? 0 : -1}
+                        draggable
+                        onDragStart={(e) => handleAnnDragStart(e, row.tool)}
+                        onDragEnd={endCarry}
+                        onClick={() => onAddAnnotation(row.tool)}
+                        onKeyDown={(e) => {
+                          if (e.key === ' ' || e.key === 'Spacebar') {
+                            e.preventDefault();
+                            onAddAnnotation(row.tool);
+                          }
+                        }}
+                        title={row.hint}
+                      >
+                        <span className="pal-glyph">
+                          <svg
+                            width="1.1em"
+                            height="1.1em"
+                            viewBox={`0 0 ${ICON_BOX} ${ICON_BOX}`}
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth={ICON_STROKE}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            role="presentation"
+                            aria-hidden="true"
+                          >
+                            {row.icon.map((d) => (
+                              <path key={d} d={d} />
+                            ))}
+                          </svg>
+                        </span>
+                        <span className="pal-name">{row.name}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </nav>

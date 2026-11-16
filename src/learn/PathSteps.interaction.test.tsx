@@ -233,6 +233,15 @@ describe('a challenge step', () => {
     fromPath(`Start step 3, ${hold.name}`);
     expect(find('See what you learned')).toBeNull();
     passHoldTheLine();
+    // The settings sheet steps down as the pass lands, so the lesson shows.
+    expect(document.querySelector('.app-body.has-inspector')).toBeNull();
+    expect(brief()?.textContent).toContain(hold.lesson);
+    expect(document.querySelector('.pass-strip')).toBeNull();
+    // Tapping the part again brings its settings back, and the strip says
+    // the pass over them.
+    const db = document.querySelector('[data-hit="node"][data-kind="db"]');
+    if (!db) throw new Error('no database on the canvas');
+    press(db, 'touch');
     expect(document.querySelector('.pass-strip')?.textContent).toContain(
       `You passed ${hold.name}.`,
     );
@@ -278,10 +287,15 @@ describe('a real outage step', () => {
     fromPath(`Start step 43, ${s3.name}`);
     expect(brief()).toBeNull();
     expect(story()?.querySelector('.chal-name')?.textContent).toBe(s3.name);
-    const ids = [...document.querySelectorAll('[data-hit="node"]')].map((n) =>
-      n.getAttribute('data-id'),
-    );
-    expect(ids).toEqual(['mine-client', 'mine-svc']);
+    const ids = () =>
+      [...document.querySelectorAll('[data-hit="node"]')].map((n) =>
+        n.getAttribute('data-id'),
+      );
+    // The story opens its scene over the reader's design, not the brief's,
+    // so one undo gives the reader's own design back.
+    expect(ids()).toEqual(s3.scene.nodes.map((n) => n.id));
+    press(must('Undo'));
+    expect(ids()).toEqual(['mine-client', 'mine-svc']);
   });
 
   it('counts as done when its brief passes, with the lesson and Next to the outage after it', () => {

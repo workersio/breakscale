@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { shortcutLabel } from '../modKey';
 import { createPortal } from 'react-dom';
 import { usePresence } from './presence';
 import './Shortcuts.css';
@@ -44,6 +45,7 @@ const GROUPS: Group[] = [
     rows: [
       { keys: ['Space'], does: 'Play or pause' },
       { keys: ['S'], does: 'Step one tick (pauses first)' },
+      { keys: ['[', ']'], does: 'Play slower or faster' },
       { keys: ['F'], does: 'Can you break it?' },
     ],
   },
@@ -52,10 +54,18 @@ const GROUPS: Group[] = [
     rows: [
       { keys: ['Drag a port'], does: 'Connect two components' },
       { keys: ['Click a port'], does: 'Arm a link; click the target to finish' },
+      {
+        keys: ['L'],
+        does: 'Connect the selected component; arrows pick, Enter connects',
+      },
       { keys: ['Double-click'], does: 'Rename a component in place' },
       { keys: ['Ctrl+D'], does: 'Duplicate the selection' },
       { keys: ['Alt+drag'], does: 'Drag out a copy' },
       { keys: ['Delete', 'Backspace'], does: 'Delete the selection' },
+      {
+        keys: ['Right-click', 'Press and hold'],
+        does: 'More actions for a component, a connection or the canvas',
+      },
     ],
   },
   {
@@ -107,8 +117,21 @@ const GROUPS: Group[] = [
       { keys: ['C'], does: 'Components rail' },
       { keys: ['M'], does: 'Charts strip' },
       { keys: ['I'], does: 'Inspector, while something is selected' },
-      { keys: ['?'], does: 'Glossary' },
+      { keys: ['?'], does: 'Glossary, or what the focused component is' },
+      { keys: ['F6', 'Shift+F6'], does: 'Next or previous area: bar, diagram, panels' },
+      { keys: ['Up', 'Down'], does: 'Move through the components rail' },
       { keys: ['Ctrl+/'], does: 'This dialog' },
+    ],
+  },
+  {
+    title: 'Search and present',
+    rows: [
+      { keys: ['Ctrl+K'], does: 'Search every action by name' },
+      { keys: ['P'], does: 'Start or stop presenting' },
+      {
+        keys: ['X', 'W', 'R'],
+        does: 'While presenting: crash, slow or fix the part in hand',
+      },
     ],
   },
 ];
@@ -212,7 +235,9 @@ export function Shortcuts({ open, onClose }: ShortcutsProps) {
                       {row.keys.map((k, i) => (
                         <span key={k} className="sc-alt">
                           {i > 0 && <span className="sc-or">or</span>}
-                          <kbd className="sc-kbd">{k}</kbd>
+                          <kbd className="sc-kbd">
+                            {k === 'Ctrl+wheel' ? k : shortcutLabel(k)}
+                          </kbd>
                         </span>
                       ))}
                     </dt>

@@ -146,9 +146,31 @@ describe('a real incident', () => {
     const link = p?.querySelector<HTMLAnchorElement>('.inc-source a');
     expect(link?.href).toBe(s3.source.url);
     expect(link?.textContent).toBe(s3.source.title);
-    // Opening it changes nothing on the canvas.
-    expect(canvasIds()).toEqual(['mine-client', 'mine-svc']);
     expect(document.activeElement).toBe(p?.querySelector('h2'));
+  });
+
+  it('puts its scene on the canvas, paused at the start, as one undo step', () => {
+    mount();
+    openIncident();
+    expect(canvasIds()).toEqual(s3.scene.nodes.map((n) => n.id));
+    expect(document.querySelector('.app-toast')?.textContent).toBe(
+      `Opened ${s3.name}. Undo brings your design back.`,
+    );
+    // Paused: nothing has happened yet, so there is no caption to show.
+    advance(3000);
+    expect(caption()).toBeNull();
+    expect(must('Watch it happen')).not.toBeNull();
+    press(must('Undo'));
+    expect(canvasIds()).toEqual(['mine-client', 'mine-svc']);
+  });
+
+  it('gives the run back its play state when closed without watching', () => {
+    mount();
+    expect(must('Pause')).not.toBeNull();
+    openIncident();
+    expect(must('Play')).not.toBeNull();
+    press(must('Close'));
+    expect(must('Pause')).not.toBeNull();
   });
 
   it('plays the scene with captions, and one undo puts the design back', () => {
@@ -161,6 +183,7 @@ describe('a real incident', () => {
     advance(21_000);
     expect(caption()).toBe(`20s: ${s3.captions[1]!.text}`);
 
+    // Watching the scene opening installed is not a second step to undo.
     press(must('Undo'));
     expect(canvasIds()).toEqual(['mine-client', 'mine-svc']);
     // Not the scene any more, so no caption.
@@ -176,6 +199,41 @@ describe('a real incident', () => {
     expect(canvasIds()).toEqual(s3.scene.nodes.map((n) => n.id));
     press(must('Back to my design'));
     expect(panel()).toBeNull();
+    expect(canvasIds()).toEqual(['mine-client', 'mine-svc']);
+  });
+
+  it('reads the first check of Fix it as the problem, before the outage', () => {
+    mount();
+    openIncident();
+    press(must('Fix it'));
+    for (let i = 0; i < 80; i++) {
+      advance(250);
+      if (document.querySelector('.chal-verdict:not(.is-pending)')) break;
+    }
+    const verdict = document.querySelector('.chal-verdict');
+    expect(verdict?.className).toContain('is-base');
+    expect(verdict?.className).not.toContain('is-danger');
+    expect(verdict?.textContent).toMatch(
+      /^As it starts\. When S3, one region, goes down at 20s, \d+(\.\d+)?% of requests from /,
+    );
+    // The live run has not reached the outage yet, and says how long it has.
+    // It is running: opening paused the scene for Watch, not for the brief.
+    advance(2000);
+    const left = /^Outage in (\d+)s$/.exec(
+      document.querySelector('.chal-countdown')?.textContent ?? '',
+    );
+    expect(left).not.toBeNull();
+    expect(Number(left![1])).toBeLessThan(20);
+    expect(panel()?.textContent).toContain('In the 3 test runs (15s to 60s)');
+  });
+
+  it("sets aside the reader's own design, not the scene, after watching it", () => {
+    mount();
+    openIncident();
+    press(must('Watch it happen'));
+    advance(1000);
+    press(must('Fix it'));
+    press(must('Back to my design'));
     expect(canvasIds()).toEqual(['mine-client', 'mine-svc']);
   });
 

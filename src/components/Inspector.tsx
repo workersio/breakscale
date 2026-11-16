@@ -6,7 +6,9 @@ import type { ReactNode } from 'react';
  * (each button holds one <svg> of its own), and the package is marked
  * side-effect-free so the build keeps only these four.
  */
-import { Pause, Play, RotateCcw, StepForward } from 'lucide-react';
+import { Minus, Pause, Play, Plus, RotateCcw, StepForward } from 'lucide-react';
+import { cycleSpeed, formatSpeed, type Speed } from '../speed';
+import { useCoarsePointer } from '../useCoarsePointer';
 import type {
   NodeConfig,
   NodeKind,
@@ -376,6 +378,15 @@ const FIELDS_BY_KIND: Record<NodeKind, Field[]> = {
   // fair refusal into deliberate triage.
   loadshedder: ['rateLimitRps', 'burst', 'lowPriorityShare', 'priorityReserve'],
 };
+
+/**
+ * Whether a kind does timed work, so that a Slow fault changes anything.
+ * Here, beside the field list it reads, for the canvas menu's Slow row.
+ */
+// eslint-disable-next-line react/only-export-components
+export function slowable(kind: NodeKind): boolean {
+  return FIELDS_BY_KIND[kind].includes('serviceMs');
+}
 
 /**
  * Kinds that hold no work of their own: they admit or refuse and pass
@@ -1271,7 +1282,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     term: 'lock-contention',
     label: 'Lock wait per concurrent write',
     unit: 'milliseconds each',
-    hint: 'Each write entering service waits this long for every write already in flight. Fleet size does not appear in that sentence, which is the lesson.',
+    hint: 'Each write waits this long for every write already in flight. Adding machines does not shorten it.',
     min: 0,
     max: 100,
     step: 1,
@@ -2607,6 +2618,13 @@ export interface InspectorProps {
    * it, or without `faults`, a connection shows no loss control.
    */
   onEdgeLoss?: (edgeId: string, lossRate: number) => void;
+  /**
+   * Duplicate or copy the selection, beside Delete, so a touch screen
+   * reaches both without a keyboard. Optional: without them only Delete
+   * shows.
+   */
+  onDuplicate?: () => void;
+  onCopy?: () => void;
 }
 
 export type { InspectorFaults };
@@ -2625,6 +2643,8 @@ export function Inspector({
   onDeleteMany,
   faults,
   onEdgeLoss,
+  onDuplicate,
+  onCopy,
 }: InspectorProps) {
   /**
    * The selection this panel is actually describing. `selectedNodes` wins
@@ -2717,6 +2737,8 @@ export function Inspector({
         onDelete={onDelete}
         onDeleteMany={onDeleteMany}
         lockedFields={lockedFields}
+        onDuplicate={onDuplicate}
+        onCopy={onCopy}
       />
     );
   }
@@ -2731,6 +2753,8 @@ export function Inspector({
       lockedFields={lockedFields?.(nodes[0]!.kind)}
       suggestions={suggestions}
       faults={faults}
+      onDuplicate={onDuplicate}
+      onCopy={onCopy}
     />
   );
 }
@@ -3150,6 +3174,30 @@ function QueuePanel({ stats }: { stats: NodeStats }) {
   );
 }
 
+/** Duplicate and Copy, at the foot of the panel beside Delete. */
+function CopyActions({
+  onDuplicate,
+  onCopy,
+}: {
+  onDuplicate?: () => void;
+  onCopy?: () => void;
+}) {
+  return (
+    <>
+      {onDuplicate ? (
+        <button type="button" className="btn btn-ghost" onClick={onDuplicate}>
+          Duplicate
+        </button>
+      ) : null}
+      {onCopy ? (
+        <button type="button" className="btn btn-ghost" onClick={onCopy}>
+          Copy
+        </button>
+      ) : null}
+    </>
+  );
+}
+
 /* ------------------------------------------------------------------ *
  * Single-node view
  * ------------------------------------------------------------------ */
@@ -3163,6 +3211,8 @@ function SingleInspector({
   lockedFields,
   suggestions,
   faults,
+  onDuplicate,
+  onCopy,
 }: {
   node: SimNode;
   stats: NodeStats | null;
@@ -3172,6 +3222,8 @@ function SingleInspector({
   lockedFields?: readonly string[];
   suggestions: boolean;
   faults?: InspectorFaults;
+  onDuplicate?: () => void;
+  onCopy?: () => void;
 }) {
   const fields = shownFields(node.kind, node.config);
   const cfg = node.config;
@@ -3326,6 +3378,46 @@ function SingleInspector({
           <UnitsPanel node={node} stats={stats} />
         )}
 
+        {/* High in the panel, under the readings that show a component's
+            state: Crash, Slow and Fix were 650px down at 1280x800, below
+            every setting, and the meter they move is up here. */}
+        {faults && (
+          <Section title="Break it on purpose">
+            <NodeFaultControls
+              fault={faults.fault}
+              cables={faults.cables}
+              onCrash={() => faults.onInject(node.id, 'crash')}
+              onRestart={(downMs) => faults.onInject(node.id, 'restart', { downMs })}
+              restartLoses={restartLosesFor(node)}
+              onCrashOne={
+                fleet > 1 && canCrashOneInstance(node.kind)
+                  ? () => faults.onInject(node.id, 'crash-instance')
+                  : undefined
+              }
+              instances={fleet}
+              // A kind that offers no service time does no timed work, so a
+              // slow fault there would change nothing.
+              canSlow={fields.includes('serviceMs')}
+              onSlow={(factor) => faults.onInject(node.id, 'slow', { factor })}
+              onPause={
+                canPause(node.kind)
+                  ? (pauseMs) => faults.onInject(node.id, 'pause', { pauseMs })
+                  : undefined
+              }
+              onGlitch={(rate) => faults.onInject(node.id, 'errors', { rate })}
+              onFix={() => faults.onFix(node.id)}
+              onCut={faults.onCut}
+              onRestore={faults.onRestore}
+              onDuplicate={faults.onDuplicate}
+              onUndup={faults.onUndup}
+              onCutReplies={faults.onCutReplies}
+              onRestoreReplies={faults.onRestoreReplies}
+              recorded={faults.recorded}
+              onForget={faults.onForget}
+            />
+          </Section>
+        )}
+
         {grouped.map((group) => (
           <Section key={group.title} title={group.title}>
             <div className="ins-fields">
@@ -3434,7 +3526,7 @@ function SingleInspector({
                 {fleet > 1
                   ? `${formatCount(up)} ${down > 0 ? 'running ' : ''}${up === 1 ? 'instance' : 'instances'} x ${formatCount(cfg.capacity)} slots ÷ ${serviceMsLabel}ms each`
                   : `${formatCount(cfg.capacity)} at once ÷ ${serviceMsLabel}ms each`}
-                {blocking && ', if its calls answered at once'}
+                {blocking && ', if everything it calls answered instantly'}
               </p>
               {blocking && stats && (
                 <StatRow
@@ -3458,45 +3550,6 @@ function SingleInspector({
         {suggestion && (
           <Section title="Suggested fix">
             <p className="ins-suggestion">{suggestion}</p>
-          </Section>
-        )}
-
-        {/* Placed above "Right now" so the readings a fault moves sit
-            directly under the button that caused it. */}
-        {faults && (
-          <Section title="Break it on purpose">
-            <NodeFaultControls
-              fault={faults.fault}
-              cables={faults.cables}
-              onCrash={() => faults.onInject(node.id, 'crash')}
-              onRestart={(downMs) => faults.onInject(node.id, 'restart', { downMs })}
-              restartLoses={restartLosesFor(node)}
-              onCrashOne={
-                fleet > 1 && canCrashOneInstance(node.kind)
-                  ? () => faults.onInject(node.id, 'crash-instance')
-                  : undefined
-              }
-              instances={fleet}
-              // A kind that offers no service time does no timed work, so a
-              // slow fault there would change nothing.
-              canSlow={fields.includes('serviceMs')}
-              onSlow={(factor) => faults.onInject(node.id, 'slow', { factor })}
-              onPause={
-                canPause(node.kind)
-                  ? (pauseMs) => faults.onInject(node.id, 'pause', { pauseMs })
-                  : undefined
-              }
-              onGlitch={(rate) => faults.onInject(node.id, 'errors', { rate })}
-              onFix={() => faults.onFix(node.id)}
-              onCut={faults.onCut}
-              onRestore={faults.onRestore}
-              onDuplicate={faults.onDuplicate}
-              onUndup={faults.onUndup}
-              onCutReplies={faults.onCutReplies}
-              onRestoreReplies={faults.onRestoreReplies}
-              recorded={faults.recorded}
-              onForget={faults.onForget}
-            />
           </Section>
         )}
 
@@ -3618,16 +3671,20 @@ function SingleInspector({
           config={node.config}
           onChange={(patch) => onChange(node.id, patch)}
         />
-      </div>
 
-      <div className="ins-foot">
-        <button
-          type="button"
-          className="btn btn-danger ins-delete"
-          onClick={() => onDelete(node.id)}
-        >
-          Delete component
-        </button>
+        {/* At the end of the content, not pinned under it: a pinned footer
+            sat over Fix and Cut cable as the panel scrolled. Undo brings a
+            deleted component back, and the toast says so. */}
+        <div className="ins-foot">
+          <CopyActions onDuplicate={onDuplicate} onCopy={onCopy} />
+          <button
+            type="button"
+            className="btn btn-danger ins-delete"
+            onClick={() => onDelete(node.id)}
+          >
+            Delete component
+          </button>
+        </div>
       </div>
     </aside>
   );
@@ -3657,6 +3714,8 @@ function MultiInspector({
   onDelete,
   onDeleteMany,
   lockedFields,
+  onDuplicate,
+  onCopy,
 }: {
   nodes: readonly SimNode[];
   edgeCount: number;
@@ -3665,6 +3724,8 @@ function MultiInspector({
   onDelete: (id: string) => void;
   onDeleteMany?: (ids: readonly string[]) => void;
   lockedFields?: (kind: NodeKind) => readonly string[];
+  onDuplicate?: () => void;
+  onCopy?: () => void;
 }) {
   const ids = useMemo(() => nodes.map((n) => n.id), [nodes]);
 
@@ -3822,12 +3883,17 @@ function MultiInspector({
             Select one on its own to configure it, or delete the whole selection below.
           </p>
         )}
-      </div>
 
-      <div className="ins-foot">
-        <button type="button" className="btn btn-danger ins-delete" onClick={deleteAll}>
-          Delete {formatCount(nodes.length)} selected
-        </button>
+        <div className="ins-foot">
+          <CopyActions onDuplicate={onDuplicate} onCopy={onCopy} />
+          <button
+            type="button"
+            className="btn btn-danger ins-delete"
+            onClick={deleteAll}
+          >
+            Delete {formatCount(nodes.length)} selected
+          </button>
+        </div>
       </div>
     </aside>
   );
@@ -3887,6 +3953,21 @@ function nudgeRps(rps: number, dir: 1 | -1): number {
   return rps;
 }
 
+/**
+ * The values the touch step buttons walk: about two to three per decade, so
+ * 50 to 300 is five taps rather than the fifty one arrow-key step each
+ * would take. Off the ladder, a press goes to the nearest rung that way.
+ */
+const LOAD_LADDER = [
+  1, 2, 3, 5, 7, 10, 15, 20, 30, 50, 70, 100, 150, 200, 300, 500, 700, 1000, 1500, 2000,
+  3000, 5000,
+];
+
+function stepRps(rps: number, dir: 1 | -1): number {
+  if (dir > 0) return LOAD_LADDER.find((v) => v > rps) ?? rps;
+  return LOAD_LADDER.findLast((v) => v < rps) ?? rps;
+}
+
 const ARROW_DIR: Readonly<Record<string, 1 | -1>> = {
   ArrowRight: 1,
   ArrowUp: 1,
@@ -3908,6 +3989,11 @@ export interface TrafficControlProps {
   onToggleRun: () => void;
   onStep: () => void;
   onReset: () => void;
+  /** Play speed, and the slower speed this machine really manages, if any. */
+  speed?: Speed;
+  slowAt?: number | null;
+  /** Absent: no speed button. */
+  onSpeedChange?: (speed: Speed) => void;
   system: SystemStats;
   /** Requests actually lost per second, from the engine's per-reason counters. */
   lost: number;
@@ -4071,6 +4157,46 @@ function LoadMultiple({
   );
 }
 
+/** "2 times", for a screen reader that would read "×" as a letter. */
+const spokenSpeed = (x: number) => `${formatSpeed(x).replace('×', '')} times`;
+
+/**
+ * Play speed, as one button that steps round 0.5x, 1x, 2x and 4x. One button
+ * rather than four: the bar is the scarcest width in the app, and [ and ]
+ * step either way from the keyboard. When this machine cannot keep up, the
+ * button shows the speed it really runs at rather than the one asked for.
+ */
+function SpeedButton({
+  speed,
+  slowAt,
+  coarse,
+  onChange,
+}: {
+  speed: Speed;
+  slowAt: number | null;
+  coarse: boolean;
+  onChange: (speed: Speed) => void;
+}) {
+  const next = cycleSpeed(speed);
+  const shown = slowAt ?? speed;
+  const keys = coarse ? '' : ' ([ slower, ] faster)';
+  return (
+    <button
+      type="button"
+      className={`btn num transport-speed${slowAt === null ? '' : ' is-short'}`}
+      onClick={() => onChange(next)}
+      aria-label={`Speed ${spokenSpeed(speed)}. Press for ${spokenSpeed(next)}`}
+      title={
+        slowAt === null
+          ? `Speed ${formatSpeed(speed)}${keys}`
+          : `Set to ${formatSpeed(speed)}. This design runs at ${formatSpeed(slowAt)} on this machine.`
+      }
+    >
+      {formatSpeed(shown)}
+    </button>
+  );
+}
+
 export function TrafficControl({
   rps,
   onRpsChange,
@@ -4078,6 +4204,9 @@ export function TrafficControl({
   onToggleRun,
   onStep,
   onReset,
+  speed = 1,
+  slowAt = null,
+  onSpeedChange,
   system,
   lost,
   empty,
@@ -4088,6 +4217,10 @@ export function TrafficControl({
   liveRps = null,
 }: TrafficControlProps) {
   const sliderId = useId();
+  /* A finger on a 200px log track moves 50 to 5k in one short drag, so a
+     touch screen also gets one-step buttons and tappable scale marks. */
+  const coarse = useCoarsePointer();
+  const inert = noTrafficSource || locked;
 
   const errTone = toneClass(healthOfErr(system.errorRate));
 
@@ -4140,7 +4273,29 @@ export function TrafficControl({
                     meant to watch, and it reads as the most important number
                     on screen only if it is the ONLY number at the hero
                     size. */}
+                {coarse && !inert ? (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-icon traffic-nudge"
+                    aria-label="Less load"
+                    disabled={stepRps(rps, -1) === rps}
+                    onClick={() => onRpsChange(stepRps(rps, -1))}
+                  >
+                    <Minus size={14} aria-hidden="true" />
+                  </button>
+                ) : null}
                 <span className="num num-lg">{formatRateBare(rps)}</span>
+                {coarse && !inert ? (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-icon traffic-nudge"
+                    aria-label="More load"
+                    disabled={stepRps(rps, 1) === rps}
+                    onClick={() => onRpsChange(stepRps(rps, 1))}
+                  >
+                    <Plus size={14} aria-hidden="true" />
+                  </button>
+                ) : null}
                 {liveRps !== null ? (
                   /* A traffic shape is on, so the slider sets the base and
                      the shape moves the real rate around it. Says both. */
@@ -4152,7 +4307,9 @@ export function TrafficControl({
                   </>
                 ) : (
                   <span className="label traffic-load-unit">
-                    <Term id="rps">requests / sec</Term>
+                    <Term id="rps">
+                      <span className="traffic-unit-long">requests </span>/ sec
+                    </Term>
                   </span>
                 )}
                 {baselineRps > 0 && rps > 0 ? (
@@ -4208,16 +4365,35 @@ export function TrafficControl({
               Set by the challenge you are in.
             </p>
           ) : (
-            <div className="traffic-scale" aria-hidden="true">
-              {SCALE_MARKS.map((m) => (
-                <span
-                  key={m}
-                  className="num traffic-scale-mark"
-                  style={{ left: `${(rpsToPosition(m) / SLIDER_STEPS) * 100}%` }}
-                >
-                  {m >= 1000 ? `${m / 1000}k` : m}
-                </span>
-              ))}
+            <div
+              className={coarse ? 'traffic-scale is-tap' : 'traffic-scale'}
+              aria-hidden="true"
+            >
+              {SCALE_MARKS.map((m) =>
+                coarse ? (
+                  /* Out of the tab order and hidden from the accessibility
+                     tree: the slider and the two step buttons already reach
+                     every value, and five more stops would only repeat them. */
+                  <button
+                    key={m}
+                    type="button"
+                    tabIndex={-1}
+                    className="num traffic-scale-mark"
+                    style={{ left: `${(rpsToPosition(m) / SLIDER_STEPS) * 100}%` }}
+                    onClick={() => onRpsChange(m)}
+                  >
+                    {m >= 1000 ? `${m / 1000}k` : m}
+                  </button>
+                ) : (
+                  <span
+                    key={m}
+                    className="num traffic-scale-mark"
+                    style={{ left: `${(rpsToPosition(m) / SLIDER_STEPS) * 100}%` }}
+                  >
+                    {m >= 1000 ? `${m / 1000}k` : m}
+                  </span>
+                ),
+              )}
             </div>
           )}
         </div>
@@ -4246,9 +4422,15 @@ export function TrafficControl({
               <span className="label">
                 System <Term id="p99">p99</Term>
               </span>
-              <span className={p99Tone ? `num num-hero ${p99Tone}` : 'num num-hero'}>
-                {formatMs(p99)}
-              </span>
+              {p99 === null && system.errorRate > 0 ? (
+                /* Requests are failing and none is coming back: a giant
+                   "n/a" read as a glitch in the app, not as an outage. */
+                <span className="traffic-no-replies is-danger">no replies</span>
+              ) : (
+                <span className={p99Tone ? `num num-hero ${p99Tone}` : 'num num-hero'}>
+                  {formatMs(p99)}
+                </span>
+              )}
             </div>
 
             <div className="traffic-metric-group">
@@ -4345,7 +4527,22 @@ export function TrafficControl({
         >
           <RotateCcw size={16} aria-hidden="true" />
         </button>
+        {onSpeedChange ? (
+          <SpeedButton
+            speed={speed}
+            slowAt={slowAt}
+            coarse={coarse}
+            onChange={onSpeedChange}
+          />
+        ) : null}
       </div>
+      {/* The [ and ] keys change speed from anywhere, so the change is said.
+          Outside the group, which rounds its last child's corners. */}
+      {onSpeedChange ? (
+        <span className="sr-only" aria-live="polite">
+          {`Speed ${spokenSpeed(speed)}`}
+        </span>
+      ) : null}
     </div>
   );
 }

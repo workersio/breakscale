@@ -273,6 +273,18 @@ export const KIND_NAME: Record<NodeKind, string> = {
 };
 
 /**
+ * "What is an Edge compute?", for the palette's question mark. The article
+ * follows the sound, not the letter: "an API gateway", "a CDN". The one
+ * plural name gets "are".
+ */
+export function whatIsKind(kind: NodeKind): string {
+  const name = KIND_NAME[kind];
+  if (kind === 'replica') return `What are ${name}?`;
+  const article = /^[AEIO]/.test(name) ? 'an' : 'a';
+  return `What is ${article} ${name}?`;
+}
+
+/**
  * Glossary entry for each component kind.
  *
  * Lives beside KIND_NAME because it is the same fact about a kind: what it is

@@ -214,3 +214,56 @@ export function endPointer(
 export function snapsToGrid(snapOn: boolean, ctrlHeld: boolean): boolean {
   return snapOn && !ctrlHeld;
 }
+
+/* ------------------------------------------------------------------ *
+ * Long-press
+ * ------------------------------------------------------------------ */
+
+/**
+ * How long a finger or pen must rest before the press opens the context
+ * menu. 500ms is what Android and iOS use for the same gesture, so it is the
+ * delay a reader's hand already expects.
+ */
+export const LONG_PRESS_MS = 500;
+
+/**
+ * Whether a press of this pointer type can become a long-press. A mouse has
+ * a right button for the same menu, and a held mouse button is how a slow
+ * drag starts, so a mouse never long-presses.
+ */
+export function longPressable(pointerType: string): boolean {
+  return pointerType === 'touch' || pointerType === 'pen';
+}
+
+export interface LongPress {
+  readonly pointerId: number;
+  /** Stop the timer. Safe to call after it fired, and more than once. */
+  cancel: () => void;
+}
+
+/**
+ * Arm the long-press timer for one press. The caller decides everything else:
+ * the press moving past its drag threshold, a second finger landing, the lift
+ * and a pointercancel each call `cancel`, and `fire` re-checks that the press
+ * it was armed for is still the one in progress before acting on it.
+ *
+ * The one piece of state with a clock in this module, kept here so the
+ * surface handlers carry a start and a cancel rather than timer bookkeeping.
+ */
+export function startLongPress(
+  pointerId: number,
+  fire: () => void,
+  delayMs: number = LONG_PRESS_MS,
+): LongPress {
+  let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+    timer = null;
+    fire();
+  }, delayMs);
+  return {
+    pointerId,
+    cancel: () => {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+    },
+  };
+}

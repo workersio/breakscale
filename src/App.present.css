@@ -1,0 +1,149 @@
+/* ==========================================================================
+   Presenting mode (present.ts): the canvas and the live numbers, sized for a
+   projector. One block, keyed on .app.is-presenting, so the normal layout is
+   untouched while the mode is off.
+
+   What goes: the wordmark and its row (undo, redo, saved), GitHub, Share,
+   Can you break it?, the menu, the side panels' toggles and the components
+   count. The panels themselves are closed by the shell, so the safe-area
+   sentinel and every fit see the freed width. What stays: the load slider,
+   p99, goodput, errors, dropped and the transport, at --present-scale.
+   ========================================================================== */
+
+.app.is-presenting {
+  --present-scale: 1.5;
+}
+
+.app.is-presenting .app-island-brand,
+.app.is-presenting .app-island-menu,
+.app.is-presenting .stage-toggle-library,
+.app.is-presenting .stage-toggle-inspector,
+.app.is-presenting .cv-ledger,
+.app.is-presenting .cv-hint-idle {
+  display: none;
+}
+
+/* The load island is the whole bar now, so it may use all of it, and the
+   slider with it: the room should see the load being dragged. */
+.app.is-presenting .app-island-load {
+  max-width: none;
+}
+
+.app.is-presenting .traffic-load {
+  max-width: 720px;
+}
+
+/* The bar's figures, on the desktop layout only: a phone's header already
+   fills its width, and growing it only took rows from the diagram. The
+   hero keeps its place as the largest thing on screen; the secondary
+   readouts and their labels grow with it so the back row can read which
+   number is which. The p99 column is a fixed width at the normal size
+   (Inspector.css) so the slider does not jump as the figure changes, and
+   is scaled with it. */
+@media (min-width: 721px) and (min-height: 501px),
+  (min-width: 721px) and (pointer: fine),
+  (min-width: 721px) and (pointer: none) {
+  .app.is-presenting .traffic .num-hero {
+    font-size: calc(var(--fs-hero) * var(--present-scale));
+  }
+
+  .app.is-presenting .traffic .num-md,
+  .app.is-presenting .traffic .num-lg {
+    font-size: calc(var(--fs-num) * var(--present-scale));
+  }
+
+  .app.is-presenting .traffic .label {
+    font-size: calc(var(--fs-label) * var(--present-scale));
+  }
+
+  .app.is-presenting .traffic-headline > .traffic-metric:first-child {
+    width: calc(98px * var(--present-scale));
+  }
+}
+
+/* The presenting bar (PresentBar.css) takes the foot of the canvas, so the
+   safe area every fit frames into stops above it. --pb-h is the bar's own
+   measured height; it wraps to two or three rows on a narrow screen. */
+.app.is-presenting .stage-safe {
+  bottom: calc(var(--pb-h, 56px) + var(--sp-3) * 2);
+}
+
+.app.is-presenting .app-body.has-metrics .stage-safe {
+  bottom: calc(var(--strip-shown) + var(--pb-h, 56px) + var(--sp-3) * 3);
+}
+
+/* Phones. The tab bar goes: two of its three tabs open panels this mode
+   keeps shut. */
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
+  .app.is-presenting {
+    --tabbar-h: 0px;
+  }
+
+  .app.is-presenting .app-tabbar {
+    display: none;
+  }
+
+  .app.is-presenting .stage-canvas > .stage-safe {
+    bottom: calc(var(--pb-h, 56px) + var(--sp-2) * 2);
+  }
+
+  /* "What just happened" sits at the canvas's foot on a phone, which is
+     this bar's place now; it moves up by the bar's height. */
+  .app.is-presenting .app-body .wh {
+    bottom: calc(var(--pb-h, 56px) + var(--sp-2) * 2);
+  }
+}
+
+/* The zoom group's "Zoom to 70%" note is advice for the person building,
+   not the room watching. */
+.app.is-presenting .cv-zoom-note {
+  display: none;
+}
+
+/* Toasts and "What just happened" sit one row above the canvas's foot,
+   a row sized for the zoom group. While presenting that row is this bar,
+   which is taller and wider, so they clear its measured height instead. */
+@media (min-width: 721px) and (min-height: 501px),
+  (min-width: 721px) and (pointer: fine),
+  (min-width: 721px) and (pointer: none) {
+  .app.is-presenting .app-toast-dock {
+    --toast-row-h: var(--pb-h, 56px);
+  }
+
+  .app.is-presenting .wh {
+    --wh-zoom-h: var(--pb-h, 56px);
+  }
+}
+
+/* When the larger figures no longer fit one row (useBarFit measures it, as
+   it does for the normal bar), the figures and the transport keep the top
+   row and the load slider takes the full row under them. */
+@media (min-width: 721px) and (min-height: 501px),
+  (min-width: 721px) and (pointer: fine),
+  (min-width: 721px) and (pointer: none) {
+  .app.is-presenting .app-bar[data-fit='compact'] .traffic {
+    flex-wrap: wrap;
+    row-gap: var(--sp-2);
+  }
+
+  .app.is-presenting .app-bar[data-fit='compact'] .traffic-load {
+    order: 1;
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
+  .app.is-presenting .app-bar[data-fit='compact'] .traffic-spacer {
+    display: none;
+  }
+
+  .app.is-presenting .app-bar[data-fit='compact'] .traffic-headline {
+    margin-right: auto;
+  }
+
+  /* The normal bar drops goodput, errors and dropped below 860px of
+     control (Inspector.css), to keep the slider. Here the slider has its
+     own row, so they stay: they are half of what a class is shown. */
+  .app.is-presenting .app-bar[data-fit='compact'] .traffic-metric-group {
+    display: flex;
+  }
+}

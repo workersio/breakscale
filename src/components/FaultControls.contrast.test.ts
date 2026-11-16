@@ -25,6 +25,8 @@ describe('contrast', () => {
     ['--text-on-fill', '--danger'],
     // Fix, the plain button.
     ['--text', '--surface'],
+    // The fault in force, pressed: "Crashed", "Slowed".
+    ['--danger', '--danger-soft'],
   ];
   for (const [name, tokens] of themes) {
     it(`${name}: every text pair clears AA`, () => {

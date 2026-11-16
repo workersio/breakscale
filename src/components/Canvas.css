@@ -431,6 +431,12 @@
   outline: none;
 }
 
+/* Painted with nothing, but still hit: see nodeHitPad in glance.ts. */
+.cv-node-hitpad {
+  fill: transparent;
+  stroke: none;
+}
+
 .cv-node-ring {
   fill: none;
   stroke: var(--accent);
@@ -1425,6 +1431,22 @@
   padding: 0 var(--sp-2);
 }
 
+/* Sits above the group, right-aligned with it, so it never moves the
+   buttons. Surface behind it, because the grid and the cables run under. */
+.cv-zoom-note {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + var(--sp-1));
+  margin: 0;
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .cv-zoom-level {
   min-width: 46px;
   font-family: var(--mono);
@@ -2194,7 +2216,7 @@
   touch-action: none;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   .cv-hint-idle {
     display: none;
   }
@@ -2420,7 +2442,7 @@
 /* A phone hides the zoom cluster, so the key takes the bottom right corner.
    The left one belongs to "What just happened" and its reopen button. One
    column, so it stays narrow. */
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   .cv-key {
     left: auto;
     right: var(--sp-3);
@@ -2527,4 +2549,47 @@
   .cv-line.is-refusing .cv-line-brim {
     animation: none;
   }
+}
+
+/* --------------------------------------------------------------------------
+   Notes on a fitted phone diagram. Their text lands at 5 to 8 screen px, so
+   each carries a tag sized in screen px, and the selected one is shown in a
+   card over the format bar at a size that can be read.
+   -------------------------------------------------------------------------- */
+.cv-note-tag rect {
+  fill: var(--surface);
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+
+.cv-note-tag text {
+  fill: var(--text);
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+
+.cv-note-read {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(var(--sp-3) + 32px + var(--sp-3) + 52px);
+  width: min(360px, calc(100% - var(--sp-4) * 2));
+  max-height: 40%;
+  overflow-y: auto;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+}
+
+.cv-note-read p {
+  margin: 0;
+  font-size: var(--fs-base);
+  line-height: var(--lh-prose);
+  color: var(--text);
+  white-space: pre-wrap;
 }

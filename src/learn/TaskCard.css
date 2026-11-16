@@ -46,7 +46,9 @@
   }
 }
 
-@media (min-width: 721px) {
+@media (min-width: 721px) and (min-height: 501px),
+  (min-width: 721px) and (pointer: fine),
+  (min-width: 721px) and (pointer: none) {
   .app-body.has-task:not(.has-inspector) .stage-safe {
     right: calc(var(--task-w) + var(--sp-3) * 2);
   }
@@ -221,7 +223,7 @@
   color: var(--text-dim);
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   /* Docked on the tab bar, as the tour is, so the diagram keeps the middle
      of the screen. "What just happened" docks there too and waits while
      the card is open. */

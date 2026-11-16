@@ -513,3 +513,127 @@ describe('panel chrome', () => {
     expect(button('Show the brief')).not.toBeNull();
   });
 });
+
+describe('the design as the brief starts it', () => {
+  const faulty = {
+    ...brief,
+    faults: [{ atMs: 20_000, action: 'inject', nodeId: 'db', kind: 'crash' }] as const,
+  };
+
+  it('reads a miss as the problem, in a neutral tone, with when the trouble lands', () => {
+    render({
+      challenge: faulty,
+      check: { status: 'verdict', verdict: missed },
+      fresh: true,
+      liveMs: 5_400,
+    });
+    const line = container.querySelector('.chal-verdict')!;
+    expect(line.className).toContain('is-base');
+    expect(line.textContent).toBe(
+      `As it starts. When the db goes down at 20s, the slowest 1 in 100 requests took ${p99Goal.max + 1}ms, and the goal is ${p99Goal.max}ms or less.`,
+    );
+    expect(container.querySelector('.chal-countdown')?.textContent).toBe(
+      'Outage in 15s',
+    );
+    expect(container.querySelector('[role="status"]')?.textContent).toBe(
+      line.textContent,
+    );
+    expect(container.querySelector('.chal')?.className).toContain('is-base');
+  });
+
+  it('drops the countdown once the live run reaches the trouble', () => {
+    render({
+      challenge: faulty,
+      check: { status: 'verdict', verdict: missed },
+      fresh: true,
+      liveMs: 20_000,
+    });
+    expect(container.querySelector('.chal-countdown')).toBeNull();
+  });
+
+  it('says Not yet again once the design has been changed', () => {
+    render({ challenge: faulty, check: { status: 'verdict', verdict: missed } });
+    const line = container.querySelector('.chal-verdict')!;
+    expect(line.className).toContain('is-danger');
+    expect(line.textContent?.startsWith('Not yet.')).toBe(true);
+    expect(container.querySelector('.chal-countdown')).toBeNull();
+  });
+});
+
+describe('the check beside the bar', () => {
+  const liveAt = (p99: number, loss: number): ChallengeResult => ({
+    passed: false,
+    goals: [
+      { goal: p99Goal, actual: p99, met: p99 <= p99Goal.max },
+      { goal: lossGoal, actual: loss, met: loss <= lossGoal.max },
+    ],
+  });
+
+  it('says what the goal list measured', () => {
+    render();
+    expect(container.querySelector('.chal-goals-title')?.textContent).toBe(
+      'In the 3 test runs (15s to 60s)',
+    );
+  });
+
+  it('shows the live reading under each checked one, called live', () => {
+    render({ check: { status: 'verdict', verdict: passed }, live: liveAt(127, 0.4) });
+    const now = [
+      ...container.querySelectorAll('.chal-body > .chal-goals .chal-goal-now'),
+    ];
+    expect(now.map((n) => n.textContent)).toEqual(['Live now 127ms', 'Live now 0.4%']);
+  });
+
+  it('shows no live reading while nothing is getting through', () => {
+    render({ liveFlowing: false });
+    expect(container.querySelector('.chal-goal-now')).toBeNull();
+  });
+
+  it('explains a pass the live numbers disagree with, right after a change', () => {
+    render({ check: { status: 'stale', hadVerdict: true }, liveMs: 30_000 });
+    render({
+      check: { status: 'verdict', verdict: passed },
+      live: liveAt(p99Goal.max + 80, 0),
+      liveMs: 31_000,
+    });
+    expect(text()).toContain(
+      'Live numbers still include requests from before your change.',
+    );
+    render({
+      check: { status: 'verdict', verdict: passed },
+      live: liveAt(p99Goal.max + 80, 0),
+      liveMs: 45_000,
+    });
+    expect(text()).toContain('Live numbers move with the run on screen.');
+    render({ check: { status: 'verdict', verdict: passed }, live: liveAt(100, 0) });
+    expect(text()).not.toContain('Live numbers');
+  });
+});
+
+describe('a pass', () => {
+  const body = () => container.querySelector<HTMLElement>('.chal-body')!;
+
+  it('opens the brief folded beside the inspector, as it lands', () => {
+    render({ check: { status: 'verdict', verdict: missed }, besideInspector: true });
+    expect(body().hidden).toBe(true);
+    render({ check: { status: 'verdict', verdict: passed }, besideInspector: true });
+    expect(body().hidden).toBe(false);
+    expect(text()).toContain(brief.lesson);
+    // The reader can still fold it.
+    press(button('Hide the brief')!);
+    expect(body().hidden).toBe(true);
+  });
+
+  it('opens the brief the reader folded', () => {
+    render({ check: { status: 'verdict', verdict: missed } });
+    press(button('Hide the brief')!);
+    render({ check: { status: 'verdict', verdict: passed } });
+    expect(body().hidden).toBe(false);
+  });
+
+  it('is not folded away when the inspector opens beside it', () => {
+    render({ check: { status: 'verdict', verdict: passed } });
+    render({ check: { status: 'verdict', verdict: passed }, besideInspector: true });
+    expect(body().hidden).toBe(false);
+  });
+});

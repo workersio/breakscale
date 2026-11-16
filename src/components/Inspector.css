@@ -512,19 +512,18 @@ select.ins-number {
 /* --------------------------------------------------------------------------
    Footer
 
-   Pinned below the scroll area so the destructive action never scrolls out
-   of reach, and never drifts up under the last field either.
+   The last thing in the scroll area, after every reading. It used to be
+   pinned under it, always in view, and covered Fix and Cut cable as the
+   panel scrolled; a delete is rare and one undo brings it back.
    -------------------------------------------------------------------------- */
 
-/* The footer's right padding has to clear the SCROLLBAR the body above it
-   reserves, or the one full-width control in the panel is the only thing
-   that does not share the content column's right edge. Measured: every value
-   row ended at 1965.6 and the delete button at 1973.6, exactly 8px past —
-   and it is the destructive action, so that is where the eye goes. */
 .ins-foot {
-  flex: none;
-  padding: var(--sp-3) calc(var(--sp-5) + var(--scrollbar-w)) var(--sp-3) var(--sp-5);
-  background: var(--surface);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-7);
+  padding-top: var(--sp-4);
+  border-top: var(--bw) solid var(--border);
 }
 
 /* Destructive, and QUIET until wanted.
@@ -539,6 +538,8 @@ select.ins-number {
    and focus, at the moment the student has actually reached for it. */
 .ins-delete {
   align-self: flex-start;
+  /* Apart from Duplicate and Copy, so a slip does not land on it. */
+  margin-left: auto;
   border-color: transparent;
   background: transparent;
   color: var(--text-dim);
@@ -640,6 +641,35 @@ select.ins-number {
    "5k". */
 .traffic-load-readout .num-lg {
   min-width: 52px;
+}
+
+/* The one-step buttons beside the number, touch only. 32px drawn, 44px to a
+   finger: the extra is an invisible margin of the button itself. */
+.traffic-nudge {
+  position: relative;
+  align-self: center;
+}
+
+.traffic-nudge {
+  min-width: 32px;
+  min-height: 32px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.traffic-nudge::before {
+  content: '';
+  position: absolute;
+  inset: -6px;
+}
+
+/* Phone landscape folds the readout into a narrow column with no room for
+   them; the tappable scale marks still give a finger exact values there. */
+@media (pointer: coarse) and (max-height: 500px) {
+  .traffic-nudge {
+    display: none;
+  }
 }
 
 .traffic-load-unit {
@@ -791,6 +821,14 @@ button.traffic-multiple[aria-expanded='true'] {
   white-space: nowrap;
 }
 
+.traffic-no-replies {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  /* The hero's line box, so the bar keeps its height when this stands in. */
+  line-height: calc(var(--fs-hero) * var(--lh-hero));
+  white-space: nowrap;
+}
+
 .traffic-scale-note {
   position: absolute;
   inset: auto 0 0;
@@ -803,6 +841,31 @@ button.traffic-multiple[aria-expanded='true'] {
   font-size: var(--fs-sm);
   line-height: 12px;
   white-space: nowrap;
+}
+
+/* Tappable marks: the scale takes the pointer, and each mark gets a 44px
+   wide target that reaches down under the bar's edge, away from the
+   slider's own hit area above it. */
+.traffic-scale.is-tap {
+  pointer-events: auto;
+}
+
+.traffic-scale.is-tap .traffic-scale-mark {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: var(--mono);
+  cursor: pointer;
+}
+
+.traffic-scale.is-tap .traffic-scale-mark::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: -2px;
+  width: 44px;
+  height: 32px;
+  transform: translateX(-50%);
 }
 
 .traffic-scale-mark {
@@ -849,6 +912,13 @@ button.traffic-multiple[aria-expanded='true'] {
   min-width: 0;
 }
 
+/* With nothing to measure the slot holds a sentence, not fixed-width
+   figures, so it may give up width and wrap rather than push the bar onto
+   two rows the moment the canvas is cleared. */
+.traffic-headline:has(> .traffic-empty) {
+  flex: 0 1 auto;
+}
+
 /* No components on the canvas: one quiet sentence where the numbers go. */
 .traffic-empty {
   margin: 0;
@@ -880,7 +950,9 @@ button.traffic-multiple[aria-expanded='true'] {
    "117ms". Same rationale as .traffic-load-readout .num-lg. Desktop only:
    on phone the metric is a row (label beside value) and a fixed column
    width clips it; the slider is on its own line there anyway. */
-@media (min-width: 721px) {
+@media (min-width: 721px) and (min-height: 501px),
+  (min-width: 721px) and (pointer: fine),
+  (min-width: 721px) and (pointer: none) {
   .traffic-headline > .traffic-metric:first-child {
     flex: none;
     width: 98px;
@@ -950,6 +1022,21 @@ button.traffic-multiple[aria-expanded='true'] {
   color: var(--accent);
 }
 
+/* Play speed. A width, for the same reason as the toggle: "0.5×" and "2×"
+   must not move the buttons beside them. 36px, the icon buttons' width,
+   holds "0.5×" at this size; 48 pushed the bar onto two rows at 1280. */
+.traffic-actions .transport-speed {
+  width: 36px;
+  padding: 0;
+  font-size: var(--fs-sm);
+  letter-spacing: -0.02em;
+}
+
+/* Asked for more than this machine manages, and saying the real figure. */
+.traffic-actions .transport-speed.is-short {
+  color: var(--warn);
+}
+
 /* The optical-centre nudge for the play triangle (see the JSX comment). */
 .transport-play {
   transform: translateX(1px);
@@ -975,7 +1062,7 @@ button.traffic-multiple[aria-expanded='true'] {
           keeping three more figures would crush the one control the
           student drives, so the figures go and the slider springs back.
           The charts strip still carries every one of these numbers.
-     620  the slider's floor comes down to 260 and the headline tightens.
+     620  the slider's floor comes down to 232 and the headline tightens.
      560  the "requests / sec" unit and the spacer gap go to zero, and the
           slider may reach 220. The slider's aria-valuetext still says the
           unit, and this fires only in sub-900px windows where the p99
@@ -989,14 +1076,22 @@ button.traffic-multiple[aria-expanded='true'] {
     display: none;
   }
 
+  /* The empty canvas says the same thing in its own middle, and here the
+     sentence wrapped to four lines in a 56px island. */
+  .traffic-empty {
+    display: none;
+  }
+
   .traffic-headline {
     gap: var(--sp-4);
   }
 }
 
 @container traffic (max-width: 620px) {
+  /* 232, not 260: the speed button took 35px of the transport, and at 260
+     the bar fell to two rows between 1280 and 1300 wide. */
   .traffic-load {
-    min-width: 260px;
+    min-width: 232px;
   }
 }
 
@@ -1033,7 +1128,7 @@ button.traffic-multiple[aria-expanded='true'] {
    supply, and the gap between them is enough separation.
    -------------------------------------------------------------------------- */
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   /* Two rows, not three.
 
      The load control is the only thing in the phone header besides the
@@ -1270,4 +1365,41 @@ button.traffic-multiple[aria-expanded='true'] {
   box-shadow: none;
   cursor: not-allowed;
   transform: none;
+}
+
+/* The fault in force: pressed, not unavailable. Danger ink on the soft
+   danger fill (4.88:1 light, 5.24:1 dark) with a full danger border. */
+.ins-fault .btn[aria-pressed='true'],
+.ins-fault .btn[aria-pressed='true']:hover,
+.ins-fault .btn[aria-pressed='true']:active {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+  box-shadow: none;
+  cursor: default;
+  transform: none;
+}
+
+/* At the narrowest phones the step buttons need the room "requests" took;
+   the unit still reads "/ sec" and its definition is one tap away. */
+@media (max-width: 409px) and (pointer: coarse) {
+  .traffic-unit-long {
+    display: none;
+  }
+}
+
+/* Touch targets: the name field, number boxes and fault selects were 32 to
+   36px tall. */
+@media (pointer: coarse) {
+  .ins-title,
+  .ins-number {
+    min-height: 44px;
+  }
+}
+
+/* On a phone the hero is set at --fs-lg, the same size as "no replies". */
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
+  .traffic-no-replies {
+    line-height: var(--lh-hero);
+  }
 }

@@ -79,6 +79,12 @@
   color: var(--text);
 }
 
+.lp-next-here {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text);
+}
+
 .lp-next-learn,
 .lp-all-done {
   margin: 0;

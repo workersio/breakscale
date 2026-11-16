@@ -110,7 +110,8 @@ describe('Charged twice', () => {
     expect(panel()?.textContent).toContain(brief.name);
 
     settleCheck();
-    expect(chip()).toBe('Not yet');
+    // The design as the brief hands it over, so the miss is the brief's own.
+    expect(chip()).toBe('As it starts');
     expect(panel()?.textContent).toMatch(
       /\d+ payments were charged more than once, and the goal is none\./,
     );

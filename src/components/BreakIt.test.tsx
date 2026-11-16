@@ -133,7 +133,7 @@ function show(
     onWatch: vi.fn(),
     onReplayLink: vi.fn(),
     onMarkChargeable: vi.fn(),
-    watchLine: null,
+    watch: null,
     ...extra,
   };
   act(() => root.render(<BreakPanel {...props} />));
@@ -274,6 +274,35 @@ describe('BreakPanel', () => {
     expect(props.onWatch).toHaveBeenCalledTimes(1);
     press(byText('Replay link') as Element);
     expect(props.onReplayLink).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a replay as a clock, a bar and a Stop button, counting down to the first fault', () => {
+    if (broke.status !== 'broke') throw new Error('should break');
+    const onStopWatch = vi.fn();
+    const watch = { line: 'Nothing measured yet.', firstMs: 10_000, endMs: 35_000 };
+    show(fake(done(broke)), { watch, watchAtMs: 4_300, onStopWatch });
+    expect(container.querySelector('.brk-watch-clock')?.textContent).toBe(
+      'Replay 4s of 35s',
+    );
+    const bar = container.querySelector('[role="progressbar"][aria-label="Replay"]');
+    expect(bar?.getAttribute('aria-valuenow')).toBe('4');
+    expect(container.querySelector('.brk-pill')?.textContent).toBe(
+      'Nothing measured yet. The first fault lands at 10s, in 6s.',
+    );
+    // The clock moves with the replay, not with a remembered second.
+    show(fake(done(broke)), { watch, watchAtMs: 12_000, onStopWatch });
+    expect(container.querySelector('.brk-pill')?.textContent).toBe(
+      'Nothing measured yet.',
+    );
+    show(fake(done(broke)), { watch, watchAtMs: 36_000, onStopWatch });
+    expect(container.querySelector('.brk-watch-clock')?.textContent).toBe(
+      'Replay done',
+    );
+    const stop = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Stop replay',
+    );
+    press(stop as Element);
+    expect(onStopWatch).toHaveBeenCalledTimes(1);
   });
 
   it('folds to the break and remembers it when asked to fix it', () => {
@@ -428,7 +457,7 @@ describe('BreakPanel: correctness goals', () => {
           onWatch={vi.fn()}
           onReplayLink={vi.fn()}
           onMarkChargeable={mark}
-          watchLine={null}
+          watch={null}
         />,
       ),
     );
@@ -510,7 +539,7 @@ describe('BreakPanel: correctness goals', () => {
           onWatch={vi.fn()}
           onReplayLink={vi.fn()}
           onMarkChargeable={vi.fn()}
-          watchLine={null}
+          watch={null}
         />,
       ),
     );
@@ -544,7 +573,7 @@ describe('BreakPanel: correctness goals', () => {
           onWatch={vi.fn()}
           onReplayLink={vi.fn()}
           onMarkChargeable={vi.fn()}
-          watchLine={null}
+          watch={null}
         />,
       ),
     );

@@ -47,9 +47,13 @@ export function WhatHappened({ topology, snapshot }: WhatHappenedProps) {
      that opened it is read out from a status that is always mounted, before
      there is anything to say, or its first message would be missed. */
   const alert = firstAttention(lines, seenId);
+  /* What is read out is the newest line, not the one that opened the panel:
+     after Fix, "Database crashed." is history, and repeating it as the
+     current news told the reader the opposite of the truth. */
+  const latest = alert ? lines.reduce((a, e) => (e.id > a.id ? e : a), alert) : null;
   const status = (
     <div className="sr-only" role="status">
-      {alert ? <span key={alert.id}>What just happened: {alert.text}</span> : null}
+      {latest ? <span key={latest.id}>What just happened: {latest.text}</span> : null}
     </div>
   );
   // Nothing worth a look yet: no button, no panel. A healthy run stays quiet.

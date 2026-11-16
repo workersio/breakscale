@@ -33,6 +33,7 @@ import {
   triedLine,
 } from './breakCopy';
 import type { Names, TimelineTag } from './breakCopy';
+import { secs } from './breakCopy';
 import { Term } from './Tooltip';
 import './Challenge.css';
 import './BreakIt.css';
@@ -57,12 +58,23 @@ export interface BreakPanelProps {
   /** Mark a part as charging money, through the same undoable edit the Inspector makes. */
   onMarkChargeable: (id: string) => void;
   /**
-   * While a replay plays: where it is, in a line. The panel folds to it.
-   * Null otherwise.
+   * While a replay plays: what it has measured so far, when its first fault
+   * lands and when its window ends. The panel folds to it. Null otherwise.
    */
-  watchLine: string | null;
+  watch: ReplayWatch | null;
+  /** The replay's own clock, read on every render. */
+  watchAtMs?: number;
+  /** Stop watching and put the reader's design back. */
+  onStopWatch?: () => void;
   foldOnStart?: boolean;
   onSheetResize?: (height: number | null, shut: boolean) => void;
+}
+
+export interface ReplayWatch {
+  /** The figure so far, as a sentence. */
+  line: string;
+  firstMs: number;
+  endMs: number;
 }
 
 const KIND_LABEL: Record<AttackKind, string> = {
@@ -240,7 +252,9 @@ export function BreakPanel({
   onWatch,
   onReplayLink,
   onMarkChargeable,
-  watchLine,
+  watch,
+  watchAtMs = 0,
+  onStopWatch,
   foldOnStart = false,
   onSheetResize,
 }: BreakPanelProps) {
@@ -360,10 +374,19 @@ export function BreakPanel({
         {announcement(search, names)}
       </p>
 
-      {watchLine !== null ? (
-        <p className="brk-pill" aria-live="off">
-          {watchLine}
-        </p>
+      {watch !== null ? (
+        <ReplayStrip
+          watch={watch}
+          atMs={watchAtMs}
+          onStop={
+            onStopWatch
+              ? () => {
+                  setCollapsed(false);
+                  onStopWatch();
+                }
+              : undefined
+          }
+        />
       ) : null}
 
       <div id={bodyId} className="chal-body" hidden={shut}>
@@ -427,6 +450,55 @@ export function BreakPanel({
         ) : null}
       </div>
     </section>
+  );
+}
+
+/**
+ * Where a replay is: its clock against the end of the window, a bar for the
+ * same, the figure so far, and a way out. Shown folded or not, so the run
+ * can be stopped without opening the panel first.
+ */
+function ReplayStrip({
+  watch,
+  atMs,
+  onStop,
+}: {
+  watch: ReplayWatch;
+  atMs: number;
+  onStop: (() => void) | undefined;
+}) {
+  const at = Math.min(Math.floor(atMs / 1000) * 1000, watch.endMs);
+  const done = atMs >= watch.endMs;
+  const until = Math.ceil((watch.firstMs - atMs) / 1000);
+  const clock = done ? 'Replay done' : `Replay ${secs(at)} of ${secs(watch.endMs)}`;
+  return (
+    <div className="brk-watch">
+      <div className="brk-watch-head">
+        <p className="brk-watch-clock">{clock}</p>
+        {onStop ? (
+          <button type="button" className="btn btn-sm" onClick={onStop}>
+            Stop replay
+          </button>
+        ) : null}
+      </div>
+      <div
+        className="brk-watch-bar"
+        role="progressbar"
+        aria-label="Replay"
+        aria-valuemin={0}
+        aria-valuemax={watch.endMs / 1000}
+        aria-valuenow={at / 1000}
+        aria-valuetext={clock}
+      >
+        <span style={{ width: `${(at / watch.endMs) * 100}%` }} />
+      </div>
+      <p className="brk-pill" aria-live="off">
+        {watch.line}
+        {until > 0
+          ? ` The first fault lands at ${secs(watch.firstMs)}, in ${until}s.`
+          : ''}
+      </p>
+    </div>
   );
 }
 

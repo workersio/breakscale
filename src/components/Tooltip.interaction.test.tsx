@@ -370,6 +370,8 @@ describe('touch', () => {
         new FakePointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }),
       );
     });
+    // The press focuses the term, as a browser does; jsdom does not.
+    act(() => t.focus());
     act(() => t.blur());
     // Later, keyboard focus opens it and assistive tech clicks it.
     act(() => t.focus());
@@ -378,6 +380,45 @@ describe('touch', () => {
       t.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 }));
     });
     expect(panel()).toBeNull();
+  });
+
+  it('opens on the click of a press, not on the focus that press gives it', () => {
+    render(App);
+    const t = trigger();
+    act(() => {
+      t.dispatchEvent(
+        new FakePointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }),
+      );
+    });
+    act(() => t.focus());
+    expect(panel()).toBeNull();
+    act(() => {
+      t.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+    });
+    expect(panel()).not.toBeNull();
+  });
+
+  it('inside a label, a click does not go on to focus the labelled input', () => {
+    render(
+      <>
+        <label htmlFor="load">
+          <Term id="p99">Offered load</Term>
+        </label>
+        <input id="load" />
+        <TooltipLayer />
+      </>,
+    );
+    const click = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      detail: 1,
+    });
+    act(() => {
+      trigger().dispatchEvent(click);
+    });
+    expect(click.defaultPrevented).toBe(true);
+    expect(document.activeElement).not.toBe(document.getElementById('load'));
+    expect(panel()).not.toBeNull();
   });
 
   it('closes when the next tap lands elsewhere', () => {

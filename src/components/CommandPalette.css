@@ -1,0 +1,223 @@
+/* ==========================================================================
+   Command palette.
+
+   Owns .cp-* only. Same layer and motion as the shortcuts dialog. It sits
+   high in the window rather than centred, so the rows grow downward from
+   where the eye already is, and on a phone the keyboard leaves them visible.
+   ========================================================================== */
+
+.cp-root {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: max(var(--sp-5), 12vh) var(--sp-5) var(--sp-5);
+}
+
+.cp-scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+  animation: cp-fade-in var(--dur-slow) var(--ease-out);
+}
+
+.cp-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(600px, 100%);
+  max-height: min(520px, 76vh);
+  min-height: 0;
+  background: var(--surface);
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: cp-card-in var(--dur-slow) var(--ease-out);
+}
+
+.cp-root.is-closing .cp-card {
+  animation: cp-card-out var(--dur-base) var(--ease) forwards;
+}
+
+.cp-root.is-closing .cp-scrim {
+  animation: cp-fade-out var(--dur-base) var(--ease) forwards;
+}
+
+@keyframes cp-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes cp-card-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes cp-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes cp-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.cp-field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-4);
+  border-bottom: var(--bw) solid var(--border);
+}
+
+.cp-glyph {
+  flex: none;
+  color: var(--text-faint);
+}
+
+.cp-input {
+  flex: 1;
+  min-width: 0;
+  height: 52px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-lg);
+  outline: none;
+}
+
+.cp-input::placeholder {
+  color: var(--text-faint);
+}
+
+.cp-list {
+  position: relative;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--sp-2);
+}
+
+.cp-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 36px;
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--r-md);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.cp-row.is-active {
+  background: var(--accent-soft);
+}
+
+.cp-row[aria-disabled='true'] {
+  cursor: default;
+}
+
+.cp-row[aria-disabled='true'] .cp-label {
+  color: var(--text-dim);
+}
+
+.cp-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.cp-label {
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+  overflow-wrap: anywhere;
+}
+
+.cp-why {
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  color: var(--text-dim);
+}
+
+.cp-group {
+  flex: none;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.cp-kbd {
+  flex: none;
+  min-width: 2.2em;
+  text-align: center;
+  padding: 1px var(--sp-1);
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-mark);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-med);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--lh-label);
+  white-space: nowrap;
+}
+
+.cp-none {
+  margin: 0;
+  padding: var(--sp-4) var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+/* Read to a screen reader, never drawn: the rows already show the count. */
+.cp-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  margin: 0;
+}
+
+@media (pointer: coarse) {
+  .cp-row {
+    min-height: 44px;
+  }
+}
+
+/* Phones: full width, tight to the top, so the on-screen keyboard leaves
+   the first rows in view. */
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
+  .cp-root {
+    padding: var(--sp-2);
+  }
+
+  .cp-card {
+    max-height: calc(100dvh - 2 * var(--sp-2));
+  }
+}

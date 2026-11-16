@@ -143,6 +143,41 @@
 }
 
 /* The replay's clock, readable with the panel folded. */
+/* A replay as it plays: clock, bar, figure, Stop. */
+.brk-watch {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.brk-watch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.brk-watch-clock {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.brk-watch-bar {
+  height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--track);
+  overflow: hidden;
+}
+
+.brk-watch-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
 .brk-pill {
   margin: 0;
   padding: var(--sp-2) var(--sp-3);

@@ -239,6 +239,11 @@ describe('undo', () => {
     key('KeyZ', { key: 'z', ctrlKey: true });
     expect(document.querySelector('[data-hit="node"][data-kind="db"]')).not.toBeNull();
     expect(card()).not.toBeNull();
+    /* Undo puts the selection back with the part, and on a tablet the
+       inspector takes the rail's side while it shows, as it did before the
+       delete. Letting go of the selection hands the side back to the rail. */
+    expect(document.querySelector('.app-body.has-inspector')).not.toBeNull();
+    key('Escape', { key: 'Escape' });
     expect(railOpen()).toBe(true);
   });
 });

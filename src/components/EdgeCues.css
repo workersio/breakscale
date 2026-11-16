@@ -1,10 +1,26 @@
-/* The edge cues sit on the visible rect's side edges, at its middle. The
-   positions are written inline by EdgeCues from the measured rect, so they
-   clear an open rail or the challenge sheet the same way a fit does. */
+/* The edge cues sit together in one corner of the visible rect: on a
+   desktop at its top right, under the inspector toggle, where the minimap
+   is on a wider screen; on a phone at its foot, beside the fit button. The
+   insets are written inline by EdgeCues from the measured rect, so they
+   clear an open rail or the challenge sheet the same way a fit does.
+
+   Under the panels (10) and under "What just happened" (5): a cue is a
+   hint, and at the middle of the edge it sat on that panel's close button
+   and on the boxes it pointed at. */
+.cv-cues {
+  /* The fit button's width: the small button, or the touch floor. */
+  --cue-fit-w: 32px;
+
+  position: absolute;
+  z-index: 4;
+  top: calc(var(--cue-top) + 32px + var(--sp-2));
+  right: calc(var(--cue-right) + var(--sp-3));
+  display: flex;
+  gap: var(--sp-2);
+}
+
 .cv-cue,
 .cv-cue-fit {
-  position: absolute;
-  z-index: 8;
   background: var(--surface);
   border-color: var(--border-strong);
   color: var(--text);
@@ -12,37 +28,75 @@
 }
 
 .cv-cue {
-  top: var(--cue-mid);
-  /* translate, not transform, so the shared .btn press nudge still works. */
-  translate: 0 -50%;
+  gap: var(--sp-1);
 }
 
 .cv-cue.is-left {
-  left: calc(var(--cue-left) + var(--sp-2));
+  padding-left: var(--sp-1);
 }
 
 .cv-cue.is-right {
-  right: calc(var(--cue-right) + var(--sp-2));
+  padding-right: var(--sp-1);
 }
 
 /* The zoom cluster's fit button stands in for this one wherever it is
    shown, which is everywhere wider than a phone (App.css hides it there). */
 .cv-cue-fit {
+  position: absolute;
+  z-index: 4;
   display: none;
   right: calc(var(--cue-right) + var(--sp-3));
   bottom: calc(var(--cue-bottom) + var(--sp-3));
 }
 
-@media (max-width: 720px) {
+@media (pointer: coarse) {
+  .cv-cues {
+    --cue-fit-w: 44px;
+  }
+}
+
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
   .cv-cue-fit {
     display: inline-flex;
+  }
+
+  /* In a row with the fit button. Square glyph buttons, named by their
+     words, which are kept for a screen reader. */
+  .cv-cues {
+    top: auto;
+    bottom: calc(var(--cue-bottom) + var(--sp-3));
+    right: calc(var(--cue-right) + var(--sp-3) + var(--cue-fit-w) + var(--sp-2));
+  }
+
+  .cv-cue.is-left,
+  .cv-cue.is-right {
+    padding: 0;
+    min-width: var(--cue-fit-w);
+    justify-content: center;
+  }
+
+  /* "What just happened" docks along the same foot. While it is open the
+     row moves to the top right, so the fit button stays in reach. */
+  .app-body:has(.wh-panel) .cv-cues,
+  .app-body:has(.wh-panel) .cv-cue-fit {
+    top: calc(var(--cue-top) + var(--sp-3));
+    bottom: auto;
+  }
+
+  .cv-cue-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 }
 
 /* Where the minimap is shown it already says the diagram goes on past the
    edge, and where to. The inverse of its own media query (Minimap.css). */
 @media (min-width: 1101px) and (min-height: 621px) {
-  .cv-cue {
+  .cv-cues {
     display: none;
   }
 }

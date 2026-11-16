@@ -1,0 +1,165 @@
+/* ==========================================================================
+   Presenting bar. Owns .pb-* only.
+
+   Sits where the components count sits when not presenting: bottom left,
+   past the charts toggle, riding up over an open strip like the zoom group
+   beside it. Sized for the back of a room: the part's name and state are
+   the text a class reads, so they get the large size.
+   ========================================================================== */
+
+.pb {
+  position: absolute;
+  z-index: 9;
+  left: calc(var(--sp-3) + 32px + var(--sp-3));
+  /* Clear of the zoom group on the right (five 32px buttons and gaps). */
+  right: calc(var(--sp-3) + 220px);
+  bottom: var(--sp-3);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-4);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface);
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  transition: bottom var(--dur-base) var(--ease);
+}
+
+.app-body.has-metrics .pb {
+  bottom: calc(var(--strip-shown) + var(--sp-3) * 2);
+}
+
+.pb-part {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.pb-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.pb-name {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  margin: 0 var(--sp-2) 0 0;
+  min-width: 0;
+}
+
+.pb-label {
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-med);
+  letter-spacing: var(--tr-lg);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.pb-state {
+  font-size: var(--fs-num);
+  color: var(--text-dim);
+}
+
+.pb-state.is-danger {
+  color: var(--danger);
+  font-weight: var(--fw-med);
+}
+
+.pb-hint {
+  margin: 0;
+  font-size: var(--fs-num);
+  line-height: var(--lh-base);
+  color: var(--text-dim);
+}
+
+.pb-exit {
+  display: flex;
+  gap: var(--sp-2);
+  margin-left: auto;
+}
+
+.pb-btn {
+  height: 40px;
+  font-size: var(--fs-num);
+  gap: var(--sp-2);
+}
+
+.pb-kbd {
+  padding: 0 var(--sp-1);
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-mark);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: var(--fs-label);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--lh-label);
+}
+
+@media (pointer: coarse) {
+  .pb-btn {
+    height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pb {
+    transition: none;
+  }
+}
+
+/* Phones: the full width of the canvas, where the tab bar was (presenting
+   hides it). Full screen goes: a phone is not what a room watches, and an
+   iPhone cannot do it. The way out stays on the first row. */
+@media (max-width: 720px), (pointer: coarse) and (max-height: 500px) {
+  /* Two rows: the part and the way out, then its three buttons. */
+  .pb {
+    left: var(--sp-2);
+    right: var(--sp-2);
+    bottom: calc(var(--sp-2) + env(safe-area-inset-bottom, 0px));
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: var(--sp-2);
+  }
+
+  .pb-part {
+    display: contents;
+  }
+
+  .pb-name,
+  .pb-hint {
+    grid-row: 1;
+    grid-column: 1;
+    padding-left: var(--sp-1);
+    flex-wrap: wrap;
+    gap: 0 var(--sp-2);
+  }
+
+  .pb-exit {
+    grid-row: 1;
+    grid-column: 2;
+  }
+
+  .pb-acts {
+    grid-row: 2;
+    grid-column: 1 / -1;
+  }
+
+  .pb-label {
+    font-size: var(--fs-num);
+  }
+
+  .pb-state,
+  .pb-hint {
+    font-size: var(--fs-base);
+  }
+
+  .pb-fullscreen {
+    display: none;
+  }
+}

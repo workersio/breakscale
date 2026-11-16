@@ -274,6 +274,12 @@ function onTriggerFocus(e: React.FocusEvent<HTMLElement>): void {
   const el = e.currentTarget;
   const entry = entryOf(el);
   if (!entry) return;
+  // A press focuses the term too, and its click is what opens it. Opening on
+  // that focus as well put a definition over the control being reached for.
+  // Set by the pointerdown that comes before this focus, and used up here.
+  const fromPress = pressFocus === el;
+  pressFocus = null;
+  if (fromPress) return;
   // Keyboard focus is deliberate, so it opens immediately. Tabbing to a term
   // and then waiting almost half a second reads as the app being broken.
   commitOpen({ entry, trigger: el, source: 'focus' });
@@ -281,6 +287,7 @@ function onTriggerFocus(e: React.FocusEvent<HTMLElement>): void {
 
 function onTriggerBlur(e: React.FocusEvent<HTMLElement>): void {
   cancelPendingOpen();
+  pressFocus = null;
   // Focus moving INTO the panel (to reach a "see also" link) must not close
   // the thing being reached.
   const next = e.relatedTarget as Node | null;
@@ -299,9 +306,12 @@ function onTriggerBlur(e: React.FocusEvent<HTMLElement>): void {
  */
 let pressTrigger: HTMLElement | null = null;
 let pressFoundOpen = false;
+/** The trigger a press is about to focus, until that focus arrives. */
+let pressFocus: HTMLElement | null = null;
 
 function onTriggerPointerDown(e: React.PointerEvent<HTMLElement>): void {
   pressTrigger = e.currentTarget;
+  pressFocus = e.currentTarget;
   // A hover-opened tooltip does not count. The pointer opened it on the way
   // to the click, inside the grace window with no delay at all, so a click
   // that closed it would read as the click doing nothing. Clicking pins it.
@@ -318,6 +328,9 @@ function onTriggerClick(e: React.MouseEvent<HTMLElement>): void {
   const el = e.currentTarget;
   const entry = entryOf(el);
   if (!entry) return;
+  // Inside a <label>, the click would go on to focus the labelled input,
+  // which on a tablet raises the keyboard over the definition just asked for.
+  if (el.closest('label')) e.preventDefault();
   // A click with no press behind it (assistive tech, a synthesised click)
   // falls back to asking what is open now. `detail === 0` is such a click
   // even when a press on this term was dragged off earlier and never clicked,
@@ -370,6 +383,11 @@ export interface TermProps {
    * underline would only add noise. Still focusable, still explains.
    */
   bare?: boolean;
+  /**
+   * -1 takes the term out of the Tab order, for a list that moves focus
+   * itself (the components rail, where "?" on a row focuses its term).
+   */
+  tabIndex?: 0 | -1;
 }
 
 /**
@@ -382,7 +400,13 @@ export interface TermProps {
  * Costs one span and no hooks. Safe to use dozens of times on a tree that
  * re-renders at 10Hz.
  */
-export function Term({ id, children, className, bare = false }: TermProps) {
+export function Term({
+  id,
+  children,
+  className,
+  bare = false,
+  tabIndex = 0,
+}: TermProps) {
   const enabled = usePreference('tooltips');
   const entry = GLOSSARY_BY_ID.get(id);
 
@@ -409,7 +433,7 @@ export function Term({ id, children, className, bare = false }: TermProps) {
     <span
       data-term={id}
       className={`term${bare ? ' term-bare' : ''}${className ? ` ${className}` : ''}`}
-      tabIndex={0}
+      tabIndex={tabIndex}
       /*
        * NOT role="button". A button announces "collapsed / expanded" and
        * implies an action, when the only thing on offer is a description.

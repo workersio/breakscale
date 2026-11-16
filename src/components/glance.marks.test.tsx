@@ -87,10 +87,10 @@ function draw(opts: {
   );
 }
 
-const glance = glanceScale(0.6, true);
+const glance = glanceScale(0.6);
 
 describe('status marks under the glance line', () => {
-  it('draws the glance line at 0.6 on a coarse pointer', () => {
+  it('draws the glance line at 0.6', () => {
     expect(glance).toBeGreaterThan(0);
   });
 

@@ -241,6 +241,19 @@ describe('SessionHistory', () => {
     expect(h.oldestLabel).toBe('add');
   });
 
+  it('names a new last entry on every commit, even with the stack full', () => {
+    // The delete toast's Undo checks this; depth stops moving at the limit.
+    const h = new SessionHistory();
+    const t0 = makeTopology();
+    for (let i = 0; i < HISTORY_LIMIT + 10; i++) h.commit('add', snap(t0));
+    h.commit('delete', snap(t0));
+    const deleted = h.lastEntry;
+    expect(deleted?.label).toBe('delete');
+    h.commit('move', snap(t0));
+    expect(h.undoDepth).toBe(HISTORY_LIMIT);
+    expect(h.lastEntry).not.toBe(deleted);
+  });
+
   it('skips no-op entries instead of burning an undo press', () => {
     const h = new SessionHistory();
     const t0 = makeTopology();
