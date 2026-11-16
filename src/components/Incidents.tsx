@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import type { Incident } from '../sim/incidents';
 import './Incidents.css';
+import { CloseButton } from './CloseButton';
 
 /* ==========================================================================
    A real incident, beside the canvas.
@@ -126,7 +127,7 @@ export function IncidentPanel({
         </div>
         <button
           type="button"
-          className="btn btn-sm btn-icon chal-collapse"
+          className="btn btn-ghost btn-sm btn-icon chal-collapse"
           aria-expanded={!collapsed}
           aria-controls={bodyId}
           aria-label={collapsed ? 'Show the panel' : 'Fold the panel'}
@@ -134,8 +135,8 @@ export function IncidentPanel({
           onClick={() => setCollapsed((c) => !c)}
         >
           <svg
-            width="14"
-            height="14"
+            width="16"
+            height="16"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -147,26 +148,7 @@ export function IncidentPanel({
             <path d={collapsed ? 'm6 9 6 6 6-6' : 'm18 15-6-6-6 6'} />
           </svg>
         </button>
-        <button
-          type="button"
-          className="btn btn-sm btn-icon"
-          aria-label="Close"
-          title="Close"
-          onClick={onClose}
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            aria-hidden="true"
-          >
-            <path d="M18 6 6 18M6 6l12 12" />
-          </svg>
-        </button>
+        <CloseButton onClick={onClose} className="btn-sm" />
       </header>
 
       {/* Readable with the panel folded, so the replay can be watched with

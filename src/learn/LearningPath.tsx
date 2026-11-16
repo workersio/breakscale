@@ -9,6 +9,7 @@ import { usePresence } from '../components/presence';
 import { badgeById, briefIdOf, nextStep, stepName, stepStatus } from './pathProgress';
 import '../components/Examples.css';
 import './LearningPath.css';
+import { CloseButton } from '../components/CloseButton';
 
 /* ==========================================================================
    The learning path dialog.
@@ -225,9 +226,7 @@ export function LearningPath({
               done when your design passes.
             </p>
           </div>
-          <button type="button" className="btn" onClick={onClose}>
-            Close
-          </button>
+          <CloseButton onClick={onClose} />
         </header>
 
         <div className="lp-body">

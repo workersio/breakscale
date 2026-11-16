@@ -65,6 +65,11 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--sp-4);
+  /* The banded head every dialog shares: reaches the card's edges, with a
+     hairline under it. */
+  margin: calc(var(--sp-5) * -1) calc(var(--sp-5) * -1) 0;
+  padding: var(--sp-4) var(--sp-5) var(--sp-3);
+  border-bottom: var(--bw) solid var(--border);
 }
 
 .ex-head-actions {
@@ -79,7 +84,8 @@
   margin: 0;
   font-size: var(--fs-lg);
   font-weight: var(--fw-med);
-  line-height: var(--lh-sm);
+  line-height: var(--lh-num);
+  letter-spacing: var(--tr-lg);
   color: var(--text);
 }
 

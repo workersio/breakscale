@@ -37,6 +37,7 @@ import { secs } from './breakCopy';
 import { Term } from './Tooltip';
 import './Challenge.css';
 import './BreakIt.css';
+import { CloseButton } from './CloseButton';
 
 /**
  * "Can you break it?": pick what has to hold, and Breakscale throws faults
@@ -198,8 +199,8 @@ function GoalNumber({
 function Chevron({ open }: { open: boolean }) {
   return (
     <svg
-      width="14"
-      height="14"
+      width="16"
+      height="16"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -339,7 +340,7 @@ export function BreakPanel({
         </div>
         <button
           type="button"
-          className="btn btn-sm btn-icon chal-collapse"
+          className="btn btn-ghost btn-sm btn-icon chal-collapse"
           aria-expanded={!shut}
           aria-controls={bodyId}
           aria-label={shut ? 'Show the panel' : 'Fold the panel'}
@@ -348,26 +349,7 @@ export function BreakPanel({
         >
           <Chevron open={!shut} />
         </button>
-        <button
-          type="button"
-          className="btn btn-sm btn-icon"
-          aria-label="Close"
-          title="Close"
-          onClick={onClose}
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            aria-hidden="true"
-          >
-            <path d="M18 6 6 18M6 6l12 12" />
-          </svg>
-        </button>
+        <CloseButton onClick={onClose} className="btn-sm" />
       </header>
 
       <p className="sr-only" role="status">

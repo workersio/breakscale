@@ -3,6 +3,7 @@ import { shortcutLabel } from '../modKey';
 import { createPortal } from 'react-dom';
 import { usePresence } from './presence';
 import './Shortcuts.css';
+import { CloseButton } from './CloseButton';
 
 /* ==========================================================================
    The keyboard shortcuts dialog.
@@ -203,25 +204,7 @@ export function Shortcuts({ open, onClose }: ShortcutsProps) {
           <h2 id="sc-title" className="sc-title">
             Keyboard shortcuts
           </h2>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm btn-icon"
-            onClick={onClose}
-            aria-label="Close keyboard shortcuts"
-          >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              aria-hidden="true"
-            >
-              <path d="M18 6 6 18M6 6l12 12" />
-            </svg>
-          </button>
+          <CloseButton onClick={onClose} />
         </header>
 
         <div className="sc-body">

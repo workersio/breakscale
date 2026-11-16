@@ -12,6 +12,7 @@ import { closeTooltip } from './Tooltip';
 import { usePresence } from './presence';
 import { isCoarsePointer } from '../useCoarsePointer';
 import './Glossary.css';
+import { CloseButton } from './CloseButton';
 
 /* ==========================================================================
    The glossary panel.
@@ -355,25 +356,7 @@ export function Glossary({ open, onClose, focusId }: GlossaryProps) {
             <h2 id="gl-title" className="gl-title">
               Glossary
             </h2>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm btn-icon"
-              onClick={onClose}
-              aria-label="Close glossary"
-            >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                aria-hidden="true"
-              >
-                <path d="M18 6 6 18M6 6l12 12" />
-              </svg>
-            </button>
+            <CloseButton onClick={onClose} />
           </div>
 
           <p className="gl-sub">

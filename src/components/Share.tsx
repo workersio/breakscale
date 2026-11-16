@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import { usePresence } from './presence';
 import { hasStore } from '../share/store';
 import './Share.css';
+import { CloseButton } from './CloseButton';
 
 /* ==========================================================================
    The share dialog.
@@ -218,25 +219,7 @@ export function Share({ open, onClose, onBuild, replayable = false, onExport }: 
           <h2 id="sh-title" className="sh-title">
             Share
           </h2>
-          <button
-            type="button"
-            className="sh-close"
-            onClick={onClose}
-            aria-label="Close"
-          >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              aria-hidden="true"
-            >
-              <path d="M18 6 6 18M6 6l12 12" />
-            </svg>
-          </button>
+          <CloseButton onClick={onClose} />
         </div>
 
         <div className="sh-options">

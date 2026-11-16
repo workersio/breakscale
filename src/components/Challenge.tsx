@@ -502,8 +502,8 @@ function LiveRows({
 function Chevron({ open }: { open: boolean }) {
   return (
     <svg
-      width="14"
-      height="14"
+      width="16"
+      height="16"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -713,7 +713,7 @@ export function ChallengePanel({
         <span className={`label chal-chip is-${tone}`}>{chipOf(check, fresh)}</span>
         <button
           type="button"
-          className="btn btn-sm btn-icon chal-collapse"
+          className="btn btn-ghost btn-sm btn-icon chal-collapse"
           aria-expanded={!shut}
           aria-controls={bodyId}
           aria-label={shut ? 'Show the brief' : 'Hide the brief'}

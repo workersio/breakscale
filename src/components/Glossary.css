@@ -139,10 +139,10 @@
 
 .gl-title {
   margin: 0;
-  font-size: var(--fs-num);
-  font-weight: var(--fw-num);
-  line-height: var(--lh-label);
-  letter-spacing: var(--tr-num);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-med);
+  line-height: var(--lh-num);
+  letter-spacing: var(--tr-lg);
   color: var(--text);
 }
 

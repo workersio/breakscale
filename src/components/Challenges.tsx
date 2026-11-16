@@ -6,6 +6,7 @@ import { inPickerOrder } from '../challengeWorkspace';
 import { usePresence } from './presence';
 import './Examples.css';
 import './Challenge.css';
+import { CloseButton } from './CloseButton';
 
 /* ==========================================================================
    The challenge picker.
@@ -98,9 +99,7 @@ export function Challenges({
               A system that does not meet its requirement. Work out why, and fix it.
             </p>
           </div>
-          <button type="button" className="btn" onClick={onClose}>
-            Close
-          </button>
+          <CloseButton onClick={onClose} />
         </header>
 
         <div className="chal-picker">

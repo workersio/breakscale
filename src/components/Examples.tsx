@@ -6,6 +6,7 @@ import { usePresence } from './presence';
 import { isCoarsePointer } from '../useCoarsePointer';
 import './Examples.css';
 import './Incidents.css';
+import { CloseButton } from './CloseButton';
 
 /* ==========================================================================
    The examples gallery.
@@ -176,9 +177,7 @@ export function Examples({
                 Learning path
               </button>
             ) : null}
-            <button type="button" className="btn" onClick={onClose}>
-              Close
-            </button>
+            <CloseButton onClick={onClose} />
           </div>
         </header>
 
