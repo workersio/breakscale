@@ -14,6 +14,11 @@ describe('revealTarget', () => {
     expect(r).toEqual({ ids: ['db'], key: 'inspect:db' });
   });
 
+  it('keeps the whole diagram while a task card is open', () => {
+    const r = revealTarget({ ...none, inspecting: ['db'], guided: true });
+    expect(r).toEqual({ ids: ['db'], key: 'inspect:db', whole: true });
+  });
+
   it('names the parts a break hit', () => {
     expect(revealTarget({ ...none, broke: ['db', 'e1'] })?.ids).toEqual(['db', 'e1']);
   });

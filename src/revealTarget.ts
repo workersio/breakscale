@@ -22,6 +22,8 @@ export interface RevealInput {
   incident: { id: string; faults: readonly FaultEvent[] } | null;
   /** The charts strip is open, rising over the foot of the canvas. */
   charts?: boolean;
+  /** A task card is open, and its steps are about the whole diagram. */
+  guided?: boolean;
 }
 
 export interface Reveal {
@@ -34,6 +36,14 @@ export interface Reveal {
    * is about everything, and its rise cut the lesson note in half.
    */
   content?: boolean;
+  /**
+   * Keep every part on screen, at a zoom down to the one a card still shows
+   * its name and main number at, rather than panning the named parts clear
+   * and pushing the rest under the other panels. Set while a task card is
+   * open: the card, the inspector and the components rail together leave a
+   * narrow room, and the task's steps are about the whole diagram.
+   */
+  whole?: boolean;
 }
 
 /** The parts a "Cannot check yet" names, by id. */
@@ -58,9 +68,11 @@ export function revealTarget({
   verdict,
   incident,
   charts = false,
+  guided = false,
 }: RevealInput): Reveal | null {
   if (inspecting && inspecting.length > 0) {
-    return { ids: inspecting, key: `inspect:${inspecting.join(',')}` };
+    const key = `inspect:${inspecting.join(',')}`;
+    return guided ? { ids: inspecting, key, whole: true } : { ids: inspecting, key };
   }
   if (broke && broke.length > 0) {
     return { ids: broke, key: `break:${broke.join(',')}` };

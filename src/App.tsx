@@ -4211,6 +4211,7 @@ export default function App() {
             ? { id: incident.id, faults: incident.scene.faults ?? [] }
             : null,
         charts: chartsUp,
+        guided: taskOpen,
       }),
     [
       inspecting,
@@ -4221,6 +4222,7 @@ export default function App() {
       incident,
       incidentPlaying,
       chartsUp,
+      taskOpen,
     ],
   );
   const incidentCaption = useMemo(() => {

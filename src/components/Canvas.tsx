@@ -597,6 +597,8 @@ export interface CanvasProps {
     key: string;
     fit?: boolean;
     content?: boolean;
+    /** Keep every part on screen, down to MINIMAL_ZOOM (see revealTarget.ts). */
+    whole?: boolean;
   } | null;
   /**
    * A plain click or tap on what is already the whole selection. Selecting
@@ -6918,10 +6920,12 @@ export default function Canvas({
           return;
         }
         if (keep === 'fit') {
-          const f = fitViewport(nodeBounds(nodes), surface, room, {
+          const bounds = nodeBounds(nodes);
+          const f = fitViewport(bounds, surface, room, {
             narrow: narrowFitRef.current,
           });
-          if (f && f.k >= DETAIL_ZOOM && f.k <= v.k) {
+          const floor = revealRef.current?.whole ? MINIMAL_ZOOM : DETAIL_ZOOM;
+          if (f && f.k >= floor && f.k <= v.k && !fitClips(bounds, room, f.k)) {
             setView(f);
             return;
           }

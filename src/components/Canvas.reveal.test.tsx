@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import Canvas, { NODE_H, NODE_W } from './Canvas';
 import type { CanvasProps } from './Canvas';
 import { REVEAL_PAD } from './reveal';
-import { DETAIL_ZOOM } from './fit';
+import { DETAIL_ZOOM, MINIMAL_ZOOM } from './fit';
 import { PRESETS } from '../sim/presets';
 
 /**
@@ -149,6 +149,26 @@ describe('revealing the part a panel opens on', () => {
       room.width - REVEAL_PAD,
       5,
     );
+  });
+
+  it('fits every part between the rail, the task card and the inspector', () => {
+    room = { left: 236, top: 80, width: SURFACE.width - 236, height: 620 };
+    render();
+    // 1440 wide with the rail, the task card and the inspector all open:
+    // the room is the 508px between the rail and the card.
+    room = { left: 236, top: 80, width: 508, height: 620 };
+    render({ reveal: { ids: [db.id], key: `inspect:${db.id}`, whole: true } });
+    act(() => {
+      vi.advanceTimersByTime(250);
+    });
+    const after = view();
+    expect(after.k).toBeGreaterThanOrEqual(MINIMAL_ZOOM);
+    for (const n of topology.nodes) {
+      expect(n.x * after.k + after.x, n.id).toBeGreaterThanOrEqual(room.left);
+      expect((n.x + NODE_W) * after.k + after.x, n.id).toBeLessThanOrEqual(
+        room.left + room.width,
+      );
+    }
   });
 
   it('does not move a part that is already in view', () => {
