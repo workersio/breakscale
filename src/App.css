@@ -279,9 +279,7 @@
   gap: var(--sp-1);
   width: 56px;
   margin: 0;
-  font-size: var(--fs-label);
-  letter-spacing: var(--tr-label);
-  text-transform: uppercase;
+  font-size: var(--fs-sm);
   color: var(--text-faint);
 }
 

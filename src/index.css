@@ -1701,10 +1701,8 @@ h4 {
   border-radius: var(--r-pill);
   background: var(--surface-2);
   color: var(--text-dim);
-  font-size: var(--fs-label);
+  font-size: var(--fs-sm);
   font-weight: var(--fw-med);
-  letter-spacing: var(--tr-label);
-  text-transform: uppercase;
   white-space: nowrap;
 }
 

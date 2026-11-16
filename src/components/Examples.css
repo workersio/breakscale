@@ -207,13 +207,17 @@
   text-wrap: pretty;
 }
 
+/* The loaded example's tag: the shared "this is the one" look, a sentence-
+   case word on the accent-soft fill. */
 .ex-item-active {
+  align-self: flex-start;
   margin-top: auto;
-  padding-top: var(--sp-2);
-  font-size: var(--fs-label);
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  font-size: var(--fs-sm);
   font-weight: var(--fw-med);
-  letter-spacing: var(--tr-label);
-  text-transform: uppercase;
+  line-height: var(--lh-sm);
   color: var(--accent-ink);
 }
 

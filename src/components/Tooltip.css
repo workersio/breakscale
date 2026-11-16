@@ -212,15 +212,13 @@
   border-top: var(--bw) solid var(--border);
 }
 
-/* Inherits the .label register without the class, because it is a caption
-   inside a sentence rather than a section heading. */
+/* A caption inside a sentence rather than a section heading, so it is
+   sentence case: "See also". */
 .tip-see-label {
-  font-size: var(--fs-label);
-  font-weight: var(--fw-med);
-  line-height: var(--lh-label);
-  letter-spacing: var(--tr-label);
-  text-transform: uppercase;
-  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-body);
+  line-height: var(--lh-sm);
+  color: var(--text-dim);
 }
 
 .tip-see-link {

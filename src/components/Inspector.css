@@ -172,8 +172,8 @@
 }
 
 /* The words printed on the node's box, defined. A key rather than a
-   readout, so it stays one step quieter than the stats: label-size caps in
-   the box's own register on the left, the definition in dim prose beside it.
+   readout, so it stays one step quieter than the stats: the word as the box
+   prints it on the left, the definition in dim prose beside it.
    --text-dim on --surface is 7.06:1 light and 7.01:1 dark. */
 .ins-box-key {
   margin-bottom: var(--sp-5);
@@ -195,12 +195,11 @@
   display: contents;
 }
 
+/* The word as the box prints it, lower case: "busy", "p99", "waiting". */
 .ins-box-key dt {
-  font-size: var(--fs-label);
-  font-weight: var(--fw-num);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-med);
   line-height: var(--lh-sm);
-  letter-spacing: var(--tr-label);
-  text-transform: uppercase;
   color: var(--text-dim);
 }
 

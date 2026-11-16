@@ -371,12 +371,10 @@ input.gl-search-input {
 }
 
 .gl-see-label {
-  font-size: var(--fs-label);
-  font-weight: var(--fw-med);
-  line-height: var(--lh-label);
-  letter-spacing: var(--tr-label);
-  text-transform: uppercase;
-  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-body);
+  line-height: var(--lh-sm);
+  color: var(--text-dim);
 }
 
 .gl-see-link {
