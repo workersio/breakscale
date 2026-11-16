@@ -2110,7 +2110,7 @@ textarea:not(.cv-note-editor) {
   height: 36px;
   padding: 0 var(--sp-3);
   border: var(--bw) solid var(--border-strong);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-btn);
   background: var(--surface);
   color: var(--text);
   font-size: var(--fs-base);
@@ -2168,7 +2168,7 @@ select:focus,
 textarea:not(.cv-note-editor):focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-ring);
+  box-shadow: 0 0 0 4px var(--accent-ring);
 }
 
 input[type='text']:focus-visible,
@@ -2177,7 +2177,7 @@ select:focus-visible,
 textarea:not(.cv-note-editor):focus-visible {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-ring);
+  box-shadow: 0 0 0 4px var(--accent-ring);
 }
 
 input::placeholder,

@@ -1208,7 +1208,7 @@
   max-width: 100%;
   padding: var(--sp-2) var(--sp-4);
   border: var(--bw) solid var(--border-strong);
-  border-radius: var(--r-btn);
+  border-radius: var(--r-md);
   background: var(--surface);
   color: var(--text);
   font-size: var(--fs-sm);
@@ -1216,7 +1216,7 @@
   line-height: var(--lh-label);
   box-shadow: var(--shadow-sm);
   pointer-events: auto;
-  animation: app-toast-in 160ms var(--ease-out);
+  animation: app-toast-in var(--dur-base) var(--ease-out);
 }
 
 /* The toast's one action, such as Undo after a delete. It trims the toast's
@@ -1265,7 +1265,7 @@
   z-index: 500;
   padding: var(--sp-2) var(--sp-4);
   border: var(--bw) solid var(--border-strong);
-  border-radius: var(--r-btn);
+  border-radius: var(--r-md);
   background: var(--surface);
   color: var(--text);
   font-size: var(--fs-sm);
@@ -1734,7 +1734,7 @@
     align-items: center;
     justify-content: center;
     height: 44px;
-    padding: 20px 0;
+    padding: var(--sp-5) 0;
     /* The browser must not claim the vertical drag for scrolling, or the
        sheet never sees the move events it needs to follow the finger. */
     touch-action: none;
@@ -1744,7 +1744,7 @@
   .app-grabber-bar {
     width: 36px;
     height: 4px;
-    border-radius: 2px;
+    border-radius: var(--r-mark);
     background: var(--border-strong);
   }
 

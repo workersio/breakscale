@@ -63,7 +63,7 @@
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-1);
   min-width: 0;
 }
 
@@ -194,7 +194,7 @@
 .chal-goal {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 2px var(--sp-3);
+  gap: var(--sp-1) var(--sp-3);
   align-items: baseline;
   padding: var(--sp-2) var(--sp-3);
   border-radius: var(--r-sm);
@@ -324,7 +324,7 @@
 .chal-progress {
   height: 6px;
   overflow: hidden;
-  border-radius: 3px;
+  border-radius: var(--r-sm);
   background: var(--surface-2);
 }
 

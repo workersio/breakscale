@@ -119,7 +119,7 @@
 .ins-head .ins-title:focus {
   background: var(--surface);
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-ring);
+  box-shadow: 0 0 0 4px var(--accent-ring);
 }
 
 /* Pressed, but only while it is not already being edited: once focused the
@@ -413,7 +413,7 @@
 
 .ins-stepper:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-ring);
+  box-shadow: 0 0 0 4px var(--accent-ring);
 }
 
 .ins-stepper[data-disabled] {
