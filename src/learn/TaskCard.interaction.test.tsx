@@ -119,7 +119,9 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('your task', () => {
+// Each case mounts the whole App and runs the engine for simulated seconds,
+// which a loaded runner can stretch past the default 5s.
+describe('your task', { timeout: 30_000 }, () => {
   it('opens with the example, says what to do, and sits in canvas chrome', () => {
     mount();
     expect(card()).not.toBeNull();
