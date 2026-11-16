@@ -6,7 +6,7 @@ import type { ReactNode } from 'react';
  * (each button holds one <svg> of its own), and the package is marked
  * side-effect-free so the build keeps only these four.
  */
-import { Info, Minus, Pause, Play, Plus, RotateCcw, StepForward } from 'lucide-react';
+import { Minus, Pause, Play, Plus, RotateCcw, StepForward } from 'lucide-react';
 import { cycleSpeed, formatSpeed, type Speed } from '../speed';
 import { useCoarsePointer } from '../useCoarsePointer';
 import type {
@@ -48,8 +48,8 @@ import {
   toneClass,
 } from './format';
 import { useSettledHealth } from './settledHealth';
-import { closeTooltip, Term } from './Tooltip';
-import { splitHint } from './splitHint';
+import { closeTooltip, openGlossaryEntry, Term } from './Tooltip';
+import { HintLine } from './HintLine';
 import { readoutFor } from './Canvas';
 import { readoutTermFor } from './readoutTerms';
 import { GLOSSARY_BY_ID } from '../content/glossary';
@@ -1566,37 +1566,6 @@ function SliderRow({
   );
 }
 
-/** One hint line, with the rest of a long hint on hover or focus. */
-function HintLine({ text, about }: { text: ReactNode; about: string }) {
-  const id = useId();
-  if (typeof text !== 'string') return <p className="ins-hint">{text}</p>;
-  const [first, rest] = splitHint(text);
-  if (!rest) return <p className="ins-hint">{first}</p>;
-  /* The info mark rides on the sentence's last word, so it never wraps onto
-     a line of its own. */
-  const cut = first.lastIndexOf(' ');
-  return (
-    <p className="ins-hint">
-      {first.slice(0, cut + 1)}
-      <span className="ins-more">
-        {first.slice(cut + 1)}
-        {'\u00a0'}
-        <button
-          type="button"
-          className="ins-more-btn"
-          aria-label={`More about ${about}`}
-          aria-describedby={id}
-        >
-          <Info size={14} strokeWidth={2} aria-hidden="true" />
-        </button>
-        <span id={id} role="tooltip" className="ins-more-pop">
-          {rest}
-        </span>
-      </span>
-    </p>
-  );
-}
-
 /** Pixels of horizontal drag on a label per step of its value. */
 const SCRUB_PX_PER_STEP = 4;
 /** Movement before a press on a label counts as a scrub, not a click. */
@@ -1940,6 +1909,30 @@ function ToggleRow({
         {locked ?? hint}
       </p>
     </div>
+  );
+}
+
+/**
+ * What this kind of part is, in the glossary's beginner words, with the way
+ * into its full entry. One quiet line: the student who knows what a cache is
+ * reads past it, the one who does not has the answer under the name.
+ */
+function KindWhat({ kind }: { kind: NodeKind }) {
+  const id = KIND_TERM[kind];
+  const what = GLOSSARY_BY_ID.get(id)?.intro?.what;
+  if (!what) return null;
+  return (
+    <p className="ins-what">
+      {what}{' '}
+      <button
+        type="button"
+        className="ins-learn"
+        aria-label={`Learn more about ${KIND_NAME[kind]}`}
+        onClick={() => openGlossaryEntry(id)}
+      >
+        Learn more
+      </button>
+    </p>
   );
 }
 
@@ -3497,6 +3490,9 @@ function SingleInspector({
           )}
         </header>
 
+        {/* Outside the pinned header, which stays one line tall. */}
+        <KindWhat kind={node.kind} />
+
         <p className="ins-blurb">
           <Term id={KIND_TERM[node.kind]}>{KIND_NAME[node.kind]}</Term>.{' '}
           {KIND_BLURB[node.kind]}
@@ -3522,46 +3518,6 @@ function SingleInspector({
         {stats && node.kind === 'region' && <RegionPanel stats={stats} />}
         {stats && node.kind !== 'queue' && node.kind !== 'autoscaler' && (
           <UnitsPanel node={node} stats={stats} />
-        )}
-
-        {/* High in the panel, under the readings that show a component's
-            state: Crash, Slow and Fix were 650px down at 1280x800, below
-            every setting, and the meter they move is up here. */}
-        {faults && (
-          <Section title="Break it on purpose">
-            <NodeFaultControls
-              fault={faults.fault}
-              cables={faults.cables}
-              onCrash={() => faults.onInject(node.id, 'crash')}
-              onRestart={(downMs) => faults.onInject(node.id, 'restart', { downMs })}
-              restartLoses={restartLosesFor(node)}
-              onCrashOne={
-                fleet > 1 && canCrashOneInstance(node.kind)
-                  ? () => faults.onInject(node.id, 'crash-instance')
-                  : undefined
-              }
-              instances={fleet}
-              // A kind that offers no service time does no timed work, so a
-              // slow fault there would change nothing.
-              canSlow={fields.includes('serviceMs')}
-              onSlow={(factor) => faults.onInject(node.id, 'slow', { factor })}
-              onPause={
-                canPause(node.kind)
-                  ? (pauseMs) => faults.onInject(node.id, 'pause', { pauseMs })
-                  : undefined
-              }
-              onGlitch={(rate) => faults.onInject(node.id, 'errors', { rate })}
-              onFix={() => faults.onFix(node.id)}
-              onCut={faults.onCut}
-              onRestore={faults.onRestore}
-              onDuplicate={faults.onDuplicate}
-              onUndup={faults.onUndup}
-              onCutReplies={faults.onCutReplies}
-              onRestoreReplies={faults.onRestoreReplies}
-              recorded={faults.recorded}
-              onForget={faults.onForget}
-            />
-          </Section>
         )}
 
         {grouped.map((group) => (
@@ -3703,6 +3659,46 @@ function SingleInspector({
         {suggestion && (
           <Section title="Suggested fix">
             <p className="ins-suggestion">{suggestion}</p>
+          </Section>
+        )}
+
+        {/* After the settings: a student sets a part up before breaking it.
+            The faults are one segmented row now, so this sits a few rows
+            under the settings rather than a wall of them. */}
+        {faults && (
+          <Section title="Break it on purpose">
+            <NodeFaultControls
+              fault={faults.fault}
+              cables={faults.cables}
+              onCrash={() => faults.onInject(node.id, 'crash')}
+              onRestart={(downMs) => faults.onInject(node.id, 'restart', { downMs })}
+              restartLoses={restartLosesFor(node)}
+              onCrashOne={
+                fleet > 1 && canCrashOneInstance(node.kind)
+                  ? () => faults.onInject(node.id, 'crash-instance')
+                  : undefined
+              }
+              instances={fleet}
+              // A kind that offers no service time does no timed work, so a
+              // slow fault there would change nothing.
+              canSlow={fields.includes('serviceMs')}
+              onSlow={(factor) => faults.onInject(node.id, 'slow', { factor })}
+              onPause={
+                canPause(node.kind)
+                  ? (pauseMs) => faults.onInject(node.id, 'pause', { pauseMs })
+                  : undefined
+              }
+              onGlitch={(rate) => faults.onInject(node.id, 'errors', { rate })}
+              onFix={() => faults.onFix(node.id)}
+              onCut={faults.onCut}
+              onRestore={faults.onRestore}
+              onDuplicate={faults.onDuplicate}
+              onUndup={faults.onUndup}
+              onCutReplies={faults.onCutReplies}
+              onRestoreReplies={faults.onRestoreReplies}
+              recorded={faults.recorded}
+              onForget={faults.onForget}
+            />
           </Section>
         )}
 

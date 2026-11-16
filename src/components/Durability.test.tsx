@@ -175,6 +175,16 @@ function button(name: string): HTMLButtonElement {
   return found;
 }
 
+/** Picks a fault in the segmented row with a real press on its segment. */
+function fault(name: string): void {
+  const opt = [...container.querySelectorAll<HTMLLabelElement>('.ins-seg-opt')].find(
+    (l) => l.textContent?.replace(', in force', '').trim() === name,
+  );
+  const input = opt?.querySelector('input');
+  if (!input) throw new Error(`no fault "${name}" in the row`);
+  press(input);
+}
+
 function stat(label: string): string | null {
   const row = [...container.querySelectorAll('.ins-stat')].find(
     (r) => r.querySelector('.row-k')?.textContent === label,
@@ -208,10 +218,11 @@ describe('Writes reach disk', () => {
 describe('Restart', () => {
   it('records a restart with the chosen time down, then shows what it lost', () => {
     const engine = mount({ flushEveryMs: 1000 });
+    fault('Restart');
     const hint = document.getElementById(
       button('Restart').getAttribute('aria-describedby') ?? '',
     );
-    expect(hint?.textContent).toBe(
+    expect(hint?.textContent?.replace(/\s+/g, ' ')).toBe(
       'Stops it, then it starts again by itself. Work in progress is lost. So are the writes it said were saved but had not written to disk yet.',
     );
     pick(control('Down for'), '5000');
@@ -240,10 +251,11 @@ describe('Restart', () => {
 
   it('says nothing more is lost where a store saves before it answers', () => {
     mount({});
+    fault('Restart');
     const hint = document.getElementById(
       button('Restart').getAttribute('aria-describedby') ?? '',
     );
-    expect(hint?.textContent).toBe(
+    expect(hint?.textContent?.replace(/\s+/g, ' ')).toBe(
       'Stops it, then it starts again by itself. Work in progress is lost.',
     );
     expect(stat('Not on disk yet')).toBeNull();

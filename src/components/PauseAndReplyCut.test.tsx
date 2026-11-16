@@ -153,6 +153,22 @@ function button(name: string): HTMLButtonElement | undefined {
   );
 }
 
+/** Picks a fault in the segmented row with a real press on its segment. */
+function fault(name: string): void {
+  const opt = [...container.querySelectorAll<HTMLLabelElement>('.ins-seg-opt')].find(
+    (l) => l.textContent?.replace(', in force', '').trim() === name,
+  );
+  const input = opt?.querySelector('input');
+  if (!input) throw new Error(`no fault "${name}" in the row`);
+  press(input);
+}
+
+function offers(name: string): boolean {
+  return [...container.querySelectorAll('.ins-seg-opt')].some(
+    (l) => l.textContent?.replace(', in force', '').trim() === name,
+  );
+}
+
 function statuses(): string[] {
   return [...container.querySelectorAll('.ins-fault-status')].map(
     (p) => p.textContent ?? '',
@@ -164,6 +180,7 @@ describe('Stall, on a selected part', () => {
     entries.length = 0;
     const { engine } = mount();
     press(hit('node', 'payments'));
+    fault('Stall');
     const select = container.querySelector<HTMLSelectElement>('select[id$="-pause"]');
     if (!select) throw new Error('no Stall for select');
     expect(Number(select.value)).toBe(DEFAULT_PAUSE_MS);
@@ -211,6 +228,7 @@ describe('Stall, on a selected part', () => {
     entries.length = 0;
     const { engine } = mount();
     press(hit('node', 'payments'));
+    fault('Stall');
     const pause = button('Stall');
     if (!pause) throw new Error('no Stall button');
     press(pause);
@@ -226,6 +244,8 @@ describe('Stall, on a selected part', () => {
     mount();
     press(hit('node', 'client'));
     expect(button('Crash')).toBeDefined();
+    expect(offers('Crash')).toBe(true);
+    expect(offers('Stall')).toBe(false);
     expect(button('Stall')).toBeUndefined();
   });
 });
@@ -312,6 +332,9 @@ describe('cable faults from a part, without selecting the connection', () => {
     entries.length = 0;
     const { engine } = mount();
     press(hit('node', 'payments'));
+    // The rarer cable faults sit behind the row's menu.
+    expect(button('Duplicate 5% of requests from Circuit Breaker')).toBeUndefined();
+    press(button('More for the connection from Circuit Breaker') as HTMLButtonElement);
     const dup = button('Duplicate 5% of requests from Circuit Breaker');
     if (!dup) throw new Error('no Duplicate in the connection list');
     // A real button, so Tab reaches it.
@@ -354,7 +377,7 @@ describe('cable faults from a part, without selecting the connection', () => {
     );
     if (!row) throw new Error('no autoscaler cable row');
     expect([...row.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
-      'Cut connection',
+      'Cut',
     ]);
   });
 });

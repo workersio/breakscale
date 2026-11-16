@@ -134,6 +134,39 @@
   color: var(--text-faint);
 }
 
+/* What the kind is, from the glossary, under the name. Quiet: --text-dim at
+   the small step, the same ink as .ins-blurb below it. The link is the
+   tooltip's "see also" treatment, underlined so it is not colour alone. */
+.ins-what {
+  margin: 0 0 var(--sp-2);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  text-wrap: pretty;
+}
+
+.ins-learn {
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--accent-ink);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.ins-learn:hover {
+  color: var(--accent);
+}
+
+.ins-learn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* The one-line explanation of what this kind does. Real prose: it is the
    teaching text, so it gets prose leading and a measure limit. */
 .ins-blurb {
@@ -1487,10 +1520,97 @@ button.traffic-multiple[aria-expanded='true'] {
 }
 
 .ins-fault-row {
+  /* Anchors the hint's info popover (.ins-more-pop) to the row. */
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: var(--sp-1);
+}
+
+/* The faults on offer, as one segmented row. The track and the picked
+   segment are the Settings theme switch's: --surface-2 track, the picked one
+   lifted onto --surface with a hairline. --text-dim and --text on both
+   surfaces are measured in theme.contrast.test.ts. It wraps rather than
+   squeezing when a kind offers six. */
+.ins-seg {
+  /* Contains the .sr-only legend, which would otherwise anchor far up the
+     tree and stretch the panel's scroll box. */
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  padding: 2px;
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-btn);
+  background: var(--surface-2);
+}
+
+.ins-seg-opt {
+  position: relative;
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 var(--sp-2);
+  border: var(--bw) solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-med);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.ins-seg-opt:hover:not(.is-active) {
+  color: var(--text);
+}
+
+.ins-seg-opt.is-active {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+/* The radio itself is invisible but still the focusable control; the label
+   draws its ring. */
+.ins-seg-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.ins-seg-opt:has(.ins-seg-input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The fault in force, marked on its segment as well as in the status line:
+   a danger dot, a non-text mark at 3:1 or better on both segment fills. */
+.ins-seg-opt.is-live::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  margin-left: var(--sp-1);
+  border-radius: var(--r-pill);
+  background: var(--danger);
+}
+
+@media (pointer: coarse) {
+  .ins-seg-opt {
+    height: 44px;
+  }
 }
 
 .ins-fault-row .row-k {
@@ -1527,13 +1647,46 @@ button.traffic-multiple[aria-expanded='true'] {
   min-width: 0;
 }
 
-/* The cable faults beyond Cut, on their own line under the cable's name. */
-.ins-fault-cable-extras {
+/* Cut, and the "⋯" for the rarer cable faults, at the row's end. */
+.ins-fault-cable-acts {
   display: flex;
-  flex-wrap: wrap;
-  flex-basis: 100%;
-  justify-content: flex-end;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: auto;
+}
+
+.ins-cable-more {
+  position: relative;
+  display: inline-flex;
+}
+
+.ins-cable-more-btn {
+  padding-inline: var(--sp-2);
+}
+
+/* The menu: the tooltip's surface, under its button, right-aligned so it
+   stays inside the panel. */
+.ins-cable-menu {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + var(--sp-1));
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: var(--sp-2);
+  width: 220px;
+  padding: var(--sp-2);
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.ins-cable-menu-note {
+  display: block;
+  margin: 0;
 }
 
 .ins-fault-cable .row-k {

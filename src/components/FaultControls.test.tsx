@@ -149,6 +149,24 @@ function button(name: string): HTMLButtonElement {
   return found;
 }
 
+/** Picks a fault in the segmented row with a real press on its segment. */
+function fault(name: string): void {
+  const opt = [...container.querySelectorAll<HTMLLabelElement>('.ins-seg-opt')].find(
+    (l) => l.textContent?.replace(', in force', '').trim() === name,
+  );
+  const input = opt?.querySelector('input');
+  if (!input) throw new Error(`no fault "${name}" in the row`);
+  press(input);
+  expect(input.checked).toBe(true);
+}
+
+/** The faults the segmented row offers, in order. */
+function offered(): string[] {
+  return [...container.querySelectorAll('.ins-seg-opt')].map(
+    (l) => l.textContent?.replace(', in force', '').trim() ?? '',
+  );
+}
+
 function status(): string {
   return container.querySelector('.ins-fault-status')?.textContent ?? '';
 }
@@ -159,6 +177,25 @@ function nodeGroup(id: string): Element {
 }
 
 describe('fault controls on a selected node', () => {
+  it('offers the faults as one row, Crash first, and marks the one in force', () => {
+    mount();
+    press(hit('node', 'payments'));
+    expect(container.querySelector('.ins-seg legend')?.textContent).toBe(
+      'Fault to try',
+    );
+    expect(offered()[0]).toBe('Crash');
+    expect(offered()).toEqual(expect.arrayContaining(['Restart', 'Slow', 'Glitch']));
+    // One option control at a time.
+    expect(container.querySelectorAll('.ins-fault select')).toHaveLength(0);
+    fault('Restart');
+    expect(container.querySelectorAll('.ins-fault select')).toHaveLength(1);
+    fault('Slow');
+    press(button('Slow'));
+    const live = container.querySelector('.ins-seg-opt.is-live');
+    expect(live?.textContent).toBe('Slow, in force');
+    expect(button('Slowed').getAttribute('aria-pressed')).toBe('true');
+  });
+
   it('Crash records an inject at the current time and the canvas marks the node', () => {
     const { engine } = mount();
     press(hit('node', 'payments'));
@@ -226,6 +263,7 @@ describe('fault controls on a selected node', () => {
     const { engine } = mount();
     press(hit('node', 'payments'));
 
+    fault('Slow');
     press(button('Slow'));
     expect(engine.faultSchedule().at(-1)).toMatchObject({
       action: 'inject',
@@ -246,6 +284,14 @@ describe('fault controls on a selected node', () => {
     expect(engine.faultSchedule().at(-1)).toMatchObject({ opts: { factor: 10 } });
     expect(engine.activeFailures()[0]).toMatchObject({ kind: 'slow', factor: 10 });
 
+    // Only the picked fault's control is on screen.
+    expect(container.querySelector('#' + labelFor('How much slower'))).not.toBeNull();
+    fault('Glitch');
+    expect(
+      [...container.querySelectorAll('label')].some(
+        (l) => l.textContent?.trim() === 'How much slower',
+      ),
+    ).toBe(false);
     press(button('Glitch'));
     expect(engine.faultSchedule().at(-1)).toMatchObject({
       kind: 'errors',
@@ -259,6 +305,7 @@ describe('fault controls on a selected node', () => {
     const { engine } = mount();
     press(hit('node', 'breaker'));
 
+    fault('Slow');
     const slow = button('Slow');
     expect(slow.getAttribute('aria-disabled')).toBe('true');
     const factor = container.querySelector<HTMLSelectElement>(
@@ -266,7 +313,7 @@ describe('fault controls on a selected node', () => {
     );
     expect(factor?.disabled).toBe(true);
     const hint = document.getElementById(slow.getAttribute('aria-describedby') ?? '');
-    expect(hint?.textContent).toBe(
+    expect(hint?.textContent?.replace(/\s+/g, ' ')).toBe(
       'It does no work of its own that takes time, so there is nothing here to slow down. Try it on a component that handles requests.',
     );
 
@@ -276,7 +323,9 @@ describe('fault controls on a selected node', () => {
     expect(document.activeElement).toBe(slow);
 
     // The other faults still mean something here.
+    fault('Crash');
     expect(button('Crash').getAttribute('aria-disabled')).toBe('false');
+    fault('Glitch');
     expect(button('Glitch').getAttribute('aria-disabled')).toBe('false');
   });
 
@@ -288,12 +337,33 @@ describe('fault controls on a selected node', () => {
     );
     expect(names).toEqual([
       'Cut connection from API Server',
-      'Duplicate 5% of requests from API Server',
-      'Cut answers only from API Server',
+      'More for the connection from API Server',
       'Cut connection to Payments API',
-      'Duplicate 5% of requests to Payments API',
-      'Cut answers only to Payments API',
+      'More for the connection to Payments API',
     ]);
+    // The rarer ones wait behind each row's menu, still named per cable.
+    const more = button('More for the connection to Payments API');
+    expect(more.getAttribute('aria-expanded')).toBe('false');
+    press(more);
+    expect(more.getAttribute('aria-expanded')).toBe('true');
+    expect(button('Duplicate 5% of requests to Payments API')).toBeTruthy();
+    expect(button('Cut answers only to Payments API')).toBeTruthy();
+    expect(container.querySelector('.ins-cable-menu')?.textContent).toContain(
+      'Duplicate delivers 5% of its requests twice.',
+    );
+    // Escape closes it and hands focus back to its button.
+    button('Cut answers only to Payments API').focus();
+    act(() => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Escape',
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(more.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(more);
 
     press(button('Cut connection to Payments API'));
     expect(engine.activeCuts()).toEqual(['breaker->payments']);

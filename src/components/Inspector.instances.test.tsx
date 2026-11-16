@@ -71,6 +71,16 @@ function labelled(text: string): HTMLInputElement | null {
     : null;
 }
 
+/** Picks a fault in the segmented row with a real press on its segment. */
+function fault(name: string): void {
+  const opt = [...container.querySelectorAll<HTMLLabelElement>('.ins-seg-opt')].find(
+    (l) => l.textContent?.replace(', in force', '').trim() === name,
+  );
+  const input = opt?.querySelector('input');
+  if (!input) throw new Error(`no fault "${name}" in the row`);
+  press(input);
+}
+
 function button(name: string): HTMLButtonElement | null {
   return (
     [...container.querySelectorAll('button')].find(
@@ -143,6 +153,7 @@ describe('the fleet in the inspector', () => {
 
   it('offers Crash one instance on a node with more than one machine', () => {
     const engine = mount(3);
+    fault('Crash one');
     const crashOne = button('Crash one instance');
     if (!crashOne) throw new Error('no Crash one instance button');
     expect(crashOne.getAttribute('aria-disabled')).toBe('false');
@@ -160,6 +171,8 @@ describe('the fleet in the inspector', () => {
   it('does not offer it on a node with one machine, where it would be Crash', () => {
     mount(1);
     expect(button('Crash')).not.toBeNull();
+    expect(container.querySelectorAll('.ins-seg-opt').length).toBeGreaterThan(0);
+    expect(() => fault('Crash one')).toThrow();
     expect(button('Crash one instance')).toBeNull();
   });
 });

@@ -1,4 +1,7 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import { Ellipsis } from 'lucide-react';
+import { HintLine } from './HintLine';
 import type { ActiveDuplicate, ActiveFailure, ActiveReplyCut } from '../sim/types';
 import { formatPct } from './format';
 import {
@@ -137,120 +140,149 @@ export function NodeFaultControls({
   const paused = fault?.kind === 'pause';
   const healthy = fault === null;
 
-  return (
-    <div className="ins-fault">
-      <p
-        className={healthy ? 'ins-fault-status' : 'ins-fault-status is-danger'}
-        role="status"
-      >
-        {faultStatus(fault)}
-      </p>
+  /* The faults this kind offers, as one segmented row. Picking one shows
+     only its own option and button; a wall of five option rows, each with a
+     paragraph under it, was more than a student reads before pressing. */
+  const offered: readonly FaultPick[] = [
+    'crash',
+    'restart',
+    ...(onCrashOne ? (['crash-instance'] as const) : []),
+    'slow',
+    ...(onPause ? (['pause'] as const) : []),
+    'errors',
+  ];
+  const [chosen, setChosen] = useState<FaultPick>(() =>
+    fault && isPick(fault.kind) ? fault.kind : 'crash',
+  );
+  // A node switched under the panel may not offer what was picked last.
+  const pick: FaultPick = offered.includes(chosen) ? chosen : 'crash';
 
-      <div className="ins-fault-row">
-        <button
-          type="button"
-          className="btn btn-sm"
-          aria-disabled={crashed}
-          aria-pressed={crashed}
-          aria-describedby={`${id}-crash`}
-          onClick={guarded(crashed, onCrash)}
-        >
-          {crashed ? 'Crashed' : 'Crash'}
-        </button>
-        <p id={`${id}-crash`} className="ins-hint">
-          Stops it completely. Work it was holding is lost.
-        </p>
-      </div>
-
-      <div className="ins-fault-row">
-        <label className="row-k" htmlFor={`${id}-down`}>
-          Down for
-        </label>
-        <div className="ins-fault-pair">
-          <select
-            id={`${id}-down`}
-            className="ins-number"
-            value={downMs}
-            onChange={(e) => setDownMs(Number(e.currentTarget.value))}
-          >
-            {RESTART_DOWN_MS.map((ms) => (
-              <option key={ms} value={ms}>
-                {formatDownFor(ms)}
-              </option>
-            ))}
-          </select>
+  let panel: ReactNode;
+  switch (pick) {
+    case 'crash':
+      panel = (
+        <div className="ins-fault-row">
           <button
             type="button"
             className="btn btn-sm"
-            aria-disabled={restartInert}
-            aria-describedby={`${id}-restart`}
-            onClick={guarded(restartInert, () => onRestart(downMs))}
+            aria-disabled={crashed}
+            aria-pressed={crashed}
+            aria-describedby={`${id}-hint`}
+            onClick={guarded(crashed, onCrash)}
           >
-            Restart
+            {crashed ? 'Crashed' : 'Crash'}
           </button>
+          <HintLine
+            id={`${id}-hint`}
+            about="Crash"
+            text="Stops it completely until you press Fix. Work it was holding is lost."
+          />
         </div>
-        <p id={`${id}-restart`} className="ins-hint">
-          Stops it, then it starts again by itself. Work in progress is lost.
-          {restartLoses ? ` ${restartLoses}` : ''}
-        </p>
-      </div>
-
-      {onCrashOne && (
+      );
+      break;
+    case 'restart':
+      panel = (
+        <div className="ins-fault-row">
+          <label className="row-k" htmlFor={`${id}-down`}>
+            Down for
+          </label>
+          <div className="ins-fault-pair">
+            <select
+              id={`${id}-down`}
+              className="ins-number"
+              value={downMs}
+              onChange={(e) => setDownMs(Number(e.currentTarget.value))}
+            >
+              {RESTART_DOWN_MS.map((ms) => (
+                <option key={ms} value={ms}>
+                  {formatDownFor(ms)}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="btn btn-sm"
+              aria-disabled={restartInert}
+              aria-describedby={`${id}-hint`}
+              onClick={guarded(restartInert, () => onRestart(downMs))}
+            >
+              Restart
+            </button>
+          </div>
+          <HintLine
+            id={`${id}-hint`}
+            about="Restart"
+            text={`Stops it, then it starts again by itself. Work in progress is lost.${restartLoses ? ` ${restartLoses}` : ''}`}
+          />
+        </div>
+      );
+      break;
+    case 'crash-instance':
+      panel = (
         <div className="ins-fault-row">
           <button
             type="button"
             className="btn btn-sm"
             aria-disabled={oneDown}
             aria-pressed={oneDown}
-            aria-describedby={`${id}-crash-one`}
-            onClick={guarded(oneDown, onCrashOne)}
+            aria-describedby={`${id}-hint`}
+            onClick={guarded(oneDown, () => onCrashOne?.())}
           >
             {oneDown ? 'One instance down' : 'Crash one instance'}
           </button>
-          <p id={`${id}-crash-one`} className="ins-hint">
-            Stops one of its {instances} machines. The work on that machine is lost, and
-            the other {instances - 1} keep serving with fewer slots between them.
-          </p>
+          <HintLine
+            id={`${id}-hint`}
+            about="Crash one instance"
+            text={`Stops one of its ${instances} machines. The work on that machine is lost, and the other ${instances - 1} keep serving with fewer slots between them.`}
+          />
         </div>
-      )}
-
-      <div className="ins-fault-row">
-        <label className="row-k" htmlFor={`${id}-factor`}>
-          How much slower
-        </label>
-        <div className="ins-fault-pair">
-          <select
-            id={`${id}-factor`}
-            className="ins-number"
-            value={factor}
-            disabled={!canSlow}
-            onChange={(e) => setFactor(Number(e.currentTarget.value))}
-          >
-            {SLOW_FACTORS.map((f) => (
-              <option key={f} value={f}>
-                {formatFactor(f)}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className="btn btn-sm"
-            aria-disabled={slowInert}
-            aria-pressed={slowSame}
-            aria-describedby={`${id}-slow`}
-            onClick={guarded(slowInert, () => onSlow(factor))}
-          >
-            {slowSame ? 'Slowed' : 'Slow'}
-          </button>
+      );
+      break;
+    case 'slow':
+      panel = (
+        <div className="ins-fault-row">
+          <label className="row-k" htmlFor={`${id}-factor`}>
+            How much slower
+          </label>
+          <div className="ins-fault-pair">
+            <select
+              id={`${id}-factor`}
+              className="ins-number"
+              value={factor}
+              disabled={!canSlow}
+              onChange={(e) => setFactor(Number(e.currentTarget.value))}
+            >
+              {SLOW_FACTORS.map((f) => (
+                <option key={f} value={f}>
+                  {formatFactor(f)}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="btn btn-sm"
+              aria-disabled={slowInert}
+              aria-pressed={slowSame}
+              aria-describedby={`${id}-hint`}
+              onClick={guarded(slowInert, () => onSlow(factor))}
+            >
+              {slowSame ? 'Slowed' : 'Slow'}
+            </button>
+          </div>
+          <HintLine
+            id={`${id}-hint`}
+            about="Slow"
+            text={
+              canSlow
+                ? 'Every request takes that many times longer to handle.'
+                : 'It does no work of its own that takes time, so there is nothing here to slow down. Try it on a component that handles requests.'
+            }
+          />
         </div>
-        <p id={`${id}-slow`} className="ins-hint">
-          {canSlow
-            ? 'Every request takes that many times longer to handle.'
-            : 'It does no work of its own that takes time, so there is nothing here to slow down. Try it on a component that handles requests.'}
-        </p>
-      </div>
-
-      {onPause && (
+      );
+      break;
+    case 'pause':
+      panel = (
         <div className="ins-fault-row">
           <label className="row-k" htmlFor={`${id}-pause`}>
             Stall for
@@ -272,52 +304,96 @@ export function NodeFaultControls({
               type="button"
               className="btn btn-sm"
               aria-disabled={paused}
-              aria-describedby={`${id}-pause-hint`}
-              onClick={guarded(paused, () => onPause(pauseMs))}
+              aria-describedby={`${id}-hint`}
+              onClick={guarded(paused, () => onPause?.(pauseMs))}
             >
               Stall
             </button>
           </div>
-          <p id={`${id}-pause-hint`} className="ins-hint">
-            It stops for that long and then carries on, the way a long garbage
-            collection pause stalls a program. It returns no errors itself, but callers
-            that give up waiting fail or send the same request again.
-          </p>
+          <HintLine
+            id={`${id}-hint`}
+            about="Stall"
+            text="It freezes for that long, then carries on by itself. A long garbage collection pause stalls a program the same way. It returns no errors itself, but callers that give up waiting fail or send the same request again."
+          />
         </div>
-      )}
+      );
+      break;
+    case 'errors':
+      panel = (
+        <div className="ins-fault-row">
+          <label className="row-k" htmlFor={`${id}-rate`}>
+            Requests that fail
+          </label>
+          <div className="ins-fault-pair">
+            <select
+              id={`${id}-rate`}
+              className="ins-number"
+              value={rate}
+              onChange={(e) => setRate(Number(e.currentTarget.value))}
+            >
+              {GLITCH_RATES.map((r) => (
+                <option key={r} value={r}>
+                  {formatPct(r)}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="btn btn-sm"
+              aria-disabled={glitchSame}
+              aria-pressed={glitchSame}
+              aria-describedby={`${id}-hint`}
+              onClick={guarded(glitchSame, () => onGlitch(rate))}
+            >
+              {glitchSame ? 'Glitching' : 'Glitch'}
+            </button>
+          </div>
+          <HintLine
+            id={`${id}-hint`}
+            about="Glitch"
+            text="It stays up, but that share of its answers are errors."
+          />
+        </div>
+      );
+      break;
+  }
 
-      <div className="ins-fault-row">
-        <label className="row-k" htmlFor={`${id}-rate`}>
-          Requests that fail
-        </label>
-        <div className="ins-fault-pair">
-          <select
-            id={`${id}-rate`}
-            className="ins-number"
-            value={rate}
-            onChange={(e) => setRate(Number(e.currentTarget.value))}
-          >
-            {GLITCH_RATES.map((r) => (
-              <option key={r} value={r}>
-                {formatPct(r)}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className="btn btn-sm"
-            aria-disabled={glitchSame}
-            aria-pressed={glitchSame}
-            aria-describedby={`${id}-glitch`}
-            onClick={guarded(glitchSame, () => onGlitch(rate))}
-          >
-            {glitchSame ? 'Glitching' : 'Glitch'}
-          </button>
-        </div>
-        <p id={`${id}-glitch`} className="ins-hint">
-          It stays up, but that share of its answers are errors.
-        </p>
-      </div>
+  return (
+    <div className="ins-fault">
+      <p
+        className={healthy ? 'ins-fault-status' : 'ins-fault-status is-danger'}
+        role="status"
+      >
+        {faultStatus(fault)}
+      </p>
+
+      {/* Native radios: the arrows move between them and a screen reader
+          hears "Slow, radio button, 4 of 6" without any wiring here. */}
+      <fieldset className="ins-seg">
+        <legend className="sr-only">Fault to try</legend>
+        {offered.map((p) => {
+          const live = fault?.kind === p;
+          return (
+            <label
+              key={p}
+              className={`ins-seg-opt${p === pick ? ' is-active' : ''}${live ? ' is-live' : ''}`}
+            >
+              <input
+                type="radio"
+                className="ins-seg-input"
+                name={`${id}-fault`}
+                value={p}
+                checked={p === pick}
+                onChange={() => setChosen(p)}
+              />
+              {PICK_LABEL[p]}
+              {live ? <span className="sr-only">, in force</span> : null}
+            </label>
+          );
+        })}
+      </fieldset>
+
+      {panel}
 
       <div className="ins-fault-row">
         {/* The way back is the one next step while something is broken. */}
@@ -335,43 +411,76 @@ export function NodeFaultControls({
         <div className="ins-fault-cables">
           <h3 className="label ins-fault-sub">Connections</h3>
           <ul className="ins-fault-list">
-            {cables.map((c) => (
-              <li key={c.id} className="ins-fault-cable">
-                <span className={c.state === 'connected' ? 'row-k' : 'row-k is-danger'}>
-                  {c.label}
-                  {c.state === 'connected' ? null : (
-                    <span className="sr-only">, cut</span>
-                  )}
-                </span>
-                <CableButton cable={c} onCut={onCut} onRestore={onRestore} named />
-                {c.carriesRequests &&
+            {cables.map((c) => {
+              const extras =
+                c.carriesRequests &&
                 onDuplicate &&
                 onUndup &&
                 onCutReplies &&
-                onRestoreReplies ? (
-                  <CableExtras
-                    cable={c}
-                    onDuplicate={onDuplicate}
-                    onUndup={onUndup}
-                    onCutReplies={onCutReplies}
-                    onRestoreReplies={onRestoreReplies}
-                  />
-                ) : null}
-              </li>
-            ))}
+                onRestoreReplies;
+              const notes = [
+                c.duplicating ? 'duplicating' : null,
+                c.repliesCut ? 'answers cut' : null,
+              ].filter((n): n is string => n !== null);
+              return (
+                <li key={c.id} className="ins-fault-cable">
+                  <span
+                    className={
+                      c.state === 'connected' && notes.length === 0
+                        ? 'row-k'
+                        : 'row-k is-danger'
+                    }
+                  >
+                    {c.label}
+                    {c.state === 'connected' ? null : (
+                      <span className="sr-only">, cut</span>
+                    )}
+                    {notes.length > 0 ? `, ${notes.join(', ')}` : null}
+                  </span>
+                  <span className="ins-fault-cable-acts">
+                    <CableButton
+                      cable={c}
+                      onCut={onCut}
+                      onRestore={onRestore}
+                      named
+                      short
+                    />
+                    {extras ? (
+                      <CableMenu
+                        cable={c}
+                        onDuplicate={onDuplicate}
+                        onUndup={onUndup}
+                        onCutReplies={onCutReplies}
+                        onRestoreReplies={onRestoreReplies}
+                      />
+                    ) : null}
+                  </span>
+                </li>
+              );
+            })}
           </ul>
-          {onDuplicate && cables.some((c) => c.carriesRequests) ? (
-            <p className="ins-hint">
-              Duplicate delivers {formatPct(DEFAULT_DUP_RATE)} of a connection&rsquo;s
-              requests twice. Select the connection itself to pick another share.
-            </p>
-          ) : null}
         </div>
       )}
 
       <RecordedFaults recorded={recorded} onForget={onForget} />
     </div>
   );
+}
+
+/** A fault the segmented row can pick, by the engine's own name for it. */
+type FaultPick = 'crash' | 'restart' | 'crash-instance' | 'slow' | 'pause' | 'errors';
+
+const PICK_LABEL: Record<FaultPick, string> = {
+  crash: 'Crash',
+  restart: 'Restart',
+  'crash-instance': 'Crash one',
+  slow: 'Slow',
+  pause: 'Stall',
+  errors: 'Glitch',
+};
+
+function isPick(kind: string): kind is FaultPick {
+  return kind in PICK_LABEL;
 }
 
 /**
@@ -419,18 +528,22 @@ function RecordedFaults({
 /**
  * Cut cable or Restore for one edge. `named` puts the cable's own label in
  * the accessible name, for a list where several buttons share the same
- * visible text.
+ * visible text. The name always starts with the visible words, so a voice
+ * command that says what it sees still lands.
  */
 function CableButton({
   cable,
   onCut,
   onRestore,
   named = false,
+  short = false,
 }: {
   cable: CableInfo;
   onCut: (edgeId: string) => void;
   onRestore: (edgeId: string) => void;
   named?: boolean;
+  /** "Cut" rather than "Cut connection", for a row already headed by the connection. */
+  short?: boolean;
 }) {
   const suffix = named
     ? ` ${cable.label.charAt(0).toLowerCase()}${cable.label.slice(1)}`
@@ -443,7 +556,7 @@ function CableButton({
         aria-label={named ? `Cut connection${suffix}` : undefined}
         onClick={() => onCut(cable.id)}
       >
-        Cut connection
+        {short ? 'Cut' : 'Cut connection'}
       </button>
     );
   }
@@ -461,8 +574,14 @@ function CableButton({
   );
 }
 
-/** Duplicate and answers-only switches for one row of a node's cable list. */
-function CableExtras({
+/**
+ * The rarer cable faults for one row of a node's cable list, behind a "⋯"
+ * button: Duplicate and Cut answers. A disclosure rather than an ARIA menu,
+ * so Tab and the usual button keys work inside it and nothing has to
+ * re-implement arrow handling. Escape, a press outside, or focus leaving it
+ * closes it.
+ */
+function CableMenu({
   cable,
   onDuplicate,
   onUndup,
@@ -475,47 +594,98 @@ function CableExtras({
   onCutReplies: (edgeId: string) => void;
   onRestoreReplies: (edgeId: string) => void;
 }) {
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLSpanElement | null>(null);
+  const toggleRef = useRef<HTMLButtonElement | null>(null);
   const named = `${cable.label.charAt(0).toLowerCase()}${cable.label.slice(1)}`;
+
+  // A press anywhere else closes it, the way out on a touch screen.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (wrapRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [open]);
+
   return (
-    <span className="ins-fault-cable-extras">
-      {cable.duplicating ? (
-        <button
-          type="button"
-          className="btn btn-sm"
-          aria-label={`Deliver once ${named}`}
-          onClick={() => onUndup(cable.id)}
-        >
-          Deliver once
-        </button>
-      ) : (
-        <button
-          type="button"
-          className="btn btn-sm"
-          aria-label={`Duplicate ${formatPct(DEFAULT_DUP_RATE)} of requests ${named}`}
-          onClick={() => onDuplicate(cable.id, DEFAULT_DUP_RATE)}
-        >
-          Duplicate
-        </button>
-      )}
-      {cable.repliesCut ? (
-        <button
-          type="button"
-          className="btn btn-sm"
-          aria-label={`Let answers back ${named}`}
-          onClick={() => onRestoreReplies(cable.id)}
-        >
-          Let answers back
-        </button>
-      ) : (
-        <button
-          type="button"
-          className="btn btn-sm"
-          aria-label={`Cut answers only ${named}`}
-          onClick={() => onCutReplies(cable.id)}
-        >
-          Cut answers
-        </button>
-      )}
+    <span
+      ref={wrapRef}
+      className="ins-cable-more"
+      onKeyDown={(e) => {
+        if (e.key !== 'Escape' || !open) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setOpen(false);
+        toggleRef.current?.focus();
+      }}
+      onBlur={(e) => {
+        const next = e.relatedTarget as Node | null;
+        if (next && wrapRef.current?.contains(next)) return;
+        setOpen(false);
+      }}
+    >
+      <button
+        ref={toggleRef}
+        type="button"
+        className="btn btn-sm ins-cable-more-btn"
+        aria-label={`More for the connection ${named}`}
+        aria-expanded={open}
+        aria-controls={open ? id : undefined}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Ellipsis size={16} strokeWidth={2} aria-hidden="true" />
+      </button>
+      {open ? (
+        <span id={id} className="ins-cable-menu" role="group" aria-label={cable.label}>
+          {cable.duplicating ? (
+            <button
+              type="button"
+              className="btn btn-sm"
+              aria-label={`Deliver once ${named}`}
+              onClick={() => onUndup(cable.id)}
+            >
+              Deliver once
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-sm"
+              aria-label={`Duplicate ${formatPct(DEFAULT_DUP_RATE)} of requests ${named}`}
+              onClick={() => onDuplicate(cable.id, DEFAULT_DUP_RATE)}
+            >
+              Duplicate
+            </button>
+          )}
+          {cable.repliesCut ? (
+            <button
+              type="button"
+              className="btn btn-sm"
+              aria-label={`Let answers back ${named}`}
+              onClick={() => onRestoreReplies(cable.id)}
+            >
+              Let answers back
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-sm"
+              aria-label={`Cut answers only ${named}`}
+              onClick={() => onCutReplies(cable.id)}
+            >
+              Cut answers
+            </button>
+          )}
+          <span className="ins-hint ins-cable-menu-note">
+            Duplicate delivers {formatPct(DEFAULT_DUP_RATE)} of its requests twice. Cut
+            answers lets requests through but loses what comes back. Select the
+            connection itself for more.
+          </span>
+        </span>
+      ) : null}
     </span>
   );
 }
