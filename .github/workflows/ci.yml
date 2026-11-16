@@ -111,7 +111,7 @@ jobs:
       # visual change without reproducing it locally.
       - name: Upload failure artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: visual-regression-failures
           path: |
