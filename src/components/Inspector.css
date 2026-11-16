@@ -56,49 +56,76 @@
    -------------------------------------------------------------------------- */
 
 .ins-head {
+  /* Pinned: the name stays in view while the panel scrolls, so a student
+     ten fields down still knows which component they are changing. The
+     negative margins reach over the scroll area's padding so content
+     passes under an opaque band rather than showing through its edges. */
+  position: sticky;
+  z-index: 4;
+  top: calc(var(--sp-5) * -1);
   display: flex;
   flex-direction: column;
   gap: var(--sp-1);
-  /* Reserves the space the input's own focus ring needs, so focusing the
-     title does not shove the blurb below it. */
-  margin-bottom: var(--sp-4);
+  margin: calc(var(--sp-5) * -1) calc(var(--sp-5) * -1) var(--sp-3);
+  padding: var(--sp-5) var(--sp-5) var(--sp-2);
+  border-bottom: var(--bw) solid transparent;
+  background: var(--surface);
+  /* A hairline fades in under the band once the panel has scrolled, so the
+     fields passing beneath it have an edge to pass under. Where scroll-driven
+     animation is not supported the band simply has no line. */
+  animation: ins-head-edge linear both;
+  animation-timeline: scroll(nearest block);
+  animation-range: 0 var(--sp-4);
+}
+
+@keyframes ins-head-edge {
+  to {
+    border-bottom-color: var(--border);
+  }
 }
 
 /* The title does not look like a field until you reach for it. Renaming is
    a normal thing to do here, but a permanently boxed input would make the
    whole panel read as a form to be filled in rather than a thing to read.
 
+   Scoped under .ins-head so it outranks the global input[type='text'] rule,
+   which otherwise drew a box round it at rest.
+
    Negative left margin cancels the padding, so the title's first glyph sits
    on exactly the same axis as every label below it. The padding has to
    exist for the hover and focus states to have room. */
-.ins-title {
+.ins-head .ins-title {
   width: calc(100% + var(--sp-2) * 2);
-  height: 32px;
+  height: 36px;
   margin-left: calc(var(--sp-2) * -1);
   padding: 0 var(--sp-2);
   border: var(--bw) solid transparent;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-btn);
   background: transparent;
+  box-shadow: none;
   color: var(--text);
-  font-size: var(--fs-num);
-  font-weight: var(--fw-num);
-  letter-spacing: var(--tr-num);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-med);
+  line-height: var(--lh-num);
+  letter-spacing: var(--tr-lg);
+  text-overflow: ellipsis;
 }
 
-.ins-title:hover:not(:focus) {
+.ins-head .ins-title:hover:not(:focus) {
   background: var(--surface-2);
   border-color: var(--border);
 }
 
-.ins-title:focus {
+.ins-head .ins-title:focus {
   background: var(--surface);
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 /* Pressed, but only while it is not already being edited: once focused the
    field is a text input and a press inside it is a caret placement, not a
    button press. */
-.ins-title:active:not(:focus) {
+.ins-head .ins-title:active:not(:focus) {
   background: var(--surface-3);
   border-color: var(--border-strong);
 }
@@ -318,7 +345,7 @@
      Dim and small on purpose: it is there for the first read and must not
      compete with the value once the student knows what the field means. */
   margin: 0;
-  font-size: var(--fs-label);
+  font-size: var(--fs-sm);
   line-height: var(--lh-sm);
   /* Resolves through --status-ink so `.ins-hint.is-warn` actually turns
      warm — see the status block in index.css for why this indirection
@@ -357,12 +384,160 @@
   gap: var(--sp-2);
 }
 
-/* 84px holds five digits plus the caret at 14px mono with room to spare —
-   the "4-digit number where 2 were expected" case, which must not clip. */
+/* A label that scrubs: drag it sideways to walk the value. pan-y leaves a
+   vertical swipe to the panel's scroll on touch. */
+.ins-scrub {
+  cursor: ew-resize;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* The stepper: minus, the figure, plus, in one box. Same height, border and
+   radius as every other input, so a number field and a select line up, and
+   the figure keeps the mono, tabular setting of the slider readouts. */
+.ins-stepper {
+  display: inline-flex;
+  flex: none;
+  align-items: stretch;
+  height: 32px;
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-btn);
+  background: var(--surface);
+  overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.ins-stepper:hover:not([data-disabled]) {
+  border-color: var(--line-2);
+}
+
+.ins-stepper:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.ins-stepper[data-disabled] {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.ins-step {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.ins-step:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.ins-step:active:not(:disabled) {
+  background: var(--surface-3);
+}
+
+.ins-step:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+
+/* The figure inside the stepper carries no box of its own. Six digit widths
+   hold 20000 and the caret without clipping. */
+.ins-stepper .ins-number {
+  width: calc(6ch + var(--sp-3));
+  height: auto;
+  padding: 0 var(--sp-1);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  text-align: center;
+}
+
+.ins-stepper .ins-number:hover:not(:disabled),
+.ins-stepper .ins-number:focus,
+.ins-stepper .ins-number:focus-visible {
+  border: 0;
+  box-shadow: none;
+}
+
+/* The figure box beside a select or elsewhere outside a stepper. */
 .ins-number {
   flex: none;
   width: 84px;
   height: 32px;
+}
+
+/* The rest of a long hint, shown on hover or focus of its info mark. It
+   floats under the row, the row's own width, so it never pushes the panel
+   sideways or reflows the fields below it. */
+.ins-field,
+.ins-field-row {
+  position: relative;
+}
+
+.ins-more {
+  white-space: nowrap;
+}
+
+.ins-more-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--text-faint);
+  vertical-align: -3px;
+  cursor: help;
+}
+
+.ins-more-btn:hover,
+.ins-more-btn:focus-visible {
+  color: var(--text);
+}
+
+.ins-more-pop {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + var(--sp-1));
+  left: 0;
+  right: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  text-wrap: pretty;
+  white-space: normal;
+  visibility: hidden;
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    visibility 0s linear var(--dur-fast);
+}
+
+.ins-more:hover > .ins-more-pop,
+.ins-more-btn:focus + .ins-more-pop {
+  visibility: visible;
+  opacity: 1;
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 
 /* A choice worded in a phrase ("Before it answers") rather than a number
@@ -542,6 +717,7 @@ select.ins-number {
   margin-left: auto;
   border-color: transparent;
   background: transparent;
+  box-shadow: none;
   color: var(--text-dim);
 }
 
@@ -1392,8 +1568,13 @@ button.traffic-multiple[aria-expanded='true'] {
    36px tall. */
 @media (pointer: coarse) {
   .ins-title,
-  .ins-number {
+  .ins-number,
+  .ins-stepper {
     min-height: 44px;
+  }
+
+  .ins-step {
+    width: 44px;
   }
 }
 

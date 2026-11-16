@@ -172,8 +172,8 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
     goal: 'See how the database only feels the reads the cache misses.',
     steps: [
       {
-        text: 'Select Cache and lower Hit rate you set from 85% to 30%.',
-        field: 'Hit rate you set',
+        text: 'Select Cache and lower Hit rate from 85% to 30%.',
+        field: 'Hit rate',
         when: [below(setting('cache', 'hitRate'), 0.35)],
         action: { kind: 'select', node: 'cache' },
         ring: 'cache',
@@ -199,7 +199,7 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
       },
       {
         text: 'Set the hit rate back to 85% and watch p99 come back down.',
-        field: 'Hit rate you set',
+        field: 'Hit rate',
         when: [
           atLeast(setting('cache', 'hitRate'), 0.85),
           below(FAILING, 0.01),
@@ -219,8 +219,8 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
     goal: 'See how much traffic an edge cache keeps away from your server.',
     steps: [
       {
-        text: 'Select CDN Edge and lower Hit rate you set from 90% to 50%.',
-        field: 'Hit rate you set',
+        text: 'Select CDN Edge and lower Hit rate from 90% to 50%.',
+        field: 'Hit rate',
         when: [below(setting('cdn', 'hitRate'), 0.55)],
         action: { kind: 'select', node: 'cdn' },
         ring: 'cdn',
@@ -245,7 +245,7 @@ export const EXAMPLE_TASKS: readonly ExampleTask[] = [
       },
       {
         text: 'Set the hit rate back to 90%.',
-        field: 'Hit rate you set',
+        field: 'Hit rate',
         when: [
           atLeast(setting('cdn', 'hitRate'), 0.9),
           below(FAILING, 0.01),

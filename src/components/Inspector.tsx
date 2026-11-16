@@ -6,7 +6,7 @@ import type { ReactNode } from 'react';
  * (each button holds one <svg> of its own), and the package is marked
  * side-effect-free so the build keeps only these four.
  */
-import { Minus, Pause, Play, Plus, RotateCcw, StepForward } from 'lucide-react';
+import { Info, Minus, Pause, Play, Plus, RotateCcw, StepForward } from 'lucide-react';
 import { cycleSpeed, formatSpeed, type Speed } from '../speed';
 import { useCoarsePointer } from '../useCoarsePointer';
 import type {
@@ -48,7 +48,8 @@ import {
   toneClass,
 } from './format';
 import { useSettledHealth } from './settledHealth';
-import { Term } from './Tooltip';
+import { closeTooltip, Term } from './Tooltip';
+import { splitHint } from './splitHint';
 import { readoutFor } from './Canvas';
 import { readoutTermFor } from './readoutTerms';
 import { GLOSSARY_BY_ID } from '../content/glossary';
@@ -180,12 +181,12 @@ const FIELDS_BY_KIND: Record<NodeKind, Field[]> = {
   // mix and the per-writer lock wait are what make it more than a service.
   db: [
     'readFraction',
-    'lockMs',
     'instances',
     'capacity',
     'serviceMs',
     'serviceCv',
     'queueLimit',
+    'lockMs',
     'errorRate',
   ],
   // A queue is a buffer. Depth is the only thing that matters about it.
@@ -428,15 +429,15 @@ const HAS_THROUGHPUT_CEILING: ReadonlySet<NodeKind> = new Set<NodeKind>([
  */
 const KIND_BLURB: Record<NodeKind, string> = {
   client:
-    'Offers load and waits for an answer. Its timeout decides when a slow reply becomes a failure.',
+    'Sends requests and waits for each answer. Its timeout decides when a slow reply becomes a failure.',
   lb: 'Spreads requests across its targets. Its own pool and backlog can saturate before theirs do.',
   service:
     'The workhorse. How many it handles at once, divided by how long each takes, is the ceiling everything else queues behind.',
   cache:
     'Answers hits without touching downstream. Each cache rolls its own hit chance, independently of the others, so stacking them multiplies misses rather than treating later caches as filters on earlier misses.',
-  db: 'Slots and service time. It does not retry for you, so its queue is where pressure shows.',
+  db: 'Works on a few requests at once. When they are all busy, the rest wait in line here.',
   queue:
-    'A buffer. Depth is the whole story: it absorbs bursts up to the limit, then sheds.',
+    'A buffer. Depth is the whole story: it absorbs bursts up to the limit, then turns work away.',
   worker:
     'Drains a queue at its own pace. Too few workers and the backlog never recovers.',
   replica:
@@ -583,7 +584,7 @@ type FieldSpec = SliderSpec | NumberSpec | ChoiceSpec;
 const TRAFFIC_HINT: Readonly<Record<string, ReactNode>> = {
   steady: 'The same rate the whole time.',
   ramp: 'Climbs from nothing to the full rate over one cycle, then holds.',
-  spike: 'Quiet, then 4x for a moment. The average is about half the offered load.',
+  spike: 'Quiet, then 4× for a moment. The average is about half the offered load.',
   diurnal:
     'A quiet night and a busy afternoon, from a quarter of the rate to twice it.',
   bursty: (
@@ -676,8 +677,8 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     control: 'number',
     term: 'instances',
     label: 'Instances',
-    unit: 'machines',
-    hint: 'How many copies of this component are running. This is what an autoscaler adds and removes.',
+    unit: 'running',
+    hint: 'How many copies of this component are running. An autoscaler adds and removes these.',
     min: 1,
     max: 512,
     step: 1,
@@ -686,8 +687,8 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     control: 'number',
     term: 'capacity',
     label: 'Slots per instance',
-    unit: 'at once, on one machine',
-    hint: 'How many requests ONE machine handles at a time. Total parallelism is instances x this.',
+    unit: 'at once, on one instance',
+    hint: 'How many requests one instance works on at once. Total slots = instances × this.',
     min: 1,
     max: 4096,
     step: 1,
@@ -706,7 +707,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     control: 'slider',
     term: 'service-cv',
     label: 'How uneven the work is',
-    unit: 'coefficient of variation',
+    unit: '0 is steady, 1 is very uneven',
     min: 0,
     max: 2,
     step: 0.05,
@@ -716,7 +717,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     control: 'number',
     term: 'queue-limit',
     label: 'Most that can wait in line',
-    unit: 'at most',
+    unit: 'requests',
     min: 0,
     max: 20000,
     step: 1,
@@ -724,7 +725,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
   hitRate: {
     control: 'slider',
     term: 'hit-rate',
-    label: 'Hit rate you set',
+    label: 'Hit rate',
     unit: 'percent',
     hint: 'Each cache or CDN rolls this chance on its own. Two at 80% leave about 4% of traffic for whatever is behind them, because the chances multiply.',
     min: 0,
@@ -735,8 +736,8 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
   errorRate: {
     control: 'slider',
     term: 'error-rate',
-    label: 'Error rate',
-    unit: 'percent',
+    label: 'Random errors',
+    unit: 'of requests fail on their own',
     min: 0,
     max: 1,
     step: 0.005,
@@ -766,7 +767,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     term: 'read-replica',
     label: 'Read replicas',
     unit: 'copies, besides the primary',
-    hint: 'Read-only copies behind the primary. They add READ capacity only; every write still goes through the one primary.',
+    hint: 'Read-only copies behind the primary. They add read capacity only; every write still goes through the one primary.',
     min: 1,
     max: 64,
     step: 1,
@@ -806,7 +807,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     term: 'capacity',
     label: 'Slots per shard',
     unit: 'at once, on one shard',
-    hint: 'How many requests ONE partition handles at a time. A hot key can only ever use its own shard\u2019s slots.',
+    hint: 'How many requests one partition works on at once. A hot key can only ever use its own shard\u2019s slots.',
     min: 1,
     max: 512,
     step: 1,
@@ -857,7 +858,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     max: MAX_BURST_SIZE,
     step: 1,
     display: (v) => `${formatCount(v)} at once`,
-    hint: 'Clumps come this many times further apart, so the average rate does not change.',
+    hint: 'Clumps come further apart, so the average rate stays the same.',
   },
   herdSize: {
     control: 'number',
@@ -962,7 +963,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     term: 'region',
     label: 'Serving from region',
     unit: 'number',
-    hint: 'WHICH region is serving right now, not how many exist. Change it to move service to a different region without crashing anything.',
+    hint: 'Which region is serving right now, not how many exist. Change it to move service without crashing anything.',
     min: 0,
     max: 7,
     step: 1,
@@ -972,7 +973,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     term: 'region',
     label: 'Failover takes',
     unit: 'milliseconds',
-    hint: 'How long every request fails for after the active region goes down and before the next one takes over. Nothing is served in that window, however many healthy regions are left.',
+    hint: 'How long requests fail while traffic moves to the next region. Nothing is served in that window, however many healthy regions are left.',
     min: 0,
     max: 60000,
     step: 500,
@@ -1039,7 +1040,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     control: 'slider',
     label: 'Indexing cost per write',
     unit: 'extra milliseconds per write',
-    hint: 'What a write pays ON TOP of the service time, to update the index. Searches never pay it.',
+    hint: 'Extra time a write pays to update the index. Searches never pay it.',
     min: 0,
     max: 500,
     step: 5,
@@ -1050,7 +1051,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     term: 'stale-search',
     label: 'Searchable after',
     unit: 'milliseconds after a write commits',
-    hint: 'The refresh interval: how long after a write commits before searches can see it. Searches inside that window read the old index.',
+    hint: 'How long before a new write shows up in searches. This is the refresh interval; searches inside it read the old index.',
     min: 0,
     max: 10000,
     step: 100,
@@ -1071,7 +1072,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     term: 'range-query',
     label: 'Range query costs',
     unit: 'extra milliseconds per range query',
-    hint: 'What a range query pays ON TOP of the service time, to scan and aggregate. Appends never pay it.',
+    hint: 'Extra time a range query pays to scan and aggregate. Appends never pay it.',
     min: 0,
     max: 2000,
     step: 10,
@@ -1082,7 +1083,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     term: 'traversal-depth',
     label: 'Traversal depth',
     unit: 'hops',
-    hint: 'How many hops each query walks. Every extra hop multiplies the work by about 3, so depth 3 costs 9x depth 1.',
+    hint: 'How many hops each query walks. Every extra hop multiplies the work by about 3, so depth 3 costs 9× depth 1.',
     min: 1,
     max: 6,
     step: 1,
@@ -1115,7 +1116,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     term: 'partitions',
     label: 'Partitions',
     unit: 'partitions',
-    hint: 'A message lands in one partition by key, and a consumer group takes at most one message per partition at a time, so this is the most a group can do in parallel.',
+    hint: 'The most one consumer group can work on in parallel. A message lands in one partition by key, and a group takes one message per partition at a time.',
     min: 1,
     max: 64,
     step: 1,
@@ -1125,7 +1126,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     term: 'connection-slot',
     label: 'Connection lifetime',
     unit: 'milliseconds held',
-    hint: 'How long each accepted connection occupies a slot. Held connections settle at rate x lifetime, which is the number that actually saturates.',
+    hint: 'How long each accepted connection occupies a slot. Held connections settle at rate × lifetime, which is the number that fills up.',
     min: 500,
     max: 120000,
     step: 500,
@@ -1144,7 +1145,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     control: 'number',
     label: 'Eject after',
     unit: 'consecutive failures',
-    hint: 'Straight downstream failures before the proxy stops calling it for a while. Simpler than the breaker on purpose; this is how sidecar outlier detection actually works.',
+    hint: 'Failures in a row before the proxy stops calling it for a while. Simpler than the breaker on purpose; this is how sidecar outlier detection works.',
     min: 1,
     max: 50,
     step: 1,
@@ -1173,9 +1174,9 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
   maxConcurrency: {
     control: 'number',
     term: 'capacity',
-    label: 'Concurrency cap',
-    unit: 'invocations at once',
-    hint: 'The platform limit. Past it requests are throttled immediately; a lambda has no queue to wait in.',
+    label: 'Slots, at most',
+    unit: 'across every instance (the platform limit)',
+    hint: 'Past it requests are refused at once; a lambda has no line to wait in.',
     min: 1,
     max: 1000,
     step: 1,
@@ -1202,7 +1203,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     term: 'bulkhead',
     label: 'Calls in flight, at most',
     unit: 'to the dependency behind it',
-    hint: 'The pool. Roughly this divided by the dependency\u2019s latency in seconds is the admission ceiling.',
+    hint: 'The size of the pool. Roughly this divided by the dependency\u2019s latency in seconds is the most it admits each second.',
     min: 1,
     max: 512,
     step: 1,
@@ -1271,7 +1272,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     term: 'loadshedder',
     label: 'Reserved for high priority',
     unit: 'percent of the bucket',
-    hint: 'Low-priority requests must leave this share of tokens untouched, which is why they are dropped first.',
+    hint: 'Low-priority requests must leave this share of tokens untouched. That is why they are cut first.',
     min: 0,
     max: 0.9,
     step: 0.05,
@@ -1282,7 +1283,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     term: 'lock-contention',
     label: 'Lock wait per concurrent write',
     unit: 'milliseconds each',
-    hint: 'Each write waits this long for every write already in flight. Adding machines does not shorten it.',
+    hint: 'Each write waits this long for every write already in progress. Adding instances does not shorten this wait.',
     min: 0,
     max: 100,
     step: 1,
@@ -1293,7 +1294,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     term: 'prefix-ceiling',
     label: 'Ceiling per key prefix',
     unit: 'requests per second, each prefix',
-    hint: 'Keys map onto 8 prefixes. Evenly spread traffic sustains 8x this; a hot prefix gets exactly 1x and then slowdowns, however idle the pool is.',
+    hint: 'Keys map onto 8 prefixes. Evenly spread traffic sustains 8× this; a hot prefix gets exactly 1× and then slowdowns, however idle the pool is.',
     min: 0,
     max: 1000,
     step: 10,
@@ -1347,7 +1348,7 @@ const KIND_FIELD_OVERRIDES: Partial<
       term: 'connection-slot',
       label: 'Connections per instance',
       unit: 'held at once, on one machine',
-      hint: 'A slot here is a held connection, not a request in service. Held connections settle at connect rate x lifetime, which is the number that saturates.',
+      hint: 'A slot here is a held connection, not a request in service. Held connections settle at connect rate × lifetime, which is the number that fills up.',
     },
   },
   writebehind: {
@@ -1557,13 +1558,49 @@ function SliderRow({
       {locked ? (
         <p className="ins-hint">{locked}</p>
       ) : spec.liveHint && !mixed ? (
-        <p className="ins-hint">{spec.liveHint(value)}</p>
+        <HintLine text={spec.liveHint(value)} about={spec.label} />
       ) : spec.hint ? (
-        <p className="ins-hint">{spec.hint}</p>
+        <HintLine text={spec.hint} about={spec.label} />
       ) : null}
     </div>
   );
 }
+
+/** One hint line, with the rest of a long hint on hover or focus. */
+function HintLine({ text, about }: { text: ReactNode; about: string }) {
+  const id = useId();
+  if (typeof text !== 'string') return <p className="ins-hint">{text}</p>;
+  const [first, rest] = splitHint(text);
+  if (!rest) return <p className="ins-hint">{first}</p>;
+  /* The info mark rides on the sentence's last word, so it never wraps onto
+     a line of its own. */
+  const cut = first.lastIndexOf(' ');
+  return (
+    <p className="ins-hint">
+      {first.slice(0, cut + 1)}
+      <span className="ins-more">
+        {first.slice(cut + 1)}
+        {'\u00a0'}
+        <button
+          type="button"
+          className="ins-more-btn"
+          aria-label={`More about ${about}`}
+          aria-describedby={id}
+        >
+          <Info size={14} strokeWidth={2} aria-hidden="true" />
+        </button>
+        <span id={id} role="tooltip" className="ins-more-pop">
+          {rest}
+        </span>
+      </span>
+    </p>
+  );
+}
+
+/** Pixels of horizontal drag on a label per step of its value. */
+const SCRUB_PX_PER_STEP = 4;
+/** Movement before a press on a label counts as a scrub, not a click. */
+const SCRUB_THRESHOLD_PX = 3;
 
 function NumberRow({
   spec,
@@ -1587,6 +1624,25 @@ function NumberRow({
   const [draft, setDraft] = useState<string | null>(null);
   /** The committed value when focus arrived, so Escape can revert to it. */
   const atFocusRef = useRef(value);
+  /** A press on the label that may become a drag. */
+  const scrubRef = useRef<{
+    pointer: number;
+    x: number;
+    y: number;
+    start: number;
+    last: number;
+    active: boolean;
+  } | null>(null);
+  /** Set by a finished scrub so the click it ends in does not focus the box. */
+  const scrubbedRef = useRef(false);
+  const disabled = locked !== undefined;
+  const clamp = (v: number) => Math.min(spec.max, Math.max(spec.min, Math.round(v)));
+  const nudge = (dir: 1 | -1, big: boolean) => {
+    setDraft(null);
+    const next = clamp(value + dir * spec.step * (big ? 10 : 1));
+    if (next !== value) onChange(next);
+  };
+  const label = spec.term ? <Term id={spec.term}>{spec.label}</Term> : spec.label;
   return (
     <div
       className={
@@ -1594,62 +1650,152 @@ function NumberRow({
         (locked ? ' is-locked' : '')
       }
     >
-      <label className="row-k" htmlFor={id}>
-        {spec.term ? <Term id={spec.term}>{spec.label}</Term> : spec.label}
+      {/*
+        The label scrubs: press and drag sideways to walk the value, Shift for
+        ten steps at a time, the way design tools do. A press that does not
+        move is still a click, so the label still focuses its box; a vertical
+        drag is left to the panel's own scroll.
+      */}
+      <label
+        className={disabled ? 'row-k' : 'row-k ins-scrub'}
+        htmlFor={id}
+        onPointerDown={(e) => {
+          if (disabled || e.button !== 0) return;
+          scrubRef.current = {
+            pointer: e.pointerId,
+            x: e.clientX,
+            y: e.clientY,
+            start: value,
+            last: value,
+            active: false,
+          };
+        }}
+        onPointerMove={(e) => {
+          const s = scrubRef.current;
+          if (!s || s.pointer !== e.pointerId) return;
+          const dx = e.clientX - s.x;
+          if (!s.active) {
+            if (Math.abs(e.clientY - s.y) > SCRUB_THRESHOLD_PX * 2) {
+              scrubRef.current = null;
+              return;
+            }
+            if (Math.abs(dx) < SCRUB_THRESHOLD_PX) return;
+            s.active = true;
+            setDraft(null);
+            closeTooltip();
+            try {
+              e.currentTarget.setPointerCapture(e.pointerId);
+            } catch {
+              // A pointer the browser has already released; the scrub still
+              // follows moves that reach the label.
+            }
+          }
+          const steps = Math.trunc(dx / SCRUB_PX_PER_STEP);
+          const next = clamp(s.start + steps * spec.step * (e.shiftKey ? 10 : 1));
+          if (next !== s.last) {
+            s.last = next;
+            onChange(next);
+          }
+        }}
+        onPointerUp={() => {
+          if (scrubRef.current?.active) scrubbedRef.current = true;
+          scrubRef.current = null;
+        }}
+        onPointerCancel={() => {
+          scrubRef.current = null;
+        }}
+        onClickCapture={(e) => {
+          if (!scrubbedRef.current) return;
+          scrubbedRef.current = false;
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+      >
+        {label}
       </label>
       <span className="ins-number-wrap">
-        {/*
-          A DRAFT rides over the committed value while the field is focused.
-          Committing the clamped parse of every keystroke corrupted edits in
-          progress: Ctrl+A then "-5" saw the intermediate "" parse to 0,
-          clamp to the minimum, re-render into the field, and the following
-          "5" append to it — the student typed -5 and got 15. The draft lets
-          the box hold any partial text; only text that parses commits (still
-          clamped, still live), and blur or Enter squares the box back with
-          the committed value. Escape discards the draft outright.
-        */}
-        <input
-          id={id}
-          className="ins-number"
-          type="number"
-          min={spec.min}
-          max={spec.max}
-          step={spec.step}
-          value={draft ?? value}
-          placeholder={mixed ? 'mixed' : undefined}
-          data-mixed={mixed || undefined}
-          disabled={locked !== undefined}
-          onChange={(e) => {
-            const text = e.currentTarget.value;
-            setDraft(text);
-            if (text.trim() === '') return;
-            const raw = Number(text);
-            if (!Number.isFinite(raw)) return;
-            onChange(Math.min(spec.max, Math.max(spec.min, Math.round(raw))));
-          }}
-          onFocus={() => {
-            atFocusRef.current = value;
-          }}
-          onBlur={() => setDraft(null)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              setDraft(null);
-              e.currentTarget.blur();
-            } else if (e.key === 'Escape') {
-              // Same contract as the canvas rename: Escape means "as it was
-              // when I started", not "keep whatever half-edit went through".
-              onChange(atFocusRef.current);
-              setDraft(null);
-              e.currentTarget.blur();
-            }
-          }}
-        />
+        <span className="ins-stepper" data-disabled={disabled || undefined}>
+          {/* Out of the tab order: the box itself steps on ArrowUp and
+              ArrowDown, so the buttons are for pointers and fingers. */}
+          <button
+            type="button"
+            className="ins-step"
+            tabIndex={-1}
+            aria-label={`Decrease ${spec.label}`}
+            disabled={disabled || value <= spec.min}
+            onClick={(e) => nudge(-1, e.shiftKey)}
+          >
+            <Minus size={14} strokeWidth={2} aria-hidden="true" />
+          </button>
+          {/*
+            A DRAFT rides over the committed value while the field is focused.
+            Committing the clamped parse of every keystroke corrupted edits in
+            progress: Ctrl+A then "-5" saw the intermediate "" parse to 0,
+            clamp to the minimum, re-render into the field, and the following
+            "5" append to it — the student typed -5 and got 15. The draft lets
+            the box hold any partial text; only text that parses commits (still
+            clamped, still live), and blur or Enter squares the box back with
+            the committed value. Escape discards the draft outright.
+          */}
+          <input
+            id={id}
+            className="ins-number"
+            type="number"
+            min={spec.min}
+            max={spec.max}
+            step={spec.step}
+            value={draft ?? value}
+            placeholder={mixed ? 'mixed' : undefined}
+            data-mixed={mixed || undefined}
+            disabled={disabled}
+            onChange={(e) => {
+              const text = e.currentTarget.value;
+              setDraft(text);
+              if (text.trim() === '') return;
+              const raw = Number(text);
+              if (!Number.isFinite(raw)) return;
+              onChange(clamp(raw));
+            }}
+            onFocus={() => {
+              atFocusRef.current = value;
+            }}
+            onBlur={() => setDraft(null)}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                e.preventDefault();
+                nudge(e.key === 'ArrowUp' ? 1 : -1, e.shiftKey);
+              } else if (e.key === 'PageUp' || e.key === 'PageDown') {
+                e.preventDefault();
+                nudge(e.key === 'PageUp' ? 1 : -1, true);
+              } else if (e.key === 'Enter') {
+                setDraft(null);
+                e.currentTarget.blur();
+              } else if (e.key === 'Escape') {
+                // Same contract as the canvas rename: Escape means "as it was
+                // when I started", not "keep whatever half-edit went through".
+                onChange(atFocusRef.current);
+                setDraft(null);
+                e.currentTarget.blur();
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="ins-step"
+            tabIndex={-1}
+            aria-label={`Increase ${spec.label}`}
+            disabled={disabled || value >= spec.max}
+            onClick={(e) => nudge(1, e.shiftKey)}
+          >
+            <Plus size={14} strokeWidth={2} aria-hidden="true" />
+          </button>
+        </span>
         <span className="label ins-unit">{spec.unit}</span>
       </span>
       {locked ? (
         <p className="ins-hint">{locked}</p>
       ) : hint ? (
-        <p className="ins-hint">{hint}</p>
+        <HintLine text={hint} about={spec.label} />
       ) : null}
     </div>
   );
@@ -1702,9 +1848,9 @@ function ChoiceRow({
       {locked ? (
         <p className="ins-hint">{locked}</p>
       ) : spec.liveHint && !mixed ? (
-        <p className="ins-hint">{spec.liveHint(value)}</p>
+        <HintLine text={spec.liveHint(value)} about={spec.label} />
       ) : spec.hint ? (
-        <p className="ins-hint">{spec.hint}</p>
+        <HintLine text={spec.hint} about={spec.label} />
       ) : null}
     </div>
   );
