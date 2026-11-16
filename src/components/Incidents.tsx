@@ -26,6 +26,18 @@ export interface IncidentPanelProps {
   onSheetResize?: (height: number | null, shut: boolean) => void;
 }
 
+/** "20s: S3 stops answering." as a dated line: the time set apart in figures. */
+function captionParts(caption: string) {
+  const at = caption.indexOf(': ');
+  if (at <= 0) return caption;
+  return (
+    <>
+      <span className="inc-caption-at num">{caption.slice(0, at)}</span>
+      <span className="inc-caption-text">{caption.slice(at + 2)}</span>
+    </>
+  );
+}
+
 export function IncidentPanel({
   incident,
   caption,
@@ -87,6 +99,8 @@ export function IncidentPanel({
     toTopRef.current = true;
     onWatch();
   };
+
+  const watched = caption !== null;
 
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     if (e.key !== 'Escape') return;
@@ -160,7 +174,7 @@ export function IncidentPanel({
           appears with its first text is often not announced. */}
       {caption !== null ? (
         <p className="inc-caption" aria-hidden="true">
-          {caption}
+          {captionParts(caption)}
         </p>
       ) : null}
       <p className="sr-only" aria-live="polite">
@@ -179,11 +193,21 @@ export function IncidentPanel({
             {incident.source.title}
           </a>
         </p>
+        {/* Watching comes first: the brief makes sense once the outage has
+            been seen. After that, fixing it is the thing to press. */}
         <div className="chal-foot">
-          <button type="button" className="btn btn-sm" onClick={watch}>
-            {caption !== null ? 'Watch again' : 'Watch it happen'}
+          <button
+            type="button"
+            className={`btn btn-sm${watched ? '' : ' btn-primary'}`}
+            onClick={watch}
+          >
+            {watched ? 'Watch again' : 'Watch it happen'}
           </button>
-          <button type="button" className="btn btn-sm btn-primary" onClick={onFix}>
+          <button
+            type="button"
+            className={`btn btn-sm${watched ? ' btn-primary' : ''}`}
+            onClick={onFix}
+          >
             Fix it
           </button>
         </div>

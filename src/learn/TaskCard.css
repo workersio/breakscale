@@ -1,0 +1,288 @@
+/* --------------------------------------------------------------------------
+   "Your task"
+
+   In the tour's corner, top right under the inspector toggle, stepping left
+   of an open inspector so it never covers the field a step points at. The
+   tour and this card never show together. While it is open on a desktop,
+   the canvas fit leaves its width free (see .stage-safe), the way it does
+   for a brief, so the diagram it talks about is not under it.
+   -------------------------------------------------------------------------- */
+
+.app-body {
+  --task-w: 340px;
+  /* What a phone card with one step and its figures takes, measured at
+     390px wide: about 240px. */
+  --task-phone-h: 260px;
+}
+
+.task {
+  position: absolute;
+  z-index: 6;
+  top: calc(var(--bar-clear) + 32px + var(--sp-2));
+  right: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  max-height: calc(100% - var(--bar-clear) - 32px - var(--sp-2) * 2);
+  pointer-events: none;
+  transition: right var(--dur-base) var(--ease);
+}
+
+.task > * {
+  pointer-events: auto;
+}
+
+.app-body.has-inspector .task {
+  right: calc(var(--ins-w) + var(--sp-3) * 2);
+}
+
+/* Between a phone and a wide desktop, both rails open leave less room
+   than the card needs, and it would slide under the components rail.
+   It goes over the rail instead: while a step points into the inspector,
+   the components are not what the student needs. */
+@media (min-width: 721px) and (max-width: 1100px) {
+  .app-body.has-library.has-inspector .task {
+    z-index: 11;
+  }
+}
+
+@media (min-width: 721px) {
+  .app-body.has-task:not(.has-inspector) .stage-safe {
+    right: calc(var(--task-w) + var(--sp-3) * 2);
+  }
+}
+
+/* A tablet held upright has height to spare and little width. Beside the
+   card the fit had about 440px of an 820px screen, and the part a step was
+   about sat under the card or under the off-screen cue. There the diagram
+   is framed below the card instead, across the whole width. The card's
+   height is its tallest at that width (measured 312 to 420px), so the
+   frame does not move as steps tick. */
+@media (min-width: 721px) and (max-width: 1100px) and (orientation: portrait) {
+  .app-body {
+    --task-tablet-h: 440px;
+  }
+
+  .app-body.has-task:not(.has-inspector) .stage-safe {
+    right: 0;
+    top: calc(
+      var(--bar-clear) + 32px + var(--sp-2) + var(--task-tablet-h) + var(--sp-3)
+    );
+  }
+}
+
+.task-card {
+  width: min(var(--task-w), calc(100vw - var(--sp-4) * 2));
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* The count beside "Your task": sans with tabular figures, so "2 of 3"
+   does not shift as it moves on. */
+.task-count {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.task-chip {
+  align-self: flex-end;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  font-variant-numeric: tabular-nums;
+}
+
+.task-chip-count {
+  color: var(--text-dim);
+}
+
+.task-learned,
+.task-note {
+  margin: 0;
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+  color: var(--text-dim);
+  text-wrap: pretty;
+}
+
+.task-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-step {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  column-gap: var(--sp-2);
+  align-items: start;
+}
+
+/* A step's number in a ring; a tick once done. The current step's ring is
+   the accent, so where you are reads without the colour of the text. */
+.task-mark {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  font-size: var(--fs-sm);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-pill);
+}
+
+.task-step[data-at='done'] .task-mark {
+  color: var(--ok);
+  border-color: var(--ok-mark);
+}
+
+.task-step[data-at='now'] .task-mark {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.task-step-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.task-step-text {
+  font-size: var(--fs-base);
+  line-height: var(--lh-sm);
+  color: var(--text-dim);
+  text-wrap: pretty;
+}
+
+.task-step[data-at='now'] .task-step-text {
+  color: var(--text);
+  font-weight: var(--fw-med);
+}
+
+.task-skipped {
+  color: var(--text-dim);
+  font-weight: var(--fw-body);
+}
+
+/* The live readings for the current step, as the tour shows them: the
+   figure, then a small word for what it counts. */
+.task-figs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-fig {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* Coloured past the canvas thresholds through the status ink .is-warn and
+   .is-danger set; the word beside it says the same thing. */
+.task-fig-v {
+  font-size: var(--fs-num);
+  font-weight: var(--fw-num);
+  line-height: var(--lh-num);
+  color: var(--status-ink, var(--text));
+}
+
+.task-fig-v .unit {
+  margin-left: 1px;
+}
+
+.task-fig-k {
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.task-hold {
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  color: var(--text-dim);
+}
+
+@media (max-width: 720px) {
+  /* Docked on the tab bar, as the tour is, so the diagram keeps the middle
+     of the screen. "What just happened" docks there too and waits while
+     the card is open. */
+  .task,
+  .app-body.has-inspector .task {
+    position: fixed;
+    z-index: 12;
+    top: auto;
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + var(--sp-2));
+    left: var(--sp-3);
+    right: var(--sp-3);
+    align-items: stretch;
+    max-height: 46vh;
+  }
+
+  /* Right, clear of the sheet's own buttons, which sit at its left. */
+  .task-chip {
+    align-self: flex-end;
+  }
+
+  .task-card {
+    width: auto;
+    gap: var(--sp-2);
+    padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  }
+
+  .task-steps {
+    gap: var(--sp-2);
+  }
+
+  .task-step-text,
+  .task-learned,
+  .task-note {
+    font-size: var(--fs-sm);
+    line-height: var(--lh-sm);
+  }
+
+  /* Only the step in hand on a phone, so the card keeps one height from
+     step to step and the diagram above it keeps its room. The count in the
+     head says where it is in the whole task. */
+  .task-step:not([data-at='now']) {
+    display: none;
+  }
+
+  /* The canvas fit leaves the card's room free, as it does for a brief on
+     a desktop: the diagram sits above it, not under it. */
+  .app-body.has-task .stage-safe {
+    bottom: calc(var(--task-phone-h) + var(--sp-2));
+  }
+
+  .task-fig-v {
+    font-size: var(--fs-base);
+  }
+
+  .app-body:has(.task-card) .wh {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task {
+    transition: none;
+  }
+}

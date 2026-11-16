@@ -42,14 +42,15 @@
   gap: var(--sp-2);
   max-width: 560px;
   margin: 0;
-  padding: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--sp-4) var(--sp-2) var(--sp-3);
   border: var(--bw) solid var(--border);
   border-radius: var(--r-md);
   background: var(--surface);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md);
   color: var(--text);
   font-size: var(--fs-sm);
-  line-height: 1.45;
+  line-height: var(--lh-sm);
+  font-variant-numeric: tabular-nums;
   pointer-events: auto;
 }
 
@@ -65,8 +66,20 @@
 }
 
 .route-alert-text {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+/* One route to a line, the one in trouble first, as the sentence orders
+   them. */
+.route-alert-line {
+  text-wrap: pretty;
+}
+
+.route-alert-name {
+  font-weight: var(--fw-med);
 }
 
 /* Where the hint row is hidden, the line takes its slot. */

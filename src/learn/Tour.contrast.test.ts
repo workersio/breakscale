@@ -5,8 +5,8 @@ import { readTokens, resolve } from '../theme/tokens';
 
 describe('tour colours', () => {
   /* The card's words are text on its surface; the ring around the control a
-     step points at, and the card's accent edge, are non-text marks on the
-     page and on the panels. Measured from src/index.css. */
+     step points at is a non-text mark on the page and on the panels, and the
+     step dots are non-text marks on the card. Measured from src/index.css. */
   const css = readFileSync(new URL('../index.css', import.meta.url), 'utf8');
   const themes = [
     ['light', readTokens(css, ':root')],
@@ -23,5 +23,7 @@ describe('tour colours', () => {
     expect(ratio(get('--text-dim'), get('--surface'))).toBeGreaterThanOrEqual(4.5);
     expect(ratio(get('--accent'), get('--bg'))).toBeGreaterThanOrEqual(3);
     expect(ratio(get('--accent'), get('--surface'))).toBeGreaterThanOrEqual(3);
+    // A step still to come.
+    expect(ratio(get('--border-strong'), get('--surface'))).toBeGreaterThanOrEqual(3);
   });
 });

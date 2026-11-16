@@ -1268,6 +1268,47 @@ h4 {
   min-width: 0;
 }
 
+/* A card floating over the canvas: the tour, "What just happened", "Find
+   the problem". The same frame as the brief's panel (Challenge.css), so
+   every card that comes and goes over the diagram reads as one family.
+   Even on all four sides: state is said in words, never with an edge. */
+.card-float {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  background: var(--surface);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md);
+}
+
+/* A quiet line above the title: a step count or a status, and a ghost
+   button whose own padding lines its text up with the card's edge. */
+.card-float-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-height: 32px;
+  margin: calc(var(--sp-2) * -1) calc(var(--sp-2) * -1) calc(var(--sp-1) * -1) 0;
+}
+
+.card-float-title {
+  margin: 0;
+  font-size: var(--fs-num);
+  font-weight: var(--fw-med);
+  line-height: var(--lh-sm);
+  color: var(--text);
+  text-wrap: balance;
+}
+
+.card-float-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
 /* T1. The sole 11px definition in the codebase. Uppercase is mandatory: it is
    what makes 11px read as a label rather than as failed body text.
    Never a sentence, never a number, max ~18 characters. */

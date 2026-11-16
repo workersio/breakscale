@@ -51,6 +51,11 @@ export interface ChallengePanelProps {
   onStartOver: (() => void) | null;
   /** Null for the last brief. */
   onNext: (() => void) | null;
+  /**
+   * What the Next button says: "Next: Cache aside" for a step on the
+   * learning path, where it goes to the step after this one.
+   */
+  nextLabel?: string;
   onLeave: () => void;
   /** Moves focus to the brief each time it changes from 0, for a new start. */
   focusSignal: number;
@@ -433,6 +438,7 @@ export function ChallengePanel({
   onWatch,
   onStartOver,
   onNext,
+  nextLabel = 'Next challenge',
   onLeave,
   focusSignal,
   nameOf,
@@ -471,6 +477,23 @@ export function ChallengePanel({
     if (besideInspector) setFolded(true);
   }
 
+  const tone = toneOf(check);
+  const verdict = check.status === 'verdict' ? check.verdict : null;
+  const passed = verdict?.status === 'passed';
+  const passKey = passed ? verdict.designKey : null;
+
+  /* A pass opens the panel once, folded or not and beside the inspector or
+     not, because what it says next is the lesson and the way on. Folding it
+     again after that is the reader's choice, and it stays folded. */
+  const [seenPass, setSeenPass] = useState(passKey);
+  if (seenPass !== passKey) {
+    setSeenPass(passKey);
+    if (passKey !== null) {
+      setCollapsed(false);
+      setFolded(false);
+    }
+  }
+
   /* Report the panel's size to the shell. Observed rather than computed:
      the folded line, the open brief and a verdict that wraps are all
      whatever height the text makes them. The fold state goes with it so the
@@ -502,15 +525,10 @@ export function ChallengePanel({
     if (focusSignal > 0) headingRef.current?.focus();
   }, [focusSignal]);
 
-  const tone = toneOf(check);
-  const verdict = check.status === 'verdict' ? check.verdict : null;
-  const passed = verdict?.status === 'passed';
-
   /* A pass brings the lesson and the way on, at the foot of the panel.
      Scrolled to once, as the pass lands, and not again when the panel
      re-renders with the same verdict. The panel's scroll position is outside
      React, which is why this is an effect. */
-  const passKey = passed ? verdict.designKey : null;
   useEffect(() => {
     if (passKey === null) return;
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -620,7 +638,10 @@ export function ChallengePanel({
              the design on the canvas: the check view is a verdict only while
              its key is current. Shown from the start it is the answer, and
              the brief stops being one. */
-          <p className="chal-lesson">{challenge.lesson}</p>
+          <div className="chal-lesson">
+            <h3 className="chal-lesson-title">What you learned</h3>
+            <p className="chal-lesson-text">{challenge.lesson}</p>
+          </div>
         ) : (
           <div className="chal-help">
             {shown.map((text, i) => (
@@ -761,7 +782,7 @@ export function ChallengePanel({
         <div ref={footRef} className="chal-foot">
           {passed && onNext ? (
             <button type="button" className="btn btn-sm btn-primary" onClick={onNext}>
-              Next challenge
+              {nextLabel}
             </button>
           ) : null}
           <button type="button" className="btn btn-sm" onClick={onLeave}>

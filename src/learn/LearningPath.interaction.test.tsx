@@ -6,7 +6,6 @@ import App from '../App';
 import { CHALLENGES_KEY } from '../challengeWorkspace';
 import { PRESETS, makeNode } from '../sim/presets';
 import { challengeById } from '../sim/challenges';
-import { incidentById } from '../sim/incidents';
 import type { Topology } from '../sim/types';
 import { PATH_KEY } from './pathProgress';
 
@@ -78,10 +77,7 @@ function press(el: Element, pointerType = 'mouse'): void {
 
 function must(name: string, scope: ParentNode = document): HTMLElement {
   const el = [...scope.querySelectorAll<HTMLElement>('button')].find(
-    (b) =>
-      b.getAttribute('aria-label') === name ||
-      b.textContent?.trim() === name ||
-      b.querySelector('.lp-step-name')?.firstChild?.textContent === name,
+    (b) => b.getAttribute('aria-label') === name || b.textContent?.trim() === name,
   );
   if (!el) throw new Error(`no control named ${name}`);
   return el;
@@ -131,41 +127,86 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+const undo = () => must('Undo') as HTMLButtonElement;
+
+/** The row for a step, by its name. */
+function row(name: string, scope: ParentNode): HTMLElement {
+  const li = [...scope.querySelectorAll<HTMLElement>('li.lp-step')].find(
+    (r) => r.querySelector('.lp-step-title')?.textContent === name,
+  );
+  if (!li) throw new Error(`no row for ${name}`);
+  return li;
+}
+
 describe('the learning path', () => {
   it('opens from the menu with focus on the step to do next', () => {
     mount();
     const d = openPath();
-    expect(document.activeElement?.textContent).toBe('Open Single server');
+    expect(document.activeElement?.textContent).toBe('Start Single server');
     expect(d.querySelector('.ex-sub')?.textContent).toBe(
-      'Every example, challenge and real incident in an order that builds up. You have done 0 of 48.',
+      'Every example, challenge and real outage, in an order that builds up.',
     );
-    expect(d.querySelector('.lp-step[data-next] .lp-status')?.textContent).toBe(
-      'Up next',
+    expect(d.querySelector('.lp-progress')?.textContent).toBe('0 of 48 done');
+    // How it counts sits with the step, in words.
+    expect(d.querySelector('.lp-next-rule')?.textContent).toBe(
+      'A short task opens with it. It counts as done once you finish the task.',
     );
+    expect(d.querySelector('.lp-rule')).toBeNull();
+    expect(d.querySelectorAll('.btn-primary')).toHaveLength(1);
+  });
+
+  it('gives every step one button, named for what it does to which step', () => {
+    mount();
+    const d = openPath();
+    const rows = [...d.querySelectorAll('li.lp-step')];
+    expect(rows).toHaveLength(48);
+    rows.forEach((r, i) => {
+      const buttons = r.querySelectorAll('button');
+      expect(buttons).toHaveLength(1);
+      const name = r.querySelector('.lp-step-title')!.textContent;
+      expect(buttons[0]!.getAttribute('aria-label')).toBe(
+        `Start step ${i + 1}, ${name}`,
+      );
+      expect(buttons[0]!.textContent).toBe('Start');
+    });
+    // The second step, by the name a screen reader hears.
+    expect(must('Start step 2, Load balanced', d)).toBeTruthy();
   });
 
   it('loads an example step in place of the design, with undo', () => {
     mount();
     expect(canvasIds()).toEqual(['mine-client', 'mine-svc']);
     const d = openPath();
-    press(must('Load balanced', d));
+    press(must('Start step 2, Load balanced', d));
     advance(400);
     const lb = PRESETS.find((p) => p.id === 'load-balanced')!;
     expect(canvasIds()).toEqual(lb.topology.nodes.map((n) => n.id));
     expect(dialog()).toBeNull();
+    expect(undo().disabled).toBe(false);
   });
 
   it('starts a challenge step as the picker does', () => {
     mount();
     const d = openPath();
-    press(must('Hold the line', d));
+    press(must('Start step 3, Hold the line', d));
     advance(400);
+    expect(dialog()).toBeNull();
     expect(document.querySelector('section.chal')?.textContent).toContain(
       'Hold the line',
     );
   });
 
-  it('shows what is done from both stores, in words as well as marks', () => {
+  it('starts the next step from the Up next box', () => {
+    mount();
+    const d = openPath();
+    press(must('Start Single server', d));
+    advance(400);
+    expect(dialog()).toBeNull();
+    const single = PRESETS.find((p) => p.id === 'single-server')!;
+    expect(canvasIds()).toEqual(single.topology.nodes.map((n) => n.id));
+  });
+
+  it('shows what is done from both stores, as words that are not buttons', () => {
     localStorage.setItem(PATH_KEY, JSON.stringify({ explored: ['single-server'] }));
     localStorage.setItem(
       CHALLENGES_KEY,
@@ -183,13 +224,85 @@ describe('the learning path', () => {
     );
     mount();
     const d = openPath();
+    expect(d.querySelector('.lp-progress')?.textContent).toBe('2 of 48 done');
     const first = d.querySelector('section.lp-track')!;
     expect(first.querySelector('.lp-track-count')?.textContent).toBe('2 of 4 done');
-    const statuses = [...first.querySelectorAll('.lp-status')].map(
-      (s) => s.textContent,
+    const badges = [...first.querySelectorAll('.lp-badge')].map((s) => s.textContent);
+    expect(badges).toEqual(['Done', 'Done']);
+    for (const b of d.querySelectorAll('.lp-badge')) {
+      expect(b.tagName).toBe('SPAN');
+      expect(b.closest('button')).toBeNull();
+    }
+    const verbs = [...first.querySelectorAll('li.lp-step button')].map(
+      (b) => b.textContent,
     );
-    expect(statuses).toEqual(['Done', 'Up next', 'Done', '']);
-    expect(document.activeElement?.textContent).toBe('Open Load balanced');
+    expect(verbs).toEqual(['Again', 'Start', 'Open', 'Start']);
+    expect(document.activeElement?.textContent).toBe('Start Load balanced');
+  });
+
+  it('reloads a done example fresh from Again', () => {
+    localStorage.setItem(PATH_KEY, JSON.stringify({ explored: ['single-server'] }));
+    mount();
+    expect(undo().disabled).toBe(true);
+    const d = openPath();
+    press(must('Do step 1 again, Single server', d));
+    advance(400);
+    expect(dialog()).toBeNull();
+    const single = PRESETS.find((p) => p.id === 'single-server')!;
+    expect(canvasIds()).toEqual(single.topology.nodes.map((n) => n.id));
+    expect(undo().disabled).toBe(false);
+  });
+
+  it('continues the step already open without loading it again', () => {
+    localStorage.clear();
+    mount();
+    const before = canvasIds();
+    expect(undo().disabled).toBe(true);
+    const d = openPath();
+    // The first visit opens the first example: the path says so, once.
+    const current = row('Single server', d);
+    expect(current.getAttribute('aria-current')).toBe('step');
+    expect(current.querySelector('.lp-badge')?.textContent).toBe('Current');
+    expect(d.querySelectorAll('.lp-badge[data-badge="current"]')).toHaveLength(1);
+    expect(document.activeElement?.textContent).toBe('Continue Single server');
+    expect(d.querySelector('.lp-next-where')?.textContent).toBe(
+      'It is open behind this dialog.',
+    );
+    press(must('Continue step 1, Single server', d));
+    advance(400);
+    expect(dialog()).toBeNull();
+    expect(canvasIds()).toEqual(before);
+    expect(undo().disabled).toBe(true);
+    expect(document.querySelector('.app-toast')).toBeNull();
+  });
+
+  it('continues from the Up next box without loading it again', () => {
+    localStorage.clear();
+    mount();
+    const d = openPath();
+    press(must('Continue Single server', d));
+    advance(400);
+    expect(dialog()).toBeNull();
+    expect(undo().disabled).toBe(true);
+    expect(document.querySelector('.app-toast')).toBeNull();
+  });
+
+  it('continues a brief on the canvas, keeping its attempt', () => {
+    mount();
+    press(must('Start step 3, Hold the line', openPath()));
+    advance(400);
+    const ids = canvasIds();
+    const d = openPath();
+    expect(row('Hold the line', d).querySelector('.lp-badge')?.textContent).toBe(
+      'Current',
+    );
+    press(must('Continue step 3, Hold the line', d));
+    advance(400);
+    expect(dialog()).toBeNull();
+    expect(canvasIds()).toEqual(ids);
+    expect(document.querySelector('section.chal')?.textContent).toContain(
+      'Hold the line',
+    );
   });
 
   it('closes on Escape and gives focus back to the menu button', () => {
@@ -220,104 +333,12 @@ describe('the learning path', () => {
     expect(document.querySelector('[aria-labelledby="ex-title"]')).toBeNull();
   });
 
-  it('goes back to the next step without reloading it when it is already open', () => {
-    localStorage.clear();
-    mount();
-    const d = openPath();
-    press(must('Back to Single server', d));
-    advance(400);
-    expect(dialog()).toBeNull();
-    expect(document.querySelector('.app-toast')).toBeNull();
-  });
-
-  it('opens an incident step to its story, not straight into the brief', () => {
-    mount();
-    const d = openPath();
-    const s3 = incidentById('incident-s3-2017')!;
-    const row = must(s3.name, d);
-    expect(row.querySelector('.lp-kind')?.textContent).toBe('Incident');
-    press(row);
-    advance(400);
-    expect(dialog()).toBeNull();
-    const p = document.querySelector('section.chal');
-    expect(p?.textContent).toContain(s3.name);
-    expect(p?.textContent).toContain('Watch it happen');
-    expect(p?.textContent).not.toContain(s3.brief.brief);
-    // Opening it changes nothing on the canvas.
-    expect(canvasIds()).toEqual(['mine-client', 'mine-svc']);
-    expect(document.activeElement).toBe(p?.querySelector('h2'));
-
-    // Open now while its panel is up.
-    const again = openPath();
-    expect(must(s3.name, again).querySelector('.lp-status')?.textContent).toBe(
-      'Open now',
-    );
-  });
-
-  it('counts an incident once its brief is passed', () => {
-    const s3 = incidentById('incident-s3-2017')!;
-    localStorage.setItem(
-      CHALLENGES_KEY,
-      JSON.stringify({
-        active: null,
-        attempts: {},
-        progress: {
-          [s3.id]: {
-            version: s3.brief.version,
-            passedAt: '2026-11-01T00:00:00Z',
-            hintsUsed: 0,
-          },
-        },
-      }),
-    );
-    mount();
-    const d = openPath();
-    expect(d.querySelector('.ex-sub')?.textContent).toContain('You have done 1 of 48.');
-    expect(must(s3.name, d).getAttribute('data-status')).toBe('done');
-    expect(must(s3.name, d).querySelector('.lp-status')?.textContent).toBe('Done');
-  });
-
-  it('leaves a live brief to open an incident, and puts the design back', () => {
-    mount();
-    press(must('Hold the line', openPath()));
-    advance(400);
-    expect(document.querySelector('section.chal')?.textContent).toContain(
-      'Hold the line',
-    );
-    const s3 = incidentById('incident-s3-2017')!;
-    press(must(s3.name, openPath()));
-    advance(400);
-    const p = document.querySelector('section.chal');
-    expect(p?.textContent).toContain(s3.name);
-    expect(p?.textContent).not.toContain('Hold the line');
-    expect(canvasIds()).toEqual(['mine-client', 'mine-svc']);
-  });
-
-  it('marks an incident open now while its brief is live, and goes back to it', () => {
-    mount();
-    const s3 = incidentById('incident-s3-2017')!;
-    press(must(s3.name, openPath()));
-    advance(400);
-    press(must('Fix it'));
-    advance(400);
-    const d = openPath();
-    const row = must(s3.name, d);
-    expect(row.querySelector('.lp-status')?.textContent).toBe('Open now');
-    press(row);
-    advance(400);
-    // Still in the brief, with its attempt as it was.
-    expect(document.querySelector('section.chal')?.textContent).toContain(
-      s3.brief.name,
-    );
-    expect(canvasIds()).toEqual(s3.scene.nodes.map((n) => n.id));
-  });
-
   it('works with a finger', () => {
     mount();
     const d = openPath();
-    press(must('Open Single server', d), 'touch');
+    press(must('Start step 2, Load balanced', d), 'touch');
     advance(400);
-    const single = PRESETS.find((p) => p.id === 'single-server')!;
-    expect(canvasIds()).toEqual(single.topology.nodes.map((n) => n.id));
+    const lb = PRESETS.find((p) => p.id === 'load-balanced')!;
+    expect(canvasIds()).toEqual(lb.topology.nodes.map((n) => n.id));
   });
 });

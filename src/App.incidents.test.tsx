@@ -83,7 +83,14 @@ function must(name: string): HTMLElement {
 }
 
 const panel = () => document.querySelector('section.chal');
-const caption = () => document.querySelector('.inc-caption')?.textContent ?? null;
+/** The caption as read: its time, then its words. */
+const caption = () => {
+  const el = document.querySelector('.inc-caption');
+  if (!el) return null;
+  const at = el.querySelector('.inc-caption-at')?.textContent;
+  const text = el.querySelector('.inc-caption-text')?.textContent;
+  return at && text ? `${at}: ${text}` : el.textContent;
+};
 const canvasIds = () =>
   [...document.querySelectorAll('[data-hit="node"]')].map((n) =>
     n.getAttribute('data-id'),

@@ -17,21 +17,12 @@ describe('the learning path', () => {
     expect([...ids].sort()).toEqual(CHALLENGES.map((c) => c.id).sort());
   });
 
-  it('has every incident exactly once', () => {
+  it('has every real outage exactly once, after every challenge', () => {
     const ids = steps.filter((s) => s.kind === 'incident').map((s) => s.id);
     expect([...ids].sort()).toEqual(INCIDENTS.map((i) => i.id).sort());
-  });
-
-  /* A real outage is met by someone who has already fixed its kind of
-     problem in a challenge, so each incident comes after one in its track. */
-  it('puts every incident after a challenge in the same track', () => {
-    for (const track of LEARNING_PATH) {
-      track.steps.forEach((s, i) => {
-        if (s.kind !== 'incident') return;
-        const before = track.steps.slice(0, i).some((p) => p.kind === 'challenge');
-        expect(before, `${s.id} in ${track.id}`).toBe(true);
-      });
-    }
+    const lastBrief = steps.findLastIndex((s) => s.kind === 'challenge');
+    const firstOutage = steps.findIndex((s) => s.kind === 'incident');
+    expect(firstOutage).toBeGreaterThan(lastBrief);
   });
 
   /* A brief is set in an example's system. Meeting the system first is the

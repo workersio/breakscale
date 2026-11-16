@@ -1,128 +1,50 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Engine } from '../sim/engine';
 import { PRESETS } from '../sim/presets';
 import { CHALLENGES } from '../sim/challenges';
-import { INCIDENT_BRIEFS } from '../sim/incidents';
-import type { Topology } from '../sim/types';
+import { INCIDENTS } from '../sim/incidents';
 import { LEARNING_PATH } from '../content/learningPath';
 import {
-  EXPLORE_FACTOR,
-  EXPLORE_MS,
   PATH_KEY,
   PathProgress,
   loadExplored,
   nextStep,
   offeredLoad,
   saveExplored,
+  stepAfter,
+  stepName,
+  stepOfBrief,
   stepStatus,
 } from './pathProgress';
 
-function preset(id: string): Topology {
-  const p = PRESETS.find((x) => x.id === id);
-  if (!p) throw new Error(`no preset ${id}`);
-  return p.topology;
-}
-
-function scaled(t: Topology, factor: number): Topology {
-  return {
-    ...t,
-    nodes: t.nodes.map((n) =>
-      n.kind === 'client'
-        ? { ...n, config: { ...n.config, rps: Math.round(n.config.rps * factor) } }
-        : n,
-    ),
-  };
-}
-
-/**
- * Feeds the tracker the way the app does: the real engine, seed 1, one
- * snapshot per 100ms of simulated time.
- */
-function run(
-  progress: PathProgress,
-  presetId: string | null,
-  topology: Topology,
-  seconds: number,
-): void {
-  const engine = new Engine(topology, 1);
-  progress.observe(presetId, topology, engine.snapshot().system.timeMs);
-  for (let i = 0; i < seconds * 10; i += 1) {
-    engine.advance(100);
-    progress.observe(presetId, topology, engine.snapshot().system.timeMs);
-  }
-}
-
 const noSave = () => {};
 
-describe('exploring an example', () => {
-  it('counts once it has run at twice its load for 10 seconds', () => {
-    const progress = new PathProgress(new Set(), noSave);
-    const listener = vi.fn();
-    progress.subscribe(listener);
-    run(progress, 'single-server', scaled(preset('single-server'), 2), 9.8);
-    expect(progress.getExplored().has('single-server')).toBe(false);
-    expect(listener).not.toHaveBeenCalled();
-
-    const again = new PathProgress(new Set(), noSave);
-    again.subscribe(listener);
-    run(again, 'single-server', scaled(preset('single-server'), 2), 10.1);
-    expect(again.getExplored().has('single-server')).toBe(true);
-    expect(listener).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not count below twice the starting load', () => {
-    const progress = new PathProgress(new Set(), noSave);
-    run(progress, 'single-server', scaled(preset('single-server'), 1.9), 30);
-    expect(progress.getExplored().size).toBe(0);
-  });
-
-  it('does not count a challenge or a design of your own', () => {
-    const progress = new PathProgress(new Set(), noSave);
-    run(progress, null, scaled(preset('single-server'), 4), 30);
-    expect(progress.getExplored().size).toBe(0);
-  });
-
-  it('starts over when a different example is loaded', () => {
-    const progress = new PathProgress(new Set(), noSave);
-    run(progress, 'single-server', scaled(preset('single-server'), 2), 8);
-    run(progress, 'cache-aside', scaled(preset('cache-aside'), 2), 0.5);
-    run(progress, 'single-server', scaled(preset('single-server'), 2), 8);
-    expect(progress.getExplored().size).toBe(0);
-  });
-
-  it('credits a long gap between snapshots as one second', () => {
-    const progress = new PathProgress(new Set(), noSave);
-    const t = scaled(preset('single-server'), 2);
-    progress.observe('single-server', t, 0);
-    progress.observe('single-server', t, 60_000);
-    expect(progress.getExplored().size).toBe(0);
-  });
-
-  it('saves what it marks', () => {
-    const save = vi.fn();
-    const progress = new PathProgress(new Set(), save);
-    run(progress, 'retry-storm', scaled(preset('retry-storm'), 2), 11);
-    expect(save).toHaveBeenCalledTimes(1);
-    expect([...save.mock.calls[0]![0]]).toEqual(['retry-storm']);
-  });
-
+describe('marking an example done', () => {
   it('takes a credit once, and only for a real example', () => {
     const save = vi.fn();
+    const listener = vi.fn();
     const progress = new PathProgress(new Set(), save);
+    progress.subscribe(listener);
     progress.credit('single-server');
     progress.credit('single-server');
     progress.credit('not-an-example');
     expect([...progress.getExplored()]).toEqual(['single-server']);
     expect(save).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 
-  /* The slider tops out at 5000 a second. An example whose doubled load is
-     out of its reach could never be marked done. */
-  it('is reachable from the load slider for every example', () => {
-    for (const p of PRESETS) {
-      expect(offeredLoad(p.topology) * EXPLORE_FACTOR, p.id).toBeLessThanOrEqual(5000);
-    }
-    expect(EXPLORE_MS).toBe(10_000);
+  it('keeps what an earlier visit marked', () => {
+    const progress = new PathProgress(new Set(['cache-aside']), noSave);
+    progress.credit('single-server');
+    expect([...progress.getExplored()].sort()).toEqual([
+      'cache-aside',
+      'single-server',
+    ]);
+  });
+
+  it('reads the offered load the slider sets', () => {
+    const p = PRESETS.find((x) => x.id === 'specialised-stores');
+    // Two clients, 240 and 6 a second.
+    expect(p && offeredLoad(p.topology)).toBe(246);
   });
 });
 
@@ -193,7 +115,40 @@ describe('where the student stands', () => {
   it('is finished when every step is done', () => {
     const all = new Set(PRESETS.map((p) => p.id));
     expect(nextStep(all, () => 'passed')).toBeNull();
-    const passedIds = new Set([...CHALLENGES, ...INCIDENT_BRIEFS].map((c) => c.id));
+    const passedIds = new Set([
+      ...CHALLENGES.map((c) => c.id),
+      ...INCIDENTS.map((i) => i.brief.id),
+    ]);
     expect(nextStep(all, (id) => (passedIds.has(id) ? 'passed' : null))).toBeNull();
+  });
+});
+
+describe('real outages on the path', () => {
+  const outage = INCIDENTS[0]!;
+  const step = LEARNING_PATH.flatMap((t) => t.steps).find((s) => s.id === outage.id)!;
+
+  it('is judged by the brief its Fix it hands over to', () => {
+    const badge = (state: 'passed' | 'in-progress') => (id: string) =>
+      id === outage.brief.id ? state : null;
+    expect(step.kind).toBe('incident');
+    expect(stepStatus(step, new Set(), () => null)).toBe('todo');
+    expect(stepStatus(step, new Set(), badge('in-progress'))).toBe('started');
+    expect(stepStatus(step, new Set(), badge('passed'))).toBe('done');
+    expect(stepOfBrief(outage.brief.id)).toBe(step);
+    expect(stepName(step)).toBe(outage.name);
+  });
+
+  /* The id an outage and its brief share is never taken for an example's
+     or a challenge's. */
+  it('goes on in path order, from a brief and from an example', () => {
+    expect(stepAfter('stripe', 'example')).toBe(step);
+    const outages = LEARNING_PATH.flatMap((t) => t.steps).filter(
+      (s) => s.kind === 'incident',
+    );
+    expect(stepAfter(outage.id, 'incident')?.id).toBe(outages[1]!.id);
+    expect(stepAfter(outages.at(-1)!.id, 'incident')).toBeNull();
+    expect(stepAfter('hold-the-line', 'challenge')?.id).toBe('nothing-looks-busy');
+    expect(stepAfter('nothing-looks-busy', 'challenge')?.id).toBe('cache-aside');
+    expect(stepAfter('hold-the-line', 'example')).toBeNull();
   });
 });

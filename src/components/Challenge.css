@@ -379,9 +379,25 @@
 
 /* The explanation, once it is earned. */
 .chal-lesson {
-  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
   padding-top: var(--sp-3);
   border-top: var(--bw) solid var(--border);
+}
+
+/* Named as the task card names it, so a pass reads the same whichever kind
+   of step it ends. */
+.chal-lesson-title {
+  margin: 0;
+  font-size: var(--fs-base);
+  font-weight: var(--fw-med);
+  line-height: var(--lh-sm);
+  color: var(--text);
+}
+
+.chal-lesson-text {
+  margin: 0;
   color: var(--text-dim);
   font-size: var(--fs-sm);
   line-height: var(--lh-base);
