@@ -393,6 +393,15 @@
   border-top-color: var(--text-dim);
 }
 
+/* The key follows the line's health, so one p99 has one colour. */
+.mx-key-p99.is-warn {
+  border-top-color: var(--warn-mark);
+}
+
+.mx-key-p99.is-danger {
+  border-top-color: var(--danger-mark);
+}
+
 .mx-key-offered {
   border-top-style: dashed;
   border-top-color: var(--line-3);

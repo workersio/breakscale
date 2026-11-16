@@ -727,7 +727,7 @@ const LatencyChart = memo(function LatencyChart({
           dim={dim}
         />
         <LegendKey
-          className="mx-key-p99"
+          className={`mx-key-p99 ${toneClass(tone)}`}
           name="p99"
           term="p99"
           value={read(p99, (p) => p.p99)}
@@ -888,7 +888,7 @@ const ThroughputChart = memo(function ThroughputChart({
       <ChartHead
         caption="Throughput"
         captionTerm="throughput"
-        unit="succeeding /s"
+        unit="succeeded /s"
         unitTerm="goodput"
         value={rate(safeGoodput)}
         unmeasured={empty}
@@ -1006,20 +1006,20 @@ const REASON_ORDER: FailureReason[] = [
 
 const REASON_LABEL: Record<FailureReason, string> = {
   error: 'error',
-  shed: 'shed',
+  shed: 'turned away',
   timeout: 'timeout',
   'no-route': 'no route',
   depth: 'depth',
   throttled: 'throttled',
-  rejected: 'rejected',
+  rejected: 'circuit open',
   crashed: 'crashed',
   partitioned: 'partitioned',
   'region-down': 'region down',
-  'conn-refused': 'conn refused',
-  unauthorized: 'unauthorized',
+  'conn-refused': 'connection refused',
+  unauthorized: 'bad auth',
   'bulkhead-full': 'bulkhead full',
   'acquire-timeout': 'acquire timeout',
-  deprioritized: 'deprioritized',
+  deprioritized: 'cut for priority',
   'packet-loss': 'packet loss',
 };
 

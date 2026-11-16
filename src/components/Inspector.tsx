@@ -2274,7 +2274,7 @@ function KindStatRows({
         <>
           <StatRow label="Admitted" value={formatRate(stats.admittedRate)} />
           <StatRow
-            label="Refused (throttled)"
+            label="Refused (rate limit)"
             term="throttled"
             value={formatRate(stats.throttledRate)}
             tone={(stats.throttledRate ?? 0) > 0 ? 'is-warn' : undefined}
@@ -2313,7 +2313,7 @@ function KindStatRows({
             <StatRow label="Probes again in" value={formatMs(stats.openRemainingMs)} />
           )}
           <StatRow
-            label="Failing fast"
+            label="Refused (circuit open)"
             value={formatRate(stats.rejectedRate)}
             tone={(stats.rejectedRate ?? 0) > 0 ? 'is-danger' : undefined}
           />
@@ -2357,7 +2357,7 @@ function KindStatRows({
             tone={(stats.consecutiveFails ?? 0) > 0 ? 'is-warn' : undefined}
           />
           <StatRow
-            label="Failing fast"
+            label="Refused (circuit open)"
             value={formatRate(stats.rejectedRate)}
             tone={(stats.rejectedRate ?? 0) > 0 ? 'is-danger' : undefined}
           />
@@ -2395,7 +2395,7 @@ function KindStatRows({
           <StatRow label="Running now" value={formatCount(stats.runningNow)} />
           <StatRow label="Warm and idle" value={formatCount(stats.warmIdle)} />
           <StatRow
-            label="Throttled"
+            label="Refused (at the cap)"
             value={formatRate(stats.throttledRate)}
             tone={(stats.throttledRate ?? 0) > 0 ? 'is-danger' : undefined}
           />
@@ -2437,7 +2437,7 @@ function KindStatRows({
         <>
           <StatRow label="Admitted" value={formatRate(stats.admittedRate)} />
           <StatRow
-            label="Refused (throttled)"
+            label="Refused (rate limit)"
             term="throttled"
             value={formatRate(stats.throttledRate)}
             tone={(stats.throttledRate ?? 0) > 0 ? 'is-warn' : undefined}
@@ -2486,7 +2486,7 @@ function KindStatRows({
         <>
           <StatRow label="Restore jobs running" value={formatCount(stats.inFlight)} />
           <StatRow
-            label="Refused, quota full"
+            label="Refused (quota full)"
             term="throttled"
             value={formatRate(stats.throttledRate)}
             tone={(stats.throttledRate ?? 0) > 0 ? 'is-danger' : undefined}
@@ -2555,7 +2555,7 @@ function KindStatRows({
             value={`${formatCount(stats.bulkheadInFlight ?? 0)} of ${formatCount(stats.bulkheadLimit ?? 0)}`}
           />
           <StatRow
-            label="Refused, pool full"
+            label="Refused (pool full)"
             term="bulkhead-full"
             value={formatRate(stats.bulkheadRejectedRate)}
             tone={(stats.bulkheadRejectedRate ?? 0) > 0 ? 'is-danger' : undefined}
@@ -2658,13 +2658,13 @@ function KindStatRows({
             value={formatRate(stats.lowAdmittedRate)}
           />
           <StatRow
-            label="Low priority dropped"
+            label="Low priority cut"
             term="deprioritized"
             value={formatRate(stats.lowSheddedRate)}
             tone={(stats.lowSheddedRate ?? 0) > 0 ? 'is-warn' : undefined}
           />
           <StatRow
-            label="High priority dropped"
+            label="High priority cut"
             value={formatRate(stats.highSheddedRate)}
             tone={(stats.highSheddedRate ?? 0) > 0 ? 'is-danger' : undefined}
           />
@@ -3779,7 +3779,7 @@ function SingleInspector({
                   tone={toneClass(healthOfLatency(stats.p99))}
                 />
                 <StatRow
-                  label="Errors"
+                  label="Failing"
                   term="error-rate"
                   value={formatPct(stats.errorRate)}
                   tone={toneClass(healthOfErr(stats.errorRate))}
