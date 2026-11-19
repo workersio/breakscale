@@ -76,4 +76,43 @@ describe('least-loaded lb in front of pooled kinds', () => {
   it('stays deterministic', () => {
     expect(arrivalsBehindLb('db')).toEqual(arrivalsBehindLb('db'));
   });
+
+  it('spreads connections across websocket gateways', () => {
+    const t: Topology = {
+      nodes: [
+        node('client', 'client', { rps: 40, timeoutMs: 2000 }),
+        node('lb', 'lb', {}),
+        node('ws1', 'websocket', {
+          capacity: 1000,
+          connectionMs: 30000,
+        }),
+        node('ws2', 'websocket', {
+          capacity: 1000,
+          connectionMs: 30000,
+        }),
+      ],
+      edges: [
+        { id: 'e1', from: 'client', to: 'lb', weight: 1 },
+        { id: 'e2', from: 'lb', to: 'ws1', weight: 1 },
+        { id: 'e3', from: 'lb', to: 'ws2', weight: 1 },
+      ],
+    };
+
+    const e = new Engine(t, 1);
+
+    for (let i = 0; i < 3600; i++) {
+      e.advance(1000 / 60);
+    }
+
+    const n = e.snapshot().nodes;
+
+    expect(n.ws1.arrivalRate).toBeGreaterThan(0);
+    expect(n.ws2.arrivalRate).toBeGreaterThan(0);
+
+    expect(n.ws1.utilization).toBeGreaterThan(0);
+    expect(n.ws2.utilization).toBeGreaterThan(0);
+
+    expect(n.ws1.utilization).toBeLessThan(1);
+    expect(n.ws2.utilization).toBeLessThan(1);
+  });
 });
