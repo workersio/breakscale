@@ -547,7 +547,6 @@ const websocket: ComponentBehaviour = {
   slotsOutliveService: true,
   // Reports load based on active connections rather than busy requests.
   // Allows least-loaded routing to distribute connections across gateways.
-
   load(ctx, state) {
     return (
       wsOpenProjected(wsExt(state), ctx.now) / Math.max(1, ctx.effectiveCapacity(state))

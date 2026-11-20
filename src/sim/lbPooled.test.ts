@@ -114,5 +114,10 @@ describe('least-loaded lb in front of pooled kinds', () => {
 
     expect(n.ws1.utilization).toBeLessThan(1);
     expect(n.ws2.utilization).toBeLessThan(1);
+
+    const a = n.ws1.connectionsOpen!;
+    const b = n.ws2.connectionsOpen!;
+
+    expect(Math.abs(a - b)).toBeLessThanOrEqual(Math.ceil(0.05 * (a + b)));
   });
 });
