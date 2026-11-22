@@ -4860,7 +4860,7 @@ export default function Canvas({
   /* ---------------- pointermove: promote, then drag ---------------- */
 
   const promote = useCallback(
-    (p: Pending, clientX: number, clientY: number) => {
+    (p: Pending) => {
       p.active = true;
       // Moving is a drag, not a long-press. A hold that already opened the
       // menu drags on from where it is, and the menu goes.
@@ -4911,15 +4911,15 @@ export default function Canvas({
            * ALT+DRAG DUPLICATES, then drags the copies. The shell clones in
            * place, selects the clones and opens its own history gesture, so
            * onMoveStart is NOT fired for this path (one begin per end). The
-           * drag origin is RESET to the pointer's position at this moment:
-           * the clones were born here, and measuring their motion from the
-           * original pointerdown would make them jump by the promotion
-           * threshold the instant they appeared.
+           * drag origin stays at the pointerdown, exactly as a plain drag's
+           * does: the clones are born on top of the originals, so measuring
+           * from the press puts them under the pointer on this very move.
+           * Measuring from the promoting move instead dropped that move's
+           * travel, so a flick with one move left the copy on the original.
            */
           if (p.alt && onDuplicateForDrag) {
             const dup = onDuplicateForDrag(id);
             if (dup) {
-              const cw = toWorld(clientX, clientY);
               p.hit = {
                 kind: 'node',
                 id: dup.id,
@@ -4928,10 +4928,8 @@ export default function Canvas({
                 tone: null,
                 fontName: null,
               };
-              p.worldX = cw.x;
-              p.worldY = cw.y;
-              p.grabDx = node.x - cw.x;
-              p.grabDy = node.y - cw.y;
+              p.grabDx = node.x - p.worldX;
+              p.grabDy = node.y - p.worldY;
               for (const g of dup.group) {
                 p.groupIds.push(g.id);
                 p.groupOrigins.set(g.id, { x: g.x, y: g.y });
@@ -5127,7 +5125,7 @@ export default function Canvas({
         // is where essentially all of it happens.
       }
     },
-    [selectOne, onMoveStart, onDuplicateForDrag, toWorld],
+    [selectOne, onMoveStart, onDuplicateForDrag],
   );
 
   const onSurfaceMove = useCallback(
@@ -5204,7 +5202,7 @@ export default function Canvas({
         // Squared comparison: no sqrt on the hot path. The threshold is the
         // one latched at press time for this pointer's type.
         if (dx * dx + dy * dy < p.threshold * p.threshold) return;
-        promote(p, e.clientX, e.clientY);
+        promote(p);
       }
 
       if (p.mode === 'pan') {
