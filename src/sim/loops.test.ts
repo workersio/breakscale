@@ -11,7 +11,7 @@ import type {
 } from './types';
 
 /**
- * Loops that fan out (#128).
+ * Loops that fan out (#128) and loops through a topic (#129).
  *
  * The hop ceiling bounds how deep a request goes, not how wide it spreads: a
  * loop with two ways back doubled the calls on every lap, all inside one
@@ -100,6 +100,28 @@ const FOUR: Topology = {
   ]),
 };
 
+const TOPIC_LOOP: Topology = {
+  nodes: [node('n0', 'client', { rps: 1159 }), node('n1', 'pubsub')],
+  edges: edges([
+    ['n0', 'n1'],
+    ['n1', 'n0'],
+  ]),
+};
+
+const TOPIC_FANOUT: Topology = {
+  nodes: [
+    node('n0', 'client', { rps: 1159 }),
+    node('n1', 'pubsub'),
+    node('n2', 'pubsub'),
+  ],
+  edges: edges([
+    ['n0', 'n1'],
+    ['n1', 'n2'],
+    ['n2', 'n1'],
+    ['n1', 'n1'],
+  ]),
+};
+
 describe('clients wired in a loop with more than one way back (#128)', () => {
   it.each([
     ['one client with two edges to itself', SELF_TWICE],
@@ -177,5 +199,39 @@ describe('clients wired in a loop with more than one way back (#128)', () => {
     expect(s.failuresByReason.depth).toBe(0);
     expect(s.loopStops).toBeUndefined();
     expect(s.nodes.db?.totalCompleted).toBe(s.system.totalRequests * fan);
+  });
+});
+
+describe('a topic wired into a loop (#129)', () => {
+  it('stops a republished message after the hop ceiling, and books it at the topic', () => {
+    countCalls();
+    const s = run(TOPIC_LOOP, 2000);
+    const offered = s.system.totalRequests;
+    const topic = s.nodes.n1;
+    console.log(
+      `topic loop: ${offered} requests, ${calls} calls, topic failed ${topic?.totalFailed}, ` +
+        `stops ${JSON.stringify(s.loopStops)}`,
+    );
+    // Each publish laps client and topic, two hops a lap, until the ceiling.
+    expect(calls).toBeLessThanOrEqual(offered * (MAX_HOP_DEPTH + 2));
+    expect(offered).toBeGreaterThan(2000);
+    expect(s.loopStops?.n0 ?? 0).toBeGreaterThan(0);
+    expect(topic?.totalFailed ?? 0).toBeGreaterThan(0);
+    // The topic answered every publisher, so no client request failed.
+    expect(s.system.totalFailed).toBe(reasonSum(s));
+  });
+
+  it('keeps a topic that fans out into its own loop from starving the clients', () => {
+    countCalls();
+    const s = run(TOPIC_FANOUT, 1000);
+    console.log(
+      `topic fan-out loop: ${s.system.totalRequests} offered in 1s, ${calls} calls, ` +
+        `stops ${JSON.stringify(s.loopStops)}`,
+    );
+    // About 1159 a second, as the client asked; 38 got through before.
+    expect(s.system.totalRequests).toBeGreaterThan(1000);
+    // Each charged call can lead to at most two refused ones, one per way on.
+    expect(calls).toBeLessThanOrEqual(s.system.totalRequests * MAX_LOOP_CALLS * 3);
+    expect(s.loopStops?.n1 ?? 0).toBeGreaterThan(0);
   });
 });

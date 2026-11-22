@@ -455,7 +455,7 @@ const pubsub: ComponentBehaviour = {
 
   onServiceComplete(ctx: BehaviourCtx, state: NodeStateLike, req: ReqLike) {
     for (let i = 0; i < state.out.length; i++) {
-      if (ctx.emitDetached(state, state.out[i], req.key)) {
+      if (ctx.emitDetached(state, state.out[i], req.key, req)) {
         ctx.countCustom(state, 'delivered', 1);
       }
     }

@@ -4342,6 +4342,16 @@ export class Engine implements BehaviourCtx {
         // caller already timed out on. Nobody is waiting for this result.
         if (ok && req.ackedIn !== null) req.ackedIn.writesLanded++;
         if (!ok && req.queuedIn !== null) req.queuedIn.jobsFailed++;
+        // A message stopped for going round a loop failed where no client
+        // hears it, so it is booked at the part that sent it. Left out, a
+        // topic republishing into a loop read as healthy while it looped.
+        if (!ok && reason === 'depth' && req.detached) {
+          const sender = this.nodes.get(req.nodeId);
+          if (sender !== undefined) {
+            sender.errors.add(this.now, 1);
+            sender.totalFailed++;
+          }
+        }
         // Free the sampler if this was the traced one, or nothing would ever
         // be traced again.
         if (this.tracing === req) this.tracing = null;
@@ -4952,8 +4962,14 @@ export class Engine implements BehaviourCtx {
    * This is a ctx addition, not an event-loop change: dispatch, admission
    * and resolution all run the same code every other request runs.
    */
-  emitDetached(stateLike: NodeStateLike, edge: SimEdge, key: number): boolean {
+  emitDetached(
+    stateLike: NodeStateLike,
+    edge: SimEdge,
+    key: number,
+    fromLike?: ReqLike,
+  ): boolean {
     const state = stateLike as NodeState;
+    const from = fromLike as Req | undefined;
     if (this.liveRequests >= MAX_LIVE_REQUESTS) return false;
     if (this.cutEdges.size > 0 && this.cutEdges.has(edge.id)) return false;
     if (!this.nodes.has(edge.to)) return false;
@@ -4962,7 +4978,15 @@ export class Engine implements BehaviourCtx {
     msg.parent = null;
     msg.rootStartMs = this.now;
     msg.enterMs = this.now;
-    msg.hop = 0;
+    // A message sent on behalf of a request is that request going further,
+    // so it keeps its hops and its loop budget. Without them a topic wired
+    // into a loop republished forever: every lap started again from hop 0.
+    if (from !== undefined) {
+      msg.hop = from.hop;
+      this.shareBudget(from, msg);
+    } else {
+      msg.hop = 0;
+    }
     msg.detached = true;
     msg.key = ((Math.floor(key) % KEYSPACE) + KEYSPACE) % KEYSPACE;
     // A message of its own, so a request of its own.
