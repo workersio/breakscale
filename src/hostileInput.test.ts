@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { formatElapsed, formatPct, formatShareDown, NA } from './components/format';
 import { parseDesignFile } from './designFile';
 import { decodeTopology, encodeTopology } from './share';
 import { Engine } from './sim/engine';
@@ -149,5 +150,28 @@ describe('#123: a partition that lists one connection twice', () => {
     if (r.status !== 'ok') return;
     const [f] = r.topology.faults ?? [];
     expect(f.action === 'inject' && f.opts?.edgeIds).toEqual(['client-1->lb-1']);
+  });
+});
+
+describe('#124: readouts never print Infinity or negative seconds', () => {
+  it.each([
+    ['formatPct(1e307)', () => formatPct(1e307), NA],
+    ['formatShareDown(1.8e305)', () => formatShareDown(1.8e305), NA],
+    ['formatElapsed(MAX_VALUE)', () => formatElapsed(Number.MAX_VALUE), NA],
+  ])('%s', (_, run, want) => {
+    expect(run()).toBe(want);
+  });
+
+  it('formatElapsed keeps the seconds in 00..59 past 2^53 seconds', () => {
+    expect(formatElapsed(270217779711706100)).toBe('4503629661861768m 32s');
+  });
+
+  it('reads sane values as before', () => {
+    expect(formatPct(0.5)).toBe('50%');
+    expect(formatPct(3)).toBe('300%');
+    expect(formatShareDown(0.9996)).toBe('99.9%');
+    expect(formatElapsed(59.94)).toBe('59.9s');
+    expect(formatElapsed(125.3)).toBe('2m 05s');
+    expect(formatElapsed(3599.99)).toBe('59m 59s');
   });
 });
