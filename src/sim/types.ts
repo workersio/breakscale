@@ -1734,6 +1734,14 @@ export interface SimSnapshot {
    */
   repliesStranded?: StrandedReplies[];
   /**
+   * Calls stopped at each part for going round a loop, by node id: past
+   * the hop ceiling, past the calls one request may make into a loop, or
+   * refused a wait a call cycle could never end. Each is a 'depth' failure,
+   * though one a topic or a queue sent on its own is heard by no client.
+   * Absent until one is, for the reason `duplicating` is.
+   */
+  loopStops?: Record<string, number>;
+  /**
    * The most recent completed request, hop by hop, or null before one has
    * finished.
    *
