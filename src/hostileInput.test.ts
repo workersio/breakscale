@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { formatElapsed, formatPct, formatShareDown, NA } from './components/format';
 import { parseDesignFile } from './designFile';
 import { decodeTopology, encodeTopology } from './share';
+import { packTopology, unpackTopology } from './share/wire';
 import { Engine } from './sim/engine';
 import { sanitizeFaults } from './sim/faults';
 import { makeNode } from './sim/presets';
 import { Rng } from './sim/random';
-import type { NodeKind, Topology } from './sim/types';
+import type { NodeKind, SimEdge, Topology } from './sim/types';
 import { trafficPeriodMs } from './sim/workload';
 
 /*
@@ -173,5 +174,50 @@ describe('#124: readouts never print Infinity or negative seconds', () => {
     expect(formatElapsed(59.94)).toBe('59.9s');
     expect(formatElapsed(125.3)).toBe('2m 05s');
     expect(formatElapsed(3599.99)).toBe('59m 59s');
+  });
+});
+
+describe('#125: a short link with many repeated connections opens fast', () => {
+  const LINK = 'd3.Ae3BQQEAAAQEsCOgbCKr4bGtdtIBAAAAAAAAAAAAAAAAAAAAAAAAIF8c';
+
+  it('decodes the issue link in well under a second', async () => {
+    const t0 = performance.now();
+    const r = await decodeTopology(LINK);
+    const ms = performance.now() - t0;
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') expect(r.topology.edges).toHaveLength(10_000);
+    // Was about 2700ms in bun on an M-series Mac; now about 3ms.
+    expect(ms).toBeLessThan(500);
+  });
+
+  it('names repeats exactly as the old probe did', () => {
+    const a = { ...makeNode('service', 0, 0), id: 'a' };
+    const b = { ...makeNode('service', 200, 0), id: 'b' };
+    const pairs: [string, string][] = [
+      ['a', 'b'],
+      ['b', 'a'],
+      ['a', 'b'],
+      ['a', 'a'],
+      ['a', 'b'],
+      ['a', 'a'],
+      ['b', 'a'],
+    ];
+    const edges: SimEdge[] = pairs.map(([from, to], i) => ({
+      id: `e${i}`,
+      from,
+      to,
+      weight: 1,
+    }));
+    const back = unpackTopology(packTopology({ nodes: [a, b], edges }));
+    // The probe this replaced: the first free of base, base~2, base~3...
+    const taken = new Set<string>();
+    const want = pairs.map(([from, to]) => {
+      const base = `service-${from === 'a' ? 1 : 2}->service-${to === 'a' ? 1 : 2}`;
+      let id = base;
+      for (let k = 2; taken.has(id); k++) id = `${base}~${k}`;
+      taken.add(id);
+      return id;
+    });
+    expect(back?.edges.map((e) => e.id)).toEqual(want);
   });
 });

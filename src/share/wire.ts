@@ -918,8 +918,8 @@ export function unpackTopology(bytes: Uint8Array): Topology | null {
     for (let i = 0; i < nodeCount; i++) nodes.push(unpackNode(r, perKind));
 
     const edges: SimEdge[] = [];
-    const edgeIds = new Set<string>();
-    for (let i = 0; i < edgeCount; i++) edges.push(unpackEdge(r, nodes, edgeIds));
+    const pairs = new Map<string, number>();
+    for (let i = 0; i < edgeCount; i++) edges.push(unpackEdge(r, nodes, pairs));
 
     const annotations: Annotation[] = [];
     let notes = 0;
@@ -1108,7 +1108,11 @@ function unpackConfig(r: Reader, kind: NodeKind): NodeConfig {
   return config as unknown as NodeConfig;
 }
 
-function unpackEdge(r: Reader, nodes: readonly SimNode[], ids: Set<string>): SimEdge {
+function unpackEdge(
+  r: Reader,
+  nodes: readonly SimNode[],
+  pairs: Map<string, number>,
+): SimEdge {
   const from = nodes[r.varint()];
   const toBits = r.varint();
   const hasFlags = toBits % 2 === 1;
@@ -1119,10 +1123,14 @@ function unpackEdge(r: Reader, nodes: readonly SimNode[], ids: Set<string>): Sim
 
   // The shell's own id shape. Two edges between the same pair cannot be
   // drawn, but a design file could carry them, so a repeat is suffixed
-  // rather than allowed to shadow the first.
-  let id = `${from.id}->${to.id}`;
-  for (let k = 2; ids.has(id); k++) id = `${from.id}->${to.id}~${k}`;
-  ids.add(id);
+  // rather than allowed to shadow the first. The count per pair gives the
+  // next free suffix directly: probing for it made a link of 10,000 repeats
+  // take seconds to open. Minted node ids hold no '~' or '->', so a suffixed
+  // id can never be another pair's bare one.
+  const pair = `${from.id}->${to.id}`;
+  const seen = pairs.get(pair) ?? 0;
+  pairs.set(pair, seen + 1);
+  const id = seen === 0 ? pair : `${pair}~${seen + 1}`;
 
   const edge: SimEdge = {
     id,
