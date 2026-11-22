@@ -353,3 +353,132 @@ describe('a pen lifted where the surface cannot see it (#133)', () => {
     );
   });
 });
+
+describe('a second pointer during a drag (#134)', () => {
+  it('is ignored: the drag carries on and is one undo step', () => {
+    mount();
+    const start = pos('n0');
+    ptr('pointerdown', node('n0'), { x: 40, y: 40 }, { pointerId: 1 });
+    ptr('pointermove', node('n0'), { x: 160, y: 40 }, { pointerId: 1 });
+    expect(pos('n0')).toEqual({ x: start.x + 120, y: start.y });
+
+    ptr(
+      'pointerdown',
+      surface(),
+      { x: 900, y: 900 },
+      { pointerType: 'touch', pointerId: 7 },
+    );
+    ptr(
+      'pointerup',
+      surface(),
+      { x: 900, y: 900 },
+      { pointerType: 'touch', pointerId: 7 },
+    );
+
+    ptr('pointermove', node('n0'), { x: 200, y: 40 }, { pointerId: 1 });
+    ptr('pointerup', node('n0'), { x: 200, y: 40 }, { pointerId: 1 });
+    expect(pos('n0')).toEqual({ x: start.x + 160, y: start.y });
+
+    undo();
+    expect(pos('n0')).toEqual(start);
+  });
+
+  it('a later drag does not swallow the interrupted one in the history', () => {
+    mount();
+    const a = pos('n0');
+    const b = pos('n1');
+    ptr('pointerdown', node('n0'), { x: 40, y: 40 }, { pointerId: 1 });
+    ptr('pointermove', node('n0'), { x: 160, y: 40 }, { pointerId: 1 });
+    ptr(
+      'pointerdown',
+      node('n1'),
+      { x: 500, y: 340 },
+      { pointerType: 'pen', pointerId: 3 },
+    );
+    ptr(
+      'pointerup',
+      node('n1'),
+      { x: 500, y: 340 },
+      { pointerType: 'pen', pointerId: 3 },
+    );
+    ptr('pointerup', node('n0'), { x: 160, y: 40 }, { pointerId: 1 });
+
+    ptr('pointerdown', node('n1'), { x: 500, y: 340 }, { pointerId: 1 });
+    ptr('pointermove', node('n1'), { x: 500, y: 420 }, { pointerId: 1 });
+    ptr('pointerup', node('n1'), { x: 500, y: 420 }, { pointerId: 1 });
+    expect(pos('n1')).toEqual({ x: b.x, y: b.y + 80 });
+
+    undo();
+    expect(pos('n1')).toEqual(b);
+    expect(pos('n0')).toEqual({ x: a.x + 120, y: a.y });
+    undo();
+    expect(pos('n0')).toEqual(a);
+  });
+
+  it('a press that has not moved yet gives way to the next pointer', () => {
+    mount();
+    const a = pos('n0');
+    const b = pos('n1');
+    ptr('pointerdown', node('n0'), { x: 40, y: 40 }, { pointerId: 1 });
+    ptr(
+      'pointerdown',
+      node('n1'),
+      { x: 500, y: 340 },
+      { pointerType: 'touch', pointerId: 7 },
+    );
+    ptr(
+      'pointermove',
+      node('n1'),
+      { x: 620, y: 340 },
+      { pointerType: 'touch', pointerId: 7 },
+    );
+    ptr(
+      'pointerup',
+      node('n1'),
+      { x: 620, y: 340 },
+      { pointerType: 'touch', pointerId: 7 },
+    );
+    ptr('pointerup', node('n0'), { x: 40, y: 40 }, { pointerId: 1 });
+    expect(pos('n1')).toEqual({ x: b.x + 120, y: b.y });
+    expect(pos('n0')).toEqual(a);
+    undo();
+    expect(pos('n1')).toEqual(b);
+  });
+
+  it('a second finger still turns a one-finger drag into a pinch', () => {
+    mount();
+    const start = pos('n0');
+    ptr(
+      'pointerdown',
+      node('n0'),
+      { x: 40, y: 40 },
+      { pointerType: 'touch', pointerId: 7 },
+    );
+    ptr(
+      'pointermove',
+      node('n0'),
+      { x: 160, y: 40 },
+      { pointerType: 'touch', pointerId: 7 },
+    );
+    ptr(
+      'pointerdown',
+      surface(),
+      { x: 400, y: 40 },
+      { pointerType: 'touch', pointerId: 8 },
+    );
+    // The aborted drag fragment puts the node back.
+    expect(pos('n0')).toEqual(start);
+    ptr(
+      'pointerup',
+      surface(),
+      { x: 400, y: 40 },
+      { pointerType: 'touch', pointerId: 8 },
+    );
+    ptr(
+      'pointerup',
+      node('n0'),
+      { x: 160, y: 40 },
+      { pointerType: 'touch', pointerId: 7 },
+    );
+  });
+});

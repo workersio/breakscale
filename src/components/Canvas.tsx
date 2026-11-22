@@ -4835,6 +4835,18 @@ export default function Canvas({
         }
       }
 
+      // ONE GESTURE AT A TIME. A second pointer that lands mid-drag, such as
+      // a finger brushing the glass while the mouse drags, is ignored: the
+      // drag the user is still doing carries on and ends through its lift. Taking
+      // over the gesture instead dropped the drag without ending it, so its
+      // undo step never closed. A press that has not become a drag yet is
+      // ended properly first, through the one teardown funnel.
+      const prior = pendingRef.current;
+      if (prior) {
+        if (prior.active && prior.pointerId !== e.pointerId) return;
+        cancelGesture();
+      }
+
       const hit = middle ? BACKGROUND_HIT : hitTest(e.target);
       const w = toWorld(e.clientX, e.clientY);
       const v = viewRef.current;
