@@ -4019,6 +4019,15 @@ export interface CanvasMenuApi {
   startLink: (id: string, keyboard: boolean) => void;
 }
 
+/** True when `id` names a node, a connection or an annotation in `t`. */
+function hasPart(t: Topology, id: string): boolean {
+  return (
+    t.nodes.some((n) => n.id === id) ||
+    t.edges.some((e) => e.id === id) ||
+    (t.annotations ?? []).some((a) => a.id === id)
+  );
+}
+
 interface Pending {
   pointerId: number;
   hit: Hit;
@@ -5460,6 +5469,13 @@ export default function Canvas({
           // ordinary selection, so a mis-aimed second click is not a dead end.
         }
 
+        // The part pressed can be gone by the lift, for one undone with
+        // Ctrl+Z mid-press. Selecting its id would select nothing that exists.
+        if (p.hit.id && !hasPart(topoRef.current, p.hit.id)) {
+          cancelGesture();
+          return;
+        }
+
         switch (p.hit.kind) {
           case 'edge-delete':
             if (p.hit.id) {
@@ -5834,6 +5850,11 @@ export default function Canvas({
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedIds.size === 0) return;
         e.preventDefault();
+        // A press still held would otherwise select what it landed on when
+        // it lifts, which may be the very thing being deleted. Ending it
+        // first, as Escape does, also commits a drag in progress as its own
+        // undo step before the delete.
+        if (pendingRef.current) cancelGesture();
         const nodes: string[] = [];
         const edges: string[] = [];
         const anns: string[] = [];

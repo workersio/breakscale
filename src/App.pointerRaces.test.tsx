@@ -85,6 +85,9 @@ function key(k: string, init: KeyboardEventInit = {}): void {
   });
 }
 
+/** Ctrl+Z as the shell reads it: by key position, not by letter. */
+const undo = () => key('z', { code: 'KeyZ', ctrlKey: true });
+
 const node = (id: string) =>
   document.querySelector<SVGGElement>(`.cv-node[data-id="${id}"]`)!;
 const surface = () => document.querySelector<HTMLElement>('.cv-surface')!;
@@ -158,5 +161,54 @@ describe('alt+drag copy (#131)', () => {
     const copy = nodeIds().find((id) => id !== 'n0' && id !== 'n1')!;
     expect(pos(copy)).toEqual({ x: start.x, y: start.y + 112 });
     expect(pos('n0')).toEqual(start);
+  });
+});
+
+describe('Delete while a node is held (#132)', () => {
+  it('leaves nothing selected on release, and never reports a phantom connection', () => {
+    mount();
+    // Select n1 with a click, then press it again and hold.
+    ptr('pointerdown', node('n1'), { x: 500, y: 340 });
+    ptr('pointerup', node('n1'), { x: 500, y: 340 });
+    expect(node('n1').classList.contains('is-selected')).toBe(true);
+
+    ptr('pointerdown', node('n1'), { x: 500, y: 340 });
+    key('Delete');
+    expect(nodeIds()).toEqual(['n0']);
+    ptr('pointerup', surface(), { x: 500, y: 340 });
+
+    expect(document.querySelectorAll('.cv-node.is-selected').length).toBe(0);
+    expect(/connections? selected/.test(document.body.textContent ?? '')).toBe(false);
+  });
+
+  it('a part undone away mid-press is not selected when the press lifts', () => {
+    mount();
+    ptr('pointerdown', node('n1'), { x: 500, y: 340 });
+    ptr('pointerup', node('n1'), { x: 500, y: 340 });
+    key('d', { code: 'KeyD', ctrlKey: true });
+    const copy = nodeIds().find((id) => id !== 'n0' && id !== 'n1')!;
+    expect(copy).toBeTruthy();
+
+    ptr('pointerdown', node(copy), { x: 520, y: 360 });
+    undo();
+    expect(nodeIds()).toEqual(['n0', 'n1']);
+    ptr('pointerup', surface(), { x: 520, y: 360 });
+    expect(/connections? selected/.test(document.body.textContent ?? '')).toBe(false);
+  });
+
+  it('a drag in progress is kept as its own undo step before the delete', () => {
+    mount();
+    const start = pos('n1');
+    ptr('pointerdown', node('n1'), { x: 500, y: 340 });
+    ptr('pointermove', node('n1'), { x: 580, y: 340 });
+    key('Delete');
+    ptr('pointerup', surface(), { x: 580, y: 340 });
+    expect(nodeIds()).toEqual(['n0']);
+
+    undo();
+    expect(nodeIds()).toEqual(['n0', 'n1']);
+    expect(pos('n1')).toEqual({ x: start.x + 80, y: start.y });
+    undo();
+    expect(pos('n1')).toEqual(start);
   });
 });

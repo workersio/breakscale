@@ -1307,8 +1307,8 @@ export default function App() {
 
   /**
    * The selection, split into the three things it can hold. Node ids and
-   * edge ids share `selectedIds` with annotation ids; nodes and annotations
-   * are identified by lookup and whatever remains is an edge. Kept in ONE
+   * edge ids share `selectedIds` with annotation ids; each is identified by
+   * lookup, so a stale id is none of them. Kept in ONE
    * memo so the Inspector can never be handed a node list and an edge count
    * computed from different renders.
    */
@@ -1318,13 +1318,16 @@ export default function App() {
     }
     const nodes = topology.nodes.filter((n) => selectedIds.has(n.id));
     const anns = (topology.annotations ?? []).filter((a) => selectedIds.has(a.id));
+    let edges = 0;
+    for (const e of topology.edges) if (selectedIds.has(e.id)) edges++;
     return {
       selectedNodes: nodes,
-      // Whatever in the set is neither a node nor an annotation is an edge.
-      selectedEdgeCount: selectedIds.size - nodes.length - anns.length,
+      // Counted against the edges that exist, not as whatever is left over:
+      // an id whose part was just deleted or undone is not a connection.
+      selectedEdgeCount: edges,
       selectedAnnCount: anns.length,
     };
-  }, [topology.nodes, topology.annotations, selectedIds]);
+  }, [topology.nodes, topology.edges, topology.annotations, selectedIds]);
 
   /**
    * "Something the INSPECTOR can talk about is selected." Annotations are
