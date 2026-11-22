@@ -545,6 +545,13 @@ const websocket: ComponentBehaviour = {
   // A connection slot is released by its expiry timer, not by any request
   // finishing, so the engine cannot say which machine holds it.
   slotsOutliveService: true,
+  // Reports load based on active connections rather than busy requests.
+  // Allows least-loaded routing to distribute connections across gateways.
+  load(ctx, state) {
+    return (
+      wsOpenProjected(wsExt(state), ctx.now) / Math.max(1, ctx.effectiveCapacity(state))
+    );
+  },
 
   initState(): WsExt {
     return { expiry: [], head: 0 };
