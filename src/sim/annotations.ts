@@ -266,15 +266,16 @@ export function sanitizeAnnotations(input: unknown): Annotation[] {
     if (x === null || y === null) continue;
 
     if (a.kind === 'note') {
-      const text = typeof a.text === 'string' ? a.text : '';
+      const text = typeof a.text === 'string' ? a.text.slice(0, NOTE_MAX_CHARS) : '';
       // An empty note is invisible and unselectable, so it would be a piece of
-      // litter the reader cannot remove. Drop it.
+      // litter the reader cannot remove. Drop it. Checked after the cut, or a
+      // note whose only words lie past the limit would survive as blanks.
       if (!text.trim()) continue;
       const width = num(a.width);
       out.push({
         id,
         kind: 'note',
-        text: text.slice(0, NOTE_MAX_CHARS),
+        text,
         x,
         y,
         width: clamp(width ?? NOTE_DEFAULT_WIDTH, NOTE_MIN_WIDTH, NOTE_MAX_WIDTH),

@@ -186,6 +186,8 @@ export function formatPct(fraction: number | null | undefined): string {
   if (v === 0) return '0%';
 
   const pct = v * 100;
+  // A finite fraction past about 1.8e306 overflows here.
+  if (!Number.isFinite(pct)) return NA;
 
   // Rule 1: a non-zero value never reads `0%` or `0.0%`.
   if (pct < 0.1) return '<0.1%';
@@ -242,8 +244,12 @@ export function formatElapsed(seconds: number | null | undefined): string {
   const v = finite(seconds);
   if (v === null || v < 0) return NA;
   if (v < 60) return `${v.toFixed(1)}s`;
-  const m = Math.floor(v / 60);
-  const rest = Math.floor(v - m * 60);
+  // v % 60 is exact at any size. Math.floor(v / 60) can round up past 2^53
+  // seconds, and then v - m * 60 goes negative.
+  const sec = v % 60;
+  const m = Math.round((v - sec) / 60);
+  if (!Number.isSafeInteger(m)) return NA;
+  const rest = Math.floor(sec);
   return `${m}m ${String(rest).padStart(2, '0')}s`;
 }
 
@@ -294,5 +300,6 @@ export function formatShareDown(fraction: number | null | undefined): string {
   const v = finite(fraction);
   if (v === null || v < 0) return NA;
   const pct = Math.floor(v * 1000 + 1e-9) / 10;
+  if (!Number.isFinite(pct)) return NA;
   return `${trim(pct.toFixed(1))}%`;
 }

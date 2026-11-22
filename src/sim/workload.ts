@@ -51,8 +51,8 @@ export function effectiveHerdSpreadMs(config: NodeConfig): number {
 
 /** One cycle of the client's pattern in ms, or 0 when the period is unusable. */
 export function trafficPeriodMs(config: NodeConfig): number {
-  const s = config.trafficPeriodS ?? DEFAULT_TRAFFIC_PERIOD_S;
-  return s > 0 && Number.isFinite(s) ? s * 1000 : 0;
+  const ms = (config.trafficPeriodS ?? DEFAULT_TRAFFIC_PERIOD_S) * 1000;
+  return ms > 0 && Number.isFinite(ms) ? ms : 0;
 }
 
 /**

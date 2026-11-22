@@ -731,12 +731,25 @@ function packFault(
   }
 }
 
+/**
+ * Farthest a node is sent from the origin, in pixels. Zigzag doubles a
+ * coordinate before it becomes a varint, so anything at 2^52 or past it
+ * would not fit and the link could not be built. Only a hand-written file
+ * puts a node out there, and it lands at the edge instead.
+ */
+const MAX_COORD = 2 ** 52 - 1;
+
+function coord(v: number): number {
+  const n = Math.round(v);
+  return n > MAX_COORD ? MAX_COORD : n < -MAX_COORD ? -MAX_COORD : n;
+}
+
 function packNode(w: Writer, node: SimNode): void {
   const kind = KINDS.indexOf(node.kind);
   if (kind < 0) throw new WireError(`unknown kind ${node.kind}`);
   w.varint(kind);
-  w.sint(Math.round(node.x));
-  w.sint(Math.round(node.y));
+  w.sint(coord(node.x));
+  w.sint(coord(node.y));
   // 0 means "the kind's default label"; anything else is length + 1, so
   // an explicitly empty label survives as its own thing.
   if (node.label === LABELS[node.kind]) w.varint(0);
@@ -918,8 +931,8 @@ export function unpackTopology(bytes: Uint8Array): Topology | null {
     for (let i = 0; i < nodeCount; i++) nodes.push(unpackNode(r, perKind));
 
     const edges: SimEdge[] = [];
-    const edgeIds = new Set<string>();
-    for (let i = 0; i < edgeCount; i++) edges.push(unpackEdge(r, nodes, edgeIds));
+    const pairs = new Map<string, number>();
+    for (let i = 0; i < edgeCount; i++) edges.push(unpackEdge(r, nodes, pairs));
 
     const annotations: Annotation[] = [];
     let notes = 0;
@@ -1034,7 +1047,9 @@ function unpackFault(
   if (bits & FAULT_RATE) opts.rate = r.num();
   if (bits & FAULT_EDGES) {
     const count = r.varint();
-    if (count > edges.length) throw new WireError('too many fault edges');
+    // Not edges.length: links built before sanitizeFaults dropped repeats
+    // can list one edge twice, and every id still costs a byte.
+    if (count > MAX_ITEMS) throw new WireError('too many fault edges');
     const ids: string[] = [];
     for (let i = 0; i < count; i++) ids.push(edgeId());
     opts.edgeIds = ids;
@@ -1106,7 +1121,11 @@ function unpackConfig(r: Reader, kind: NodeKind): NodeConfig {
   return config as unknown as NodeConfig;
 }
 
-function unpackEdge(r: Reader, nodes: readonly SimNode[], ids: Set<string>): SimEdge {
+function unpackEdge(
+  r: Reader,
+  nodes: readonly SimNode[],
+  pairs: Map<string, number>,
+): SimEdge {
   const from = nodes[r.varint()];
   const toBits = r.varint();
   const hasFlags = toBits % 2 === 1;
@@ -1117,10 +1136,14 @@ function unpackEdge(r: Reader, nodes: readonly SimNode[], ids: Set<string>): Sim
 
   // The shell's own id shape. Two edges between the same pair cannot be
   // drawn, but a design file could carry them, so a repeat is suffixed
-  // rather than allowed to shadow the first.
-  let id = `${from.id}->${to.id}`;
-  for (let k = 2; ids.has(id); k++) id = `${from.id}->${to.id}~${k}`;
-  ids.add(id);
+  // rather than allowed to shadow the first. The count per pair gives the
+  // next free suffix directly: probing for it made a link of 10,000 repeats
+  // take seconds to open. Minted node ids hold no '~' or '->', so a suffixed
+  // id can never be another pair's bare one.
+  const pair = `${from.id}->${to.id}`;
+  const seen = pairs.get(pair) ?? 0;
+  pairs.set(pair, seen + 1);
+  const id = seen === 0 ? pair : `${pair}~${seen + 1}`;
 
   const edge: SimEdge = {
     id,

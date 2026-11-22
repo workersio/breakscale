@@ -1,5 +1,17 @@
 import { cos, log, pow } from './fdlibm';
 
+/**
+ * Largest mean a service-time draw takes, in ms (about 31 years). A design
+ * file can carry any finite number, and a mean near Number.MAX_VALUE draws
+ * Infinity, which turns every percentile it lands in into NaN.
+ */
+export const MAX_SERVICE_MS = 1e12;
+/**
+ * Largest spread a service-time draw takes. The slider stops at 2; past about
+ * 1e153 the gamma's scale overflows and every draw is NaN.
+ */
+export const MAX_SERVICE_CV = 100;
+
 /** Deterministic PRNG (mulberry32) so a given seed replays identically. */
 export class Rng {
   private s: number;
@@ -27,11 +39,15 @@ export class Rng {
   /**
    * Service time with a target mean and coefficient of variation.
    * cv=0 -> deterministic, cv=1 -> exponential, cv>1 -> heavy tailed.
-   * Implemented as a gamma draw with shape k = 1/cv^2.
+   * Implemented as a gamma draw with shape k = 1/cv^2. Both inputs are
+   * clamped so a hand-written value cannot overflow; values in range draw
+   * exactly as before.
    */
   serviceTime(mean: number, cv: number): number {
     if (mean <= 0) return 0;
+    if (mean > MAX_SERVICE_MS) mean = MAX_SERVICE_MS;
     if (cv <= 0.01) return mean;
+    if (cv > MAX_SERVICE_CV) cv = MAX_SERVICE_CV;
     const shape = 1 / (cv * cv);
     const scale = mean / shape;
     return this.gamma(shape, scale);

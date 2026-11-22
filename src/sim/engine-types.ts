@@ -296,6 +296,16 @@ export interface BehaviourCtx {
    * Returns false without emitting when the edge is cut, the target node
    * does not exist, or the engine's live-request ceiling is hit; the caller
    * decides what an undeliverable message means. Consumes no randomness.
+   *
+   * `from` is the request the message is sent on behalf of (a publish, an
+   * encode job). The message keeps its hop count and loop budget, so a loop
+   * through this node stops as a call loop does. Leave it out for a message
+   * that starts new work of its own, as a broker's or a cron job's does.
    */
-  emitDetached(state: NodeStateLike, edge: SimEdge, key: number): boolean;
+  emitDetached(
+    state: NodeStateLike,
+    edge: SimEdge,
+    key: number,
+    from?: ReqLike,
+  ): boolean;
 }

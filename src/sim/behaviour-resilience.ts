@@ -360,7 +360,7 @@ const transcoder: ComponentBehaviour = {
     for (let i = 0; i < state.out.length; i++) {
       const edge = state.out[i];
       for (let n = 0; n < renditions; n++) {
-        if (!ctx.emitDetached(state, edge, req.key)) break;
+        if (!ctx.emitDetached(state, edge, req.key, req)) break;
         ctx.countCustom(state, 'output', 1);
       }
     }

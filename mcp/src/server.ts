@@ -138,10 +138,13 @@ export function createServer({
           `Link to the design, which opens it on breakscale.tech: ${await buildShareUrl(topology, APP_URL)}`,
         );
       } catch (err) {
-        if (!(err instanceof ShareLinkTooLargeError)) throw err;
+        // The run above is still good, so a link that cannot be made is a
+        // line in the answer, not a failed call.
         lines.push(
           '',
-          'The design is too large for a link; use export_design to save it as a file.',
+          err instanceof ShareLinkTooLargeError
+            ? 'The design is too large for a link; use export_design to save it as a file.'
+            : 'No link could be made for this design; use export_design to save it as a file.',
         );
       }
       lines.push(

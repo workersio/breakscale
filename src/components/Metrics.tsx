@@ -1009,7 +1009,7 @@ const REASON_LABEL: Record<FailureReason, string> = {
   shed: 'turned away',
   timeout: 'timeout',
   'no-route': 'no route',
-  depth: 'depth',
+  depth: 'went round in a loop',
   throttled: 'throttled',
   rejected: 'circuit open',
   crashed: 'crashed',

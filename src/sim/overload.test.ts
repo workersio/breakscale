@@ -68,3 +68,88 @@ describe('a design past the live-request ceiling', () => {
     expect(system.goodputRps).toBeLessThanOrEqual(system.offeredRps);
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * #130: the issue's own design. A fan-out to ten slow services, each with
+ * room for 20,000 waiting, fills the engine's 200,000 in about four
+ * simulated seconds. Every request after that is refused by the engine,
+ * and each refusal has to land in every total, not only in some of them.
+ * ------------------------------------------------------------------ */
+
+function fanOut(): Topology {
+  const client = { ...makeNode('client', 0, 0), id: 'client' };
+  client.config.rps = 5000;
+  client.config.timeoutMs = 0;
+  const api = { ...makeNode('service', 240, 0), id: 'api' };
+  api.config.capacity = 4096;
+  api.config.instances = 512;
+  api.config.timeoutMs = 0;
+  const nodes = [client, api];
+  const edges = [{ id: 'e-api', from: 'client', to: 'api', weight: 1 }];
+  for (let i = 0; i < 10; i++) {
+    const s = { ...makeNode('service', 480, i * 80), id: `s${i}` };
+    s.config.capacity = 1;
+    s.config.serviceMs = 500;
+    s.config.queueLimit = 20000;
+    nodes.push(s);
+    edges.push({ id: `e-s${i}`, from: 'api', to: `s${i}`, weight: 1 });
+  }
+  return { nodes, edges };
+}
+
+function sumOf(counts: Partial<Record<string, number>>): number {
+  let n = 0;
+  for (const v of Object.values(counts)) n += v ?? 0;
+  return n;
+}
+
+describe('requests the engine refuses at its ceiling (#130)', () => {
+  function runFanOut(seconds: number) {
+    const engine = new Engine(fanOut(), 1);
+    engine.startTally();
+    for (let i = 0; i < seconds * 60; i++) engine.advance(1000 / 60);
+    return { engine, snap: engine.snapshot() };
+  }
+
+  it('adds every refusal to the failure total', () => {
+    const { snap } = runFanOut(6);
+    const refused = snap.ceilingSheds ?? 0;
+    // Past the ceiling, or this is not testing anything.
+    expect(refused).toBeGreaterThan(10_000);
+    expect(snap.system.totalFailed).toBe(sumOf(snap.failuresByReason));
+    expect(snap.system.totalFailed).toBeGreaterThanOrEqual(refused);
+    expect(snap.failuresByReason.shed).toBeGreaterThanOrEqual(refused);
+  });
+
+  it('agrees with the routes and the tally', () => {
+    const { engine, snap } = runFanOut(6);
+    const routes = engine.routes();
+    let failed = 0;
+    let sent = 0;
+    for (const r of routes) {
+      failed += r.totalFailed;
+      sent += r.totalRequests;
+    }
+    expect(failed).toBe(snap.system.totalFailed);
+    expect(sent).toBe(snap.system.totalRequests);
+    const tally = engine.readTally()!;
+    expect(tally.failed).toBe(snap.system.totalFailed);
+    expect(sumOf(tally.failuresByReason)).toBe(tally.failed);
+    expect(snap.nodes['client']!.totalFailed).toBe(snap.system.totalFailed);
+  });
+
+  it('says nothing about the ceiling while the design stays under it', () => {
+    const { snap } = runFanOut(3);
+    expect(snap.ceilingSheds).toBeUndefined();
+    expect('ceilingSheds' in snap).toBe(false);
+  });
+
+  it('starts counting again from zero after a reset', () => {
+    const { engine } = runFanOut(6);
+    engine.reset();
+    for (let i = 0; i < 60; i++) engine.advance(1000 / 60);
+    const snap = engine.snapshot();
+    expect('ceilingSheds' in snap).toBe(false);
+    expect(snap.system.totalFailed).toBe(sumOf(snap.failuresByReason));
+  });
+});

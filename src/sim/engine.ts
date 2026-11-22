@@ -72,7 +72,17 @@ export const RESTART_DOWN_MS = 2000;
 /** How long a 'pause' with no `pauseMs` of its own lasts. */
 export const PAUSE_MS = 2000;
 /** Hop-depth ceiling; deeper resolves as FailureReason 'depth'. */
-const MAX_HOP_DEPTH = 32;
+export const MAX_HOP_DEPTH = 32;
+/**
+ * Calls one request may make into parts that sit on a loop, counting every
+ * child, retry, duplicate and message it leads to. The hop ceiling bounds how
+ * deep a request goes, not how wide: a loop with two ways back doubles the
+ * calls on every lap, about 2^32 of them before the ceiling. Past this a call
+ * is refused as 'depth'. A loop with one way round meets the hop ceiling
+ * first, at 32 calls; no example has a loop, and the most calls any example
+ * request makes is 8. A part on no loop is never charged.
+ */
+export const MAX_LOOP_CALLS = 256;
 /**
  * Instance-count ceiling, matching the inspector's own slider.
  *
@@ -114,7 +124,7 @@ const HISTORY_MAX = 240;
 /** Base delay before a retry is re-issued; doubles per attempt, with jitter. */
 const RETRY_BASE_BACKOFF_MS = 25;
 /** Guard so a runaway topology cannot allocate unbounded requests. */
-const MAX_LIVE_REQUESTS = 200000;
+export const MAX_LIVE_REQUESTS = 200000;
 /**
  * Shared empty vector for every kind that is not partitioned. snapshot() runs
  * at 10Hz over every node; handing them all one frozen array avoids an
@@ -166,6 +176,19 @@ interface Ev extends Timed {
 /* ------------------------------------------------------------------ *
  * Request object (pooled)
  * ------------------------------------------------------------------ */
+
+/**
+ * How many calls into parts on a loop one request has made, shared by every
+ * call and message it leads to. Pooled and reference-counted: it must outlive
+ * the root, which can be recycled while its messages still go round.
+ */
+interface LoopBudget {
+  used: number;
+  /** Requests holding it; back to the pool at zero. */
+  refs: number;
+  /** Free-list link. */
+  next: LoopBudget | null;
+}
 
 interface Req {
   /** Unique-per-incarnation id; bumped on every reuse so stale timers die. */
@@ -267,6 +290,11 @@ interface Req {
   ownMs: number;
   /** Free-list link. */
   next: Req | null;
+  /**
+   * The loop-call budget this request shares with every call and message it
+   * came from or leads to, or null until one of them calls a part on a loop.
+   */
+  budget: LoopBudget | null;
   /** Guards double resolution. */
   resolved: boolean;
   /**
@@ -804,6 +832,18 @@ interface NodeState {
    * on a thread that waits on it, so admission treats these nodes with care.
    */
   cycle: number;
+  /**
+   * True when some chain of edges leads from this node back to itself,
+   * through buffers too. Unlike `cycle` this is about work, not waiting: a
+   * message through a queue or a topic can come round again. A call into a
+   * node with this set is charged to its request's LoopBudget.
+   */
+  loop: boolean;
+  /**
+   * Calls stopped here for going round a loop: past the hop ceiling, past
+   * their loop budget, or refused a wait a cycle could never end.
+   */
+  loopStops: number;
   /** FIFO of requests waiting for a slot (service/db/worker) or buffered messages (queue). */
   waiting: Req[];
   /** Read cursor into `waiting`, so dequeue is O(1) without splice. */
@@ -987,8 +1027,15 @@ export class Engine implements BehaviourCtx {
   private edgeOutcomes: Map<string, RateCounter[]> | null = null;
 
   private freeReq: Req | null = null;
+  private freeBudget: LoopBudget | null = null;
+  /** True once any call was stopped for going round a loop. */
+  private loopStopped = false;
+  /** Reused snapshot record for `loopStops`. */
+  private snapLoopStops: Record<string, number> = {};
   private freeEv: Ev[] = [];
   private liveRequests = 0;
+  /** Requests turned away because `MAX_LIVE_REQUESTS` were already live. */
+  private ceilingSheds = 0;
 
   /** Root-level (end-to-end) measurements. */
   private sysLatency = new LatencyRing();
@@ -2426,6 +2473,8 @@ export class Engine implements BehaviourCtx {
       ...(this.dupEdges.size > 0 ? { duplicating: this.activeDuplicates() } : {}),
       ...(this.replyCut.size > 0 ? { repliesCut: this.activeReplyCuts() } : {}),
       ...(this.stranded.size > 0 ? strandedField(this.strandedReplies()) : {}),
+      ...(this.loopStopped ? { loopStops: this.snapshotLoopStops() } : {}),
+      ...(this.ceilingSheds > 0 ? { ceilingSheds: this.ceilingSheds } : {}),
     };
   }
 
@@ -2533,6 +2582,8 @@ export class Engine implements BehaviourCtx {
     this.freeReq = null;
     this.freeEv.length = 0;
     this.liveRequests = 0;
+    this.ceilingSheds = 0;
+    this.loopStopped = false;
     this.sysLatency.reset();
     this.sysOffered.reset();
     this.sysGood.reset();
@@ -2703,6 +2754,7 @@ export class Engine implements BehaviourCtx {
     }
 
     markCycles(next);
+    markLoops(next);
 
     // Drop state belonging to removed nodes: their in-flight requests are gone.
     // Every dropped state is marked before any is discarded, because failing
@@ -3030,7 +3082,9 @@ export class Engine implements BehaviourCtx {
       state.arrivals.add(this.now, 1);
       state.sheds.add(this.now, 1);
       state.totalFailed++;
+      this.totalFailed++;
       this.failures.shed++;
+      this.ceilingSheds++;
       this.sysFailed.add(this.now, 1);
       const route = state.route;
       if (route !== null) {
@@ -3096,6 +3150,7 @@ export class Engine implements BehaviourCtx {
    */
   private dispatchDownstream(state: NodeState, req: Req): void {
     if (req.hop >= MAX_HOP_DEPTH) {
+      this.stoppedInLoop(state);
       this.resolve(req, false, 'depth', req.ownMs);
       return;
     }
@@ -3234,6 +3289,16 @@ export class Engine implements BehaviourCtx {
       return;
     }
 
+    // Work sent into a loop can come round again, so every call into a part
+    // on one is charged to the request's budget. Spent, the call is refused
+    // before anything is drawn or booked, as a missing target is, so a loop
+    // costs one check per call however wide it fans out.
+    if (target.loop && !this.chargeLoopCall(parent)) {
+      this.stoppedInLoop(parentState);
+      this.childResolved(parent, false, 'depth', 0);
+      return;
+    }
+
     const outcomes = this.edgeOutcomes;
     if (outcomes !== null) {
       outcomes.get(edge.id)?.[attempt > 0 ? EO_RETRY : EO_FIRST].add(this.now, 1);
@@ -3304,6 +3369,8 @@ export class Engine implements BehaviourCtx {
     if (this.dupEdges.size > 0) {
       const d = this.dupEdges.get(edge.id);
       if (d !== undefined && this.rng.next() < d.rate) dup = d;
+      // The second copy is a call too. Dropped, not refused: nobody waits on it.
+      if (dup !== null && target.loop && !this.chargeLoopCall(parent)) dup = null;
     }
 
     const child = this.acquireReq();
@@ -3319,6 +3386,7 @@ export class Engine implements BehaviourCtx {
     child.key = parent.key;
     child.isWrite = parent.isWrite;
     child.rid = parent.rid;
+    this.shareBudget(parent, child);
     // A call through a part that picks one way on is named by that part,
     // not by the way it picked: a retry the balancer sends to another
     // backend is still the same call. Every other call is named by where
@@ -3362,6 +3430,7 @@ export class Engine implements BehaviourCtx {
       twin.isWrite = child.isWrite;
       twin.rid = child.rid;
       twin.path = child.path;
+      this.shareBudget(parent, twin);
       if (log !== null) {
         log.duplicate(this.now, twin.rid, parentState.id, target.id, edge.id, attempt);
         // A write-behind flush delivered twice is two tries of it: either
@@ -3516,6 +3585,7 @@ export class Engine implements BehaviourCtx {
     // has always produced, rather than queued. With a slot free it was served
     // above, as it always was, and the hop ceiling still bounds the recursion.
     if (state.cycle >= 0 && b.blocksOnDownstream && this.parkedOnCycle(state, req)) {
+      this.stoppedInLoop(state);
       this.resolve(req, false, 'depth', 0);
       return;
     }
@@ -3614,6 +3684,7 @@ export class Engine implements BehaviourCtx {
     msg.detached = true;
     msg.rid = req.rid;
     msg.path = req.path;
+    this.shareBudget(req, msg);
     // The caller hears yes now, so a job that fails later fails where no
     // client sees it. The tally counts those for a check to see.
     const tally = this.tally;
@@ -3673,6 +3744,7 @@ export class Engine implements BehaviourCtx {
     msg.isWrite = req.isWrite;
     msg.rid = req.rid;
     msg.path = req.path;
+    this.shareBudget(req, msg);
     // A write-behind cache's ack is a promise the write will land. The tally
     // keeps count of the promises so a check can see the ones that are
     // broken behind it, which no client ever hears about.
@@ -4277,6 +4349,16 @@ export class Engine implements BehaviourCtx {
         // caller already timed out on. Nobody is waiting for this result.
         if (ok && req.ackedIn !== null) req.ackedIn.writesLanded++;
         if (!ok && req.queuedIn !== null) req.queuedIn.jobsFailed++;
+        // A message stopped for going round a loop failed where no client
+        // hears it, so it is booked at the part that sent it. Left out, a
+        // topic republishing into a loop read as healthy while it looped.
+        if (!ok && reason === 'depth' && req.detached) {
+          const sender = this.nodes.get(req.nodeId);
+          if (sender !== undefined) {
+            sender.errors.add(this.now, 1);
+            sender.totalFailed++;
+          }
+        }
         // Free the sampler if this was the traced one, or nothing would ever
         // be traced again.
         if (this.tracing === req) this.tracing = null;
@@ -4887,8 +4969,14 @@ export class Engine implements BehaviourCtx {
    * This is a ctx addition, not an event-loop change: dispatch, admission
    * and resolution all run the same code every other request runs.
    */
-  emitDetached(stateLike: NodeStateLike, edge: SimEdge, key: number): boolean {
+  emitDetached(
+    stateLike: NodeStateLike,
+    edge: SimEdge,
+    key: number,
+    fromLike?: ReqLike,
+  ): boolean {
     const state = stateLike as NodeState;
+    const from = fromLike as Req | undefined;
     if (this.liveRequests >= MAX_LIVE_REQUESTS) return false;
     if (this.cutEdges.size > 0 && this.cutEdges.has(edge.id)) return false;
     if (!this.nodes.has(edge.to)) return false;
@@ -4897,7 +4985,15 @@ export class Engine implements BehaviourCtx {
     msg.parent = null;
     msg.rootStartMs = this.now;
     msg.enterMs = this.now;
-    msg.hop = 0;
+    // A message sent on behalf of a request is that request going further,
+    // so it keeps its hops and its loop budget. Without them a topic wired
+    // into a loop republished forever: every lap started again from hop 0.
+    if (from !== undefined) {
+      msg.hop = from.hop;
+      this.shareBudget(from, msg);
+    } else {
+      msg.hop = 0;
+    }
     msg.detached = true;
     msg.key = ((Math.floor(key) % KEYSPACE) + KEYSPACE) % KEYSPACE;
     // A message of its own, so a request of its own.
@@ -5253,6 +5349,7 @@ export class Engine implements BehaviourCtx {
       pooled.extraServiceMs = 0;
       pooled.extraWaitMs = 0;
       pooled.onDrained = null;
+      pooled.budget = null;
       return pooled;
     }
     return {
@@ -5299,6 +5396,7 @@ export class Engine implements BehaviourCtx {
       extraServiceMs: 0,
       extraWaitMs: 0,
       onDrained: null,
+      budget: null,
     };
   }
 
@@ -5310,8 +5408,66 @@ export class Engine implements BehaviourCtx {
     // A pooled request must not keep a dropped node's state alive. resolve()
     // has already released the slot, so this only drops the reference.
     req.heldAt = null;
+    const budget = req.budget;
+    if (budget !== null) {
+      req.budget = null;
+      if (--budget.refs === 0) {
+        budget.next = this.freeBudget;
+        this.freeBudget = budget;
+      }
+    }
     req.next = this.freeReq;
     this.freeReq = req;
+  }
+
+  private stoppedInLoop(state: NodeState): void {
+    state.loopStops++;
+    this.loopStopped = true;
+  }
+
+  /** Each part's `loopStops`, for the parts that have stopped any. */
+  private snapshotLoopStops(): Record<string, number> {
+    const out = this.snapLoopStops;
+    for (const key of Object.keys(out)) {
+      const state = this.nodes.get(key);
+      if (state === undefined || state.loopStops === 0) delete out[key];
+    }
+    for (const state of this.nodes.values()) {
+      if (state.loopStops > 0) out[state.id] = state.loopStops;
+    }
+    return out;
+  }
+
+  /** Share `from`'s loop budget with `to`, which holds none yet. */
+  private shareBudget(from: Req, to: Req): void {
+    const budget = from.budget;
+    if (budget === null) return;
+    budget.refs++;
+    to.budget = budget;
+  }
+
+  /**
+   * Charge one call into a part on a loop to `req`'s budget, giving it one
+   * first if it has none. False when the budget is spent, and the call must
+   * be refused. Pooled, so a loop costs no allocation per request.
+   */
+  private chargeLoopCall(req: Req): boolean {
+    let budget = req.budget;
+    if (budget === null) {
+      budget = this.freeBudget;
+      if (budget !== null) {
+        this.freeBudget = budget.next;
+        budget.next = null;
+      } else {
+        budget = { used: 0, refs: 0, next: null };
+      }
+      budget.used = 0;
+      budget.refs = 1;
+      req.budget = budget;
+    }
+    if (budget.used >= MAX_LOOP_CALLS) return false;
+    budget.used++;
+    return true;
   }
 }
 
@@ -5327,20 +5483,47 @@ export class Engine implements BehaviourCtx {
  * waits on, so no thread can wait across it. Runs once per topology edit.
  */
 function markCycles(nodes: Map<string, NodeState>): void {
+  let cycles = 0;
+  strongComponents(
+    nodes,
+    (from, to) =>
+      !from.behaviour.buffersForConsumers && !to.behaviour.buffersForConsumers,
+    (members, cyclic) => {
+      const id = cyclic ? cycles++ : -1;
+      for (const m of members) m.cycle = id;
+    },
+  );
+}
+
+/**
+ * Mark every node that work can come back to by any chain of edges, buffers
+ * included: the parts whose calls are charged to a LoopBudget.
+ */
+function markLoops(nodes: Map<string, NodeState>): void {
+  strongComponents(
+    nodes,
+    () => true,
+    (members, cyclic) => {
+      for (const m of members) m.loop = cyclic;
+    },
+  );
+}
+
+/**
+ * Tarjan's strongly connected components over the edges `follows` keeps.
+ * `cyclic` is true for a component of two or more nodes, or of one with an
+ * edge to itself.
+ */
+function strongComponents(
+  nodes: Map<string, NodeState>,
+  follows: (from: NodeState, to: NodeState) => boolean,
+  mark: (members: readonly NodeState[], cyclic: boolean) => void,
+): void {
   const index = new Map<NodeState, number>();
   const low = new Map<NodeState, number>();
   const stack: NodeState[] = [];
   const onStack = new Set<NodeState>();
   let counter = 0;
-  let cycles = 0;
-
-  const follows = (from: NodeState, edge: SimEdge): NodeState | null => {
-    const to = nodes.get(edge.to);
-    if (!to) return null;
-    if (from.behaviour.buffersForConsumers || to.behaviour.buffersForConsumers)
-      return null;
-    return to;
-  };
 
   const visit = (v: NodeState): void => {
     index.set(v, counter);
@@ -5350,8 +5533,8 @@ function markCycles(nodes: Map<string, NodeState>): void {
     onStack.add(v);
     let selfLoop = false;
     for (const edge of v.out) {
-      const w = follows(v, edge);
-      if (w === null) continue;
+      const w = nodes.get(edge.to);
+      if (!w || !follows(v, w)) continue;
       if (w === v) selfLoop = true;
       if (!index.has(w)) {
         visit(w);
@@ -5368,9 +5551,7 @@ function markCycles(nodes: Map<string, NodeState>): void {
       onStack.delete(w);
       members.push(w);
     } while (w !== v);
-    const cyclic = members.length > 1 || selfLoop;
-    const id = cyclic ? cycles++ : -1;
-    for (const m of members) m.cycle = id;
+    mark(members, members.length > 1 || selfLoop);
   };
 
   for (const state of nodes.values()) {
@@ -5389,6 +5570,8 @@ function createNodeState(node: SimNode): NodeState {
     parkHead: null,
     discarded: false,
     cycle: -1,
+    loop: false,
+    loopStops: 0,
     waiting: [],
     waitHead: 0,
     out: [],

@@ -196,7 +196,9 @@ function rebuild(f: FaultEvent): FaultEvent {
       const opts: FailureOpts = {};
       if (f.opts?.factor !== undefined) opts.factor = f.opts.factor;
       if (f.opts?.rate !== undefined) opts.rate = f.opts.rate;
-      if (f.opts?.edgeIds !== undefined) opts.edgeIds = f.opts.edgeIds.slice();
+      // A partition cuts a set of edges, so a repeat adds nothing. Dropping it
+      // here keeps a share link from carrying more ids than the design has.
+      if (f.opts?.edgeIds !== undefined) opts.edgeIds = [...new Set(f.opts.edgeIds)];
       // Only a restart reads it, and the wire only carries it for one.
       if (f.kind === 'restart' && f.opts?.downMs !== undefined) {
         opts.downMs = f.opts.downMs;

@@ -4019,6 +4019,15 @@ export interface CanvasMenuApi {
   startLink: (id: string, keyboard: boolean) => void;
 }
 
+/** True when `id` names a node, a connection or an annotation in `t`. */
+function hasPart(t: Topology, id: string): boolean {
+  return (
+    t.nodes.some((n) => n.id === id) ||
+    t.edges.some((e) => e.id === id) ||
+    (t.annotations ?? []).some((a) => a.id === id)
+  );
+}
+
 interface Pending {
   pointerId: number;
   hit: Hit;
@@ -4679,6 +4688,43 @@ export default function Canvas({
     setCursor(spaceRef.current ? 'grab' : 'default');
   }, [onMoveEnd]);
 
+  /*
+   * The pen's lift, wherever it lands. A pen press is not captured until it
+   * drags, so lifting it over a panel or the zoom buttons sends the pointerup
+   * to them and never to the surface, and every finger after it would be
+   * rejected as a palm. A window listener hears that lift. It is attached
+   * only while a pen is in contact and removed by the lift itself, so no
+   * global handler stays on. It runs after the surface's own handler, so a
+   * lift the surface did see has already been dealt with.
+   */
+  const penLiftRef = useRef<((e: PointerEvent) => void) | null>(null);
+  const cancelGestureRef = useRef(cancelGesture);
+  useLayoutEffect(() => {
+    cancelGestureRef.current = cancelGesture;
+  }, [cancelGesture]);
+  const stopWatchingPen = useCallback(() => {
+    const lift = penLiftRef.current;
+    if (!lift) return;
+    penLiftRef.current = null;
+    window.removeEventListener('pointerup', lift);
+    window.removeEventListener('pointercancel', lift);
+  }, []);
+  const watchPenLift = useCallback(() => {
+    if (penLiftRef.current) return;
+    const lift = (e: PointerEvent) => {
+      if (e.pointerType !== 'pen') return;
+      penDownRef.current = false;
+      stopWatchingPen();
+      // A press the surface never heard lift is still armed, long-press
+      // timer and all. Drop it, the way a pointercancel would.
+      if (pendingRef.current?.pointerId === e.pointerId) cancelGestureRef.current();
+    };
+    penLiftRef.current = lift;
+    window.addEventListener('pointerup', lift);
+    window.addEventListener('pointercancel', lift);
+  }, [stopWatchingPen]);
+  useEffect(() => stopWatchingPen, [stopWatchingPen]);
+
   /* ---------------- pointerdown: route, do not capture ---------------- */
 
   /**
@@ -4752,7 +4798,10 @@ export default function Canvas({
       if (isPalmTouch(e.pointerType, e.width, e.height, penDownRef.current)) {
         return;
       }
-      if (e.pointerType === 'pen') penDownRef.current = true;
+      if (e.pointerType === 'pen') {
+        penDownRef.current = true;
+        watchPenLift();
+      }
 
       if (e.pointerType === 'touch') {
         const rect = e.currentTarget.getBoundingClientRect();
@@ -4784,6 +4833,18 @@ export default function Canvas({
           pinchRef.current = beginPinch(touchesRef.current, viewRef.current.k);
           return;
         }
+      }
+
+      // ONE GESTURE AT A TIME. A second pointer that lands mid-drag, such as
+      // a finger brushing the glass while the mouse drags, is ignored: the
+      // drag the user is still doing carries on and ends through its lift. Taking
+      // over the gesture instead dropped the drag without ending it, so its
+      // undo step never closed. A press that has not become a drag yet is
+      // ended properly first, through the one teardown funnel.
+      const prior = pendingRef.current;
+      if (prior) {
+        if (prior.active && prior.pointerId !== e.pointerId) return;
+        cancelGesture();
       }
 
       const hit = middle ? BACKGROUND_HIT : hitTest(e.target);
@@ -4854,13 +4915,13 @@ export default function Canvas({
       // happens at promotion, in onSurfaceMove, once the gesture is known to
       // be a drag.
     },
-    [hitTest, toWorld, cancelGesture, onMoveNode, openHeldMenu],
+    [hitTest, toWorld, cancelGesture, onMoveNode, openHeldMenu, watchPenLift],
   );
 
   /* ---------------- pointermove: promote, then drag ---------------- */
 
   const promote = useCallback(
-    (p: Pending, clientX: number, clientY: number) => {
+    (p: Pending) => {
       p.active = true;
       // Moving is a drag, not a long-press. A hold that already opened the
       // menu drags on from where it is, and the menu goes.
@@ -4911,15 +4972,15 @@ export default function Canvas({
            * ALT+DRAG DUPLICATES, then drags the copies. The shell clones in
            * place, selects the clones and opens its own history gesture, so
            * onMoveStart is NOT fired for this path (one begin per end). The
-           * drag origin is RESET to the pointer's position at this moment:
-           * the clones were born here, and measuring their motion from the
-           * original pointerdown would make them jump by the promotion
-           * threshold the instant they appeared.
+           * drag origin stays at the pointerdown, exactly as a plain drag's
+           * does: the clones are born on top of the originals, so measuring
+           * from the press puts them under the pointer on this very move.
+           * Measuring from the promoting move instead dropped that move's
+           * travel, so a flick with one move left the copy on the original.
            */
           if (p.alt && onDuplicateForDrag) {
             const dup = onDuplicateForDrag(id);
             if (dup) {
-              const cw = toWorld(clientX, clientY);
               p.hit = {
                 kind: 'node',
                 id: dup.id,
@@ -4928,10 +4989,8 @@ export default function Canvas({
                 tone: null,
                 fontName: null,
               };
-              p.worldX = cw.x;
-              p.worldY = cw.y;
-              p.grabDx = node.x - cw.x;
-              p.grabDy = node.y - cw.y;
+              p.grabDx = node.x - p.worldX;
+              p.grabDy = node.y - p.worldY;
               for (const g of dup.group) {
                 p.groupIds.push(g.id);
                 p.groupOrigins.set(g.id, { x: g.x, y: g.y });
@@ -5127,7 +5186,7 @@ export default function Canvas({
         // is where essentially all of it happens.
       }
     },
-    [selectOne, onMoveStart, onDuplicateForDrag, toWorld],
+    [selectOne, onMoveStart, onDuplicateForDrag],
   );
 
   const onSurfaceMove = useCallback(
@@ -5136,6 +5195,13 @@ export default function Canvas({
       // not world: the viewport can pan and zoom between this move and the
       // paste, and converting at paste time stays honest through both.
       lastClientRef.current = { x: e.clientX, y: e.clientY };
+
+      // A pen moving with no button held is hovering, so it is not in
+      // contact, whatever became of its lift. Fingers count again.
+      if (e.pointerType === 'pen' && e.buttons === 0 && penDownRef.current) {
+        penDownRef.current = false;
+        stopWatchingPen();
+      }
 
       // PINCH / TWO-FINGER PAN. A tracked touch updates its position; while
       // a pinch is live, each frame pans by the midpoint's travel and then
@@ -5204,7 +5270,7 @@ export default function Canvas({
         // Squared comparison: no sqrt on the hot path. The threshold is the
         // one latched at press time for this pointer's type.
         if (dx * dx + dy * dy < p.threshold * p.threshold) return;
-        promote(p, e.clientX, e.clientY);
+        promote(p);
       }
 
       if (p.mode === 'pan') {
@@ -5378,6 +5444,7 @@ export default function Canvas({
       cancelGesture,
       zoomAt,
       snapOn,
+      stopWatchingPen,
     ],
   );
 
@@ -5460,6 +5527,13 @@ export default function Canvas({
           }
           // Invalid or empty: the arm is spent and the click falls through to
           // ordinary selection, so a mis-aimed second click is not a dead end.
+        }
+
+        // The part pressed can be gone by the lift, for one undone with
+        // Ctrl+Z mid-press. Selecting its id would select nothing that exists.
+        if (p.hit.id && !hasPart(topoRef.current, p.hit.id)) {
+          cancelGesture();
+          return;
         }
 
         switch (p.hit.kind) {
@@ -5836,6 +5910,11 @@ export default function Canvas({
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedIds.size === 0) return;
         e.preventDefault();
+        // A press still held would otherwise select what it landed on when
+        // it lifts, which may be the very thing being deleted. Ending it
+        // first, as Escape does, also commits a drag in progress as its own
+        // undo step before the delete.
+        if (pendingRef.current) cancelGesture();
         const nodes: string[] = [];
         const edges: string[] = [];
         const anns: string[] = [];
