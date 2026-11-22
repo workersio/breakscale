@@ -124,7 +124,7 @@ const HISTORY_MAX = 240;
 /** Base delay before a retry is re-issued; doubles per attempt, with jitter. */
 const RETRY_BASE_BACKOFF_MS = 25;
 /** Guard so a runaway topology cannot allocate unbounded requests. */
-const MAX_LIVE_REQUESTS = 200000;
+export const MAX_LIVE_REQUESTS = 200000;
 /**
  * Shared empty vector for every kind that is not partitioned. snapshot() runs
  * at 10Hz over every node; handing them all one frozen array avoids an
@@ -1034,6 +1034,8 @@ export class Engine implements BehaviourCtx {
   private snapLoopStops: Record<string, number> = {};
   private freeEv: Ev[] = [];
   private liveRequests = 0;
+  /** Requests turned away because `MAX_LIVE_REQUESTS` were already live. */
+  private ceilingSheds = 0;
 
   /** Root-level (end-to-end) measurements. */
   private sysLatency = new LatencyRing();
@@ -2472,6 +2474,7 @@ export class Engine implements BehaviourCtx {
       ...(this.replyCut.size > 0 ? { repliesCut: this.activeReplyCuts() } : {}),
       ...(this.stranded.size > 0 ? strandedField(this.strandedReplies()) : {}),
       ...(this.loopStopped ? { loopStops: this.snapshotLoopStops() } : {}),
+      ...(this.ceilingSheds > 0 ? { ceilingSheds: this.ceilingSheds } : {}),
     };
   }
 
@@ -2579,6 +2582,7 @@ export class Engine implements BehaviourCtx {
     this.freeReq = null;
     this.freeEv.length = 0;
     this.liveRequests = 0;
+    this.ceilingSheds = 0;
     this.sysLatency.reset();
     this.sysOffered.reset();
     this.sysGood.reset();
@@ -3077,7 +3081,9 @@ export class Engine implements BehaviourCtx {
       state.arrivals.add(this.now, 1);
       state.sheds.add(this.now, 1);
       state.totalFailed++;
+      this.totalFailed++;
       this.failures.shed++;
+      this.ceilingSheds++;
       this.sysFailed.add(this.now, 1);
       const route = state.route;
       if (route !== null) {

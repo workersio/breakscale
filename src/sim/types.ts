@@ -1742,6 +1742,14 @@ export interface SimSnapshot {
    */
   loopStops?: Record<string, number>;
   /**
+   * Requests turned away because the engine already held as many live
+   * requests as it ever will (`MAX_LIVE_REQUESTS`). Each is a 'shed' in
+   * `failuresByReason` and in the totals; this says which of those the
+   * engine itself refused rather than any part of the design. Absent until
+   * one is, for the reason `duplicating` is.
+   */
+  ceilingSheds?: number;
+  /**
    * The most recent completed request, hop by hop, or null before one has
    * finished.
    *
