@@ -671,6 +671,16 @@ select.ins-number {
   text-wrap: pretty;
 }
 
+/* Why a part on a loop fails, in the same voice as the suggestion. */
+.ins-loop {
+  margin: 0;
+  padding: var(--sp-1) 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-prose);
+  color: var(--text-dim);
+  text-wrap: pretty;
+}
+
 /* --------------------------------------------------------------------------
    Multi-selection
    -------------------------------------------------------------------------- */

@@ -62,6 +62,8 @@ import {
 import { restartLosesFor } from './faultWiring';
 import type { InspectorFaults } from './faultWiring';
 import { FlushRow } from './Durability';
+import { listParts } from './loops';
+import { MAX_HOP_DEPTH } from '../sim/engine';
 import './Inspector.css';
 
 /* ------------------------------------------------------------------ *
@@ -2728,6 +2730,13 @@ function commonValue(nodes: readonly SimNode[], field: Field): number | null {
  * Inspector
  * ------------------------------------------------------------------ */
 
+export interface InspectorLoop {
+  /** The other parts on the loop, by name; empty for a part wired to itself. */
+  readonly others: readonly string[];
+  /** Calls stopped at this part for going round, from the snapshot. */
+  readonly stopped: number;
+}
+
 export interface InspectorProps {
   /**
    * The single selected node, or null. Unchanged, so the existing shell
@@ -2762,6 +2771,12 @@ export interface InspectorProps {
    * required — omit them and the panel behaves exactly as before.
    * ------------------------------------------------------------------ */
 
+  /**
+   * The loop the single selected node sits on, or undefined when it is on
+   * none: the other parts on it by name, and how many calls the engine has
+   * stopped at this part for going round it.
+   */
+  loop?: InspectorLoop;
   /**
    * Every selected node. When this holds two or more, it takes precedence
    * over `node` and the panel renders the multi-selection view.
@@ -2813,6 +2828,7 @@ export function Inspector({
   onEdgeLoss,
   onDuplicate,
   onCopy,
+  loop,
 }: InspectorProps) {
   /**
    * The selection this panel is actually describing. `selectedNodes` wins
@@ -2923,6 +2939,7 @@ export function Inspector({
       faults={faults}
       onDuplicate={onDuplicate}
       onCopy={onCopy}
+      loop={loop}
     />
   );
 }
@@ -3381,6 +3398,7 @@ function SingleInspector({
   faults,
   onDuplicate,
   onCopy,
+  loop,
 }: {
   node: SimNode;
   stats: NodeStats | null;
@@ -3392,6 +3410,7 @@ function SingleInspector({
   faults?: InspectorFaults;
   onDuplicate?: () => void;
   onCopy?: () => void;
+  loop?: InspectorLoop;
 }) {
   const fields = shownFields(node.kind, node.config);
   const cfg = node.config;
@@ -3542,6 +3561,29 @@ function SingleInspector({
         {stats && node.kind === 'region' && <RegionPanel stats={stats} />}
         {stats && node.kind !== 'queue' && node.kind !== 'autoscaler' && (
           <UnitsPanel node={node} stats={stats} />
+        )}
+
+        {/* Above the settings: a loop is a wiring mistake, and no setting
+            here fixes it. */}
+        {loop && (
+          <Section title="In a loop">
+            <p className="ins-loop">
+              {loop.others.length === 0
+                ? 'This part sends requests back to itself, so they can go round and round.'
+                : `Requests can come back to this part through ${listParts(loop.others)}.`}{' '}
+              {`Each one is stopped after at most ${MAX_HOP_DEPTH} hops and counted as failed.`}
+            </p>
+            {loop.stopped > 0 && (
+              <div className="ins-stats">
+                <StatRow
+                  label="Calls stopped here for looping"
+                  term="depth-limit"
+                  value={formatCount(loop.stopped)}
+                  tone="is-danger"
+                />
+              </div>
+            )}
+          </Section>
         )}
 
         {grouped.map((group) => (

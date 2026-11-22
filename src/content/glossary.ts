@@ -1241,9 +1241,9 @@ export const GLOSSARY: GlossaryEntry[] = [
   },
   {
     id: 'depth-limit',
-    term: 'Depth',
-    short: 'The request bounced between components too many times',
-    why: 'A safety net for loops. If your components are wired in a circle, a request would travel forever, so it is stopped after a fixed number of hops. Seeing this means the topology has a cycle.',
+    term: 'Went round in a loop',
+    short: 'The request kept coming back round, so it was stopped',
+    why: 'A safety net for loops. If your components are wired in a circle, a request would travel forever, so it is stopped after 32 hops. A loop with more than one way back makes more calls on every lap, so a request there is also stopped once it has made 256 calls into the loop. Seeing this means your design has a loop: follow the arrows and remove the one that leads back.',
     category: 'failure',
     aliases: ['depth', 'hop limit', 'loop'],
     see: ['no-route'],

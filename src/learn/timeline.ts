@@ -15,6 +15,8 @@ import {
   slotsOf,
   stateClause,
 } from './bottleneck';
+import { MAX_HOP_DEPTH } from '../sim/engine';
+import { listParts, loopsOf } from '../components/loops';
 
 /**
  * "What just happened": the run so far as a few dated lines a student can
@@ -144,6 +146,13 @@ export class Timeline {
   private slow: Hold = { since: null, fired: false };
   private slowClearSince: number | null = null;
   private dropped = 0;
+  /** Loops already named, by their sorted node ids. */
+  private loopsNamed = new Set<string>();
+  /** The topology `loops` was found in, so it is found once per edit. */
+  private loopsFrom: Topology | null = null;
+  private loops: readonly (readonly string[])[] = [];
+  /** Each part's stop count at the last snapshot, so only new stops count. */
+  private stopsWere = new Map<string, number>();
 
   /** Lines in time order, oldest first. */
   events(): readonly TimelineEvent[] {
@@ -184,6 +193,7 @@ export class Timeline {
     if (t > this.lastMs) {
       this.watchParts(topology, snapshot, t);
       this.watchSystem(snapshot, t);
+      this.watchLoops(topology, snapshot, t);
       this.lastMs = t;
     }
     return this.seq !== before;
@@ -206,6 +216,8 @@ export class Timeline {
     this.worst = null;
     this.slow = { since: null, fired: false };
     this.slowClearSince = null;
+    this.loopsNamed.clear();
+    this.stopsWere.clear();
     this.seq += 1;
     this.remember(topology);
   }
@@ -551,6 +563,32 @@ export class Timeline {
     return p;
   }
 
+  /* ---------------- loops ---------------- */
+
+  /**
+   * One line the first time the engine stops a request for going round a
+   * loop. Named by the parts on it, since that is what the student wired.
+   */
+  private watchLoops(topology: Topology, snapshot: SimSnapshot, t: number): void {
+    const stops = snapshot.loopStops;
+    if (stops === undefined) return;
+    if (this.loopsFrom !== topology) {
+      this.loopsFrom = topology;
+      this.loops = loopsOf(topology);
+    }
+    const were = this.stopsWere;
+    const rose = (id: string): boolean => (stops[id] ?? 0) > (were.get(id) ?? 0);
+    for (const loop of this.loops) {
+      if (!loop.some(rose)) continue;
+      const key = [...loop].sort().join(' ');
+      if (this.loopsNamed.has(key)) continue;
+      this.loopsNamed.add(key);
+      this.push(t, loopText(loop.map((id) => this.name(id))), 'trouble', true);
+    }
+    were.clear();
+    for (const [id, n] of Object.entries(stops)) were.set(id, n);
+  }
+
   /* ---------------- the whole system ---------------- */
 
   private watchSystem(snapshot: SimSnapshot, t: number): void {
@@ -621,6 +659,14 @@ export class Timeline {
 }
 
 /* ---------------- sentences and small helpers ---------------- */
+
+function loopText(labels: readonly string[]): string {
+  const where =
+    labels.length === 1
+      ? `Requests are going round in a loop, back into ${labels[0]}.`
+      : `Requests are going round in a loop between ${listParts(labels)}.`;
+  return `${where} Each one is stopped after at most ${MAX_HOP_DEPTH} hops and counted as failed.`;
+}
 
 /** "3.0s", the ledger's own clock format. */
 export function formatAt(ms: number): string {

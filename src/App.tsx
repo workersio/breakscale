@@ -75,6 +75,8 @@ import Canvas, {
   sourceBacklogs,
 } from './components/Canvas';
 import { Inspector, TrafficControl, slowable } from './components/Inspector';
+import type { InspectorLoop } from './components/Inspector';
+import { loopsOf } from './components/loops';
 import { RouteAlert } from './components/RouteAlert';
 import {
   DEFAULT_SLOW_FACTOR,
@@ -4646,6 +4648,23 @@ export default function App() {
   const selectedStats =
     selectedNode && snapshot ? (snapshot.nodes[selectedNode.id] ?? null) : null;
 
+  const loops = useMemo(() => loopsOf(topology), [topology]);
+  const selectedLoopIds = selectedNode
+    ? loops.find((l) => l.includes(selectedNode.id))
+    : undefined;
+  const selectedLoopStops =
+    selectedNode && snapshot ? (snapshot.loopStops?.[selectedNode.id] ?? 0) : 0;
+  const selectedLoop = useMemo<InspectorLoop | undefined>(() => {
+    if (!selectedLoopIds || !selectedNode) return undefined;
+    const others: string[] = [];
+    for (const id of selectedLoopIds) {
+      if (id === selectedNode.id) continue;
+      const label = topology.nodes.find((n) => n.id === id)?.label;
+      if (label !== undefined) others.push(label);
+    }
+    return { others, stopped: selectedLoopStops };
+  }, [selectedLoopIds, selectedNode, selectedLoopStops, topology]);
+
   /* ---------------- fault controls ----------------
    *
    * Every action goes through the engine's record* calls, so it lands in the
@@ -5677,6 +5696,7 @@ export default function App() {
             onEdgeLoss={handleEdgeLoss}
             onDuplicate={handleDuplicate}
             onCopy={handleCopySelection}
+            loop={selectedLoop}
           />
           <PanelResizer
             edge="right"

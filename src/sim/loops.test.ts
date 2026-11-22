@@ -9,6 +9,7 @@ import type {
   SimSnapshot,
   Topology,
 } from './types';
+import { GLOSSARY_BY_ID } from '../content/glossary';
 
 /**
  * Loops that fan out (#128) and loops through a topic (#129).
@@ -233,5 +234,13 @@ describe('a topic wired into a loop (#129)', () => {
     // Each charged call can lead to at most two refused ones, one per way on.
     expect(calls).toBeLessThanOrEqual(s.system.totalRequests * MAX_LOOP_CALLS * 3);
     expect(s.loopStops?.n1 ?? 0).toBeGreaterThan(0);
+  });
+});
+
+describe('the glossary', () => {
+  it('quotes the limits the engine uses', () => {
+    const why = GLOSSARY_BY_ID.get('depth-limit')?.why ?? '';
+    expect(why).toContain(`${MAX_HOP_DEPTH} hops`);
+    expect(why).toContain(`${MAX_LOOP_CALLS} calls`);
   });
 });
