@@ -685,7 +685,7 @@ function loopText(labels: readonly string[]): string {
     labels.length === 1
       ? `Requests are going round in a loop, back into ${labels[0]}.`
       : `Requests are going round in a loop between ${listParts(labels)}.`;
-  return `${where} Each one is stopped after at most ${MAX_HOP_DEPTH} hops and counted as failed.`;
+  return `${where} Any that keep going round are stopped within ${MAX_HOP_DEPTH} hops and counted as failed where they started.`;
 }
 
 /** "3.0s", the ledger's own clock format. */

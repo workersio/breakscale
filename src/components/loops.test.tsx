@@ -110,16 +110,15 @@ function timelineLines(t: Topology, seconds: number): string[] {
 describe('What just happened', () => {
   it('says once that requests go round a topic loop', () => {
     const lines = timelineLines(TOPIC_LOOP, 3).filter((l) => l.includes('loop'));
-    console.log(lines);
     expect(lines).toEqual([
-      'Requests are going round in a loop between Client and Pub/Sub Topic. Each one is stopped after at most 32 hops and counted as failed.',
+      'Requests are going round in a loop between Client and Pub/Sub Topic. Any that keep going round are stopped within 32 hops and counted as failed where they started.',
     ]);
   });
 
   it('names every part of a loop of clients', () => {
     const lines = timelineLines(DIAMOND, 3).filter((l) => l.includes('loop'));
     expect(lines).toEqual([
-      'Requests are going round in a loop between Web, Mobile and Partner. Each one is stopped after at most 32 hops and counted as failed.',
+      'Requests are going round in a loop between Web, Mobile and Partner. Any that keep going round are stopped within 32 hops and counted as failed where they started.',
     ]);
   });
 
@@ -169,7 +168,7 @@ describe('the Inspector', () => {
   it('tells the student a part is on a loop, and how many calls it stopped', () => {
     show({ others: ['Client'], stopped: 2401 });
     expect(document.querySelector('.ins-loop')?.textContent).toBe(
-      'Requests can come back to this part through Client. Each one is stopped after at most 32 hops and counted as failed.',
+      'Requests can come back to this part through Client. A request that keeps going round is stopped within 32 hops and counted as failed where it started.',
     );
     expect(document.body.textContent).toContain('Calls stopped here for looping');
     expect(document.body.textContent).toContain(formatCount(2401));

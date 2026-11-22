@@ -3571,7 +3571,7 @@ function SingleInspector({
               {loop.others.length === 0
                 ? 'This part sends requests back to itself, so they can go round and round.'
                 : `Requests can come back to this part through ${listParts(loop.others)}.`}{' '}
-              {`Each one is stopped after at most ${MAX_HOP_DEPTH} hops and counted as failed.`}
+              {`A request that keeps going round is stopped within ${MAX_HOP_DEPTH} hops and counted as failed where it started.`}
             </p>
             {loop.stopped > 0 && (
               <div className="ins-stats">
