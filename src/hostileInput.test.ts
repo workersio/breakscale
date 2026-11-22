@@ -3,6 +3,7 @@ import { formatElapsed, formatPct, formatShareDown, NA } from './components/form
 import { parseDesignFile } from './designFile';
 import { decodeTopology, encodeTopology } from './share';
 import { packTopology, unpackTopology } from './share/wire';
+import { sanitizeAnnotations } from './sim/annotations';
 import { Engine } from './sim/engine';
 import { sanitizeFaults } from './sim/faults';
 import { makeNode } from './sim/presets';
@@ -219,5 +220,23 @@ describe('#125: a short link with many repeated connections opens fast', () => {
       return id;
     });
     expect(back?.edges.map((e) => e.id)).toEqual(want);
+  });
+});
+
+describe('#126: an all-blank note after the length limit', () => {
+  it('is dropped on the first pass, so a second pass changes nothing', () => {
+    const input = [{ id: 'a', kind: 'note', x: 0, y: 0, text: ' '.repeat(2000) + 'x' }];
+    const once = sanitizeAnnotations(input);
+    expect(once).toEqual([]);
+    expect(sanitizeAnnotations(once)).toEqual(once);
+  });
+
+  it('still keeps and cuts a long note with words in it', () => {
+    const once = sanitizeAnnotations([
+      { id: 'a', kind: 'note', x: 0, y: 0, text: 'hi' + ' '.repeat(3000) },
+    ]);
+    expect(once).toHaveLength(1);
+    expect(once[0].kind === 'note' && once[0].text.length).toBe(2000);
+    expect(sanitizeAnnotations(once)).toEqual(once);
   });
 });
