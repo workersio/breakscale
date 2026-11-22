@@ -212,3 +212,144 @@ describe('Delete while a node is held (#132)', () => {
     expect(pos('n1')).toEqual(start);
   });
 });
+
+describe('a pen lifted where the surface cannot see it (#133)', () => {
+  it('does not leave every later finger touch rejected as a palm', () => {
+    mount();
+    const start = pos('n0');
+    ptr(
+      'pointerdown',
+      node('n0'),
+      { x: 40, y: 40 },
+      { pointerType: 'pen', pointerId: 2 },
+    );
+    // The lift lands on a sibling outside .cv-surface, so only the window
+    // hears it.
+    ptr(
+      'pointerup',
+      document.body,
+      { x: 40, y: 40 },
+      { pointerType: 'pen', pointerId: 2 },
+    );
+
+    ptr(
+      'pointerdown',
+      node('n0'),
+      { x: 40, y: 40 },
+      { pointerType: 'touch', pointerId: 7 },
+    );
+    ptr(
+      'pointermove',
+      node('n0'),
+      { x: 160, y: 40 },
+      { pointerType: 'touch', pointerId: 7 },
+    );
+    ptr(
+      'pointerup',
+      node('n0'),
+      { x: 160, y: 40 },
+      { pointerType: 'touch', pointerId: 7 },
+    );
+    expect(pos('n0')).toEqual({ x: start.x + 120, y: start.y });
+  });
+
+  it('a pen hovering with no contact also lets fingers back in', () => {
+    mount();
+    const start = pos('n0');
+    ptr(
+      'pointerdown',
+      node('n0'),
+      { x: 40, y: 40 },
+      { pointerType: 'pen', pointerId: 2 },
+    );
+    // The pen's lift was lost entirely, and it comes back hovering over the
+    // canvas with no contact.
+    ptr(
+      'pointermove',
+      surface(),
+      { x: 300, y: 300 },
+      {
+        pointerType: 'pen',
+        pointerId: 2,
+        buttons: 0,
+      },
+    );
+    ptr(
+      'pointerdown',
+      node('n0'),
+      { x: 40, y: 40 },
+      { pointerType: 'touch', pointerId: 7 },
+    );
+    ptr(
+      'pointermove',
+      node('n0'),
+      { x: 160, y: 40 },
+      { pointerType: 'touch', pointerId: 7 },
+    );
+    ptr(
+      'pointerup',
+      node('n0'),
+      { x: 160, y: 40 },
+      { pointerType: 'touch', pointerId: 7 },
+    );
+    expect(pos('n0')).toEqual({ x: start.x + 120, y: start.y });
+  });
+
+  it('listens on the window only while the pen is down', () => {
+    mount();
+    const add = vi.spyOn(window, 'addEventListener');
+    const remove = vi.spyOn(window, 'removeEventListener');
+    const ups = (spy: typeof add) =>
+      spy.mock.calls.filter(([type]) => type === 'pointerup').length;
+    ptr(
+      'pointerdown',
+      node('n0'),
+      { x: 40, y: 40 },
+      { pointerType: 'pen', pointerId: 2 },
+    );
+    expect(ups(add)).toBe(1);
+    ptr(
+      'pointerup',
+      document.body,
+      { x: 40, y: 40 },
+      { pointerType: 'pen', pointerId: 2 },
+    );
+    expect(ups(remove)).toBe(1);
+  });
+
+  it('still rejects a finger while the pen is in contact', () => {
+    mount();
+    const start = pos('n1');
+    ptr(
+      'pointerdown',
+      surface(),
+      { x: 900, y: 900 },
+      { pointerType: 'pen', pointerId: 2 },
+    );
+    ptr(
+      'pointerdown',
+      node('n1'),
+      { x: 500, y: 340 },
+      { pointerType: 'touch', pointerId: 7 },
+    );
+    ptr(
+      'pointermove',
+      node('n1'),
+      { x: 620, y: 340 },
+      { pointerType: 'touch', pointerId: 7 },
+    );
+    ptr(
+      'pointerup',
+      node('n1'),
+      { x: 620, y: 340 },
+      { pointerType: 'touch', pointerId: 7 },
+    );
+    expect(pos('n1')).toEqual(start);
+    ptr(
+      'pointerup',
+      surface(),
+      { x: 900, y: 900 },
+      { pointerType: 'pen', pointerId: 2 },
+    );
+  });
+});

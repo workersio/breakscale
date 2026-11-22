@@ -4688,6 +4688,43 @@ export default function Canvas({
     setCursor(spaceRef.current ? 'grab' : 'default');
   }, [onMoveEnd]);
 
+  /*
+   * The pen's lift, wherever it lands. A pen press is not captured until it
+   * drags, so lifting it over a panel or the zoom buttons sends the pointerup
+   * to them and never to the surface, and every finger after it would be
+   * rejected as a palm. A window listener hears that lift. It is attached
+   * only while a pen is in contact and removed by the lift itself, so no
+   * global handler stays on. It runs after the surface's own handler, so a
+   * lift the surface did see has already been dealt with.
+   */
+  const penLiftRef = useRef<((e: PointerEvent) => void) | null>(null);
+  const cancelGestureRef = useRef(cancelGesture);
+  useLayoutEffect(() => {
+    cancelGestureRef.current = cancelGesture;
+  }, [cancelGesture]);
+  const stopWatchingPen = useCallback(() => {
+    const lift = penLiftRef.current;
+    if (!lift) return;
+    penLiftRef.current = null;
+    window.removeEventListener('pointerup', lift);
+    window.removeEventListener('pointercancel', lift);
+  }, []);
+  const watchPenLift = useCallback(() => {
+    if (penLiftRef.current) return;
+    const lift = (e: PointerEvent) => {
+      if (e.pointerType !== 'pen') return;
+      penDownRef.current = false;
+      stopWatchingPen();
+      // A press the surface never heard lift is still armed, long-press
+      // timer and all. Drop it, the way a pointercancel would.
+      if (pendingRef.current?.pointerId === e.pointerId) cancelGestureRef.current();
+    };
+    penLiftRef.current = lift;
+    window.addEventListener('pointerup', lift);
+    window.addEventListener('pointercancel', lift);
+  }, [stopWatchingPen]);
+  useEffect(() => stopWatchingPen, [stopWatchingPen]);
+
   /* ---------------- pointerdown: route, do not capture ---------------- */
 
   /**
@@ -4761,7 +4798,10 @@ export default function Canvas({
       if (isPalmTouch(e.pointerType, e.width, e.height, penDownRef.current)) {
         return;
       }
-      if (e.pointerType === 'pen') penDownRef.current = true;
+      if (e.pointerType === 'pen') {
+        penDownRef.current = true;
+        watchPenLift();
+      }
 
       if (e.pointerType === 'touch') {
         const rect = e.currentTarget.getBoundingClientRect();
@@ -4863,7 +4903,7 @@ export default function Canvas({
       // happens at promotion, in onSurfaceMove, once the gesture is known to
       // be a drag.
     },
-    [hitTest, toWorld, cancelGesture, onMoveNode, openHeldMenu],
+    [hitTest, toWorld, cancelGesture, onMoveNode, openHeldMenu, watchPenLift],
   );
 
   /* ---------------- pointermove: promote, then drag ---------------- */
@@ -5144,6 +5184,13 @@ export default function Canvas({
       // paste, and converting at paste time stays honest through both.
       lastClientRef.current = { x: e.clientX, y: e.clientY };
 
+      // A pen moving with no button held is hovering, so it is not in
+      // contact, whatever became of its lift. Fingers count again.
+      if (e.pointerType === 'pen' && e.buttons === 0 && penDownRef.current) {
+        penDownRef.current = false;
+        stopWatchingPen();
+      }
+
       // PINCH / TWO-FINGER PAN. A tracked touch updates its position; while
       // a pinch is live, each frame pans by the midpoint's travel and then
       // zooms to the ABSOLUTE target scale (initial scale times the finger
@@ -5385,6 +5432,7 @@ export default function Canvas({
       cancelGesture,
       zoomAt,
       snapOn,
+      stopWatchingPen,
     ],
   );
 
