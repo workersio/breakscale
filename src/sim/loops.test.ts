@@ -237,6 +237,22 @@ describe('a topic wired into a loop (#129)', () => {
   });
 });
 
+describe('reset() on a loop design', () => {
+  it('replays the same snapshots as a fresh engine', () => {
+    const used = new Engine(DIAMOND, 1);
+    for (let i = 0; i < 300; i++) used.advance(16);
+    expect(used.snapshot().loopStops).toBeDefined();
+    used.reset();
+    const fresh = new Engine(DIAMOND, 1);
+    expect('loopStops' in used.snapshot()).toBe(false);
+    for (let i = 0; i < 120; i++) {
+      used.advance(16);
+      fresh.advance(16);
+      expect(JSON.stringify(used.snapshot())).toBe(JSON.stringify(fresh.snapshot()));
+    }
+  });
+});
+
 describe('the glossary', () => {
   it('quotes the limits the engine uses', () => {
     const why = GLOSSARY_BY_ID.get('depth-limit')?.why ?? '';

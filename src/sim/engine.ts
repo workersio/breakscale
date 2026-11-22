@@ -2583,6 +2583,7 @@ export class Engine implements BehaviourCtx {
     this.freeEv.length = 0;
     this.liveRequests = 0;
     this.ceilingSheds = 0;
+    this.loopStopped = false;
     this.sysLatency.reset();
     this.sysOffered.reset();
     this.sysGood.reset();
