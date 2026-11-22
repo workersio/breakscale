@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Engine } from '../sim/engine';
-import { PRESETS } from '../sim/presets';
+import { PRESETS, makeNode } from '../sim/presets';
 import type { SimSnapshot, Topology } from '../sim/types';
 import { Timeline, wantsAttention, type TimelineEvent } from './timeline';
 
@@ -315,5 +315,39 @@ describe('timeline: a pause and lost answers', () => {
       /^The link from .+ carries answers back again, but \d+ calls are still waiting for answers it lost\.$/,
     );
     expect(restored?.tone).toBe('trouble');
+  });
+});
+
+describe('timeline: the engine at its own ceiling', () => {
+  it('says once that the simulator is turning requests away, and when', () => {
+    // A client with nowhere for its requests to finish: a queue that never
+    // fills, behind a slow single slot, until the engine holds 200,000.
+    const client = { ...makeNode('client', 0, 0), id: 'client' };
+    client.config.rps = 60_000;
+    client.config.timeoutMs = 0;
+    const api = { ...makeNode('service', 240, 0), id: 'api' };
+    api.config.capacity = 1;
+    api.config.serviceMs = 500;
+    api.config.queueLimit = Number.MAX_SAFE_INTEGER;
+    api.config.timeoutMs = 0;
+    const r = run(
+      {
+        nodes: [client, api],
+        edges: [{ id: 'e', from: 'client', to: 'api', weight: 1 }],
+      },
+      5,
+    );
+    const text =
+      'This design reached 200,000 calls in flight, the most the simulator can track. New requests are turned away and counted as failed until some finish.';
+    const said = r.lines.filter((l) => l.text === text);
+    expect(said).toHaveLength(1);
+    const at = said[0]!.atMs;
+    expect(snapAt(r, at).ceilingSheds).toBeGreaterThan(0);
+    expect(snapAt(r, at - STEP_MS).ceilingSheds).toBeUndefined();
+  });
+
+  it('says nothing about it in a design that stays under', () => {
+    const r = run(preset('circuit-breaker', 4), 5);
+    expect(r.lines.some((l) => l.text.includes('the most the simulator'))).toBe(false);
   });
 });

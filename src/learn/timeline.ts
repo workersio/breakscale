@@ -15,7 +15,7 @@ import {
   slotsOf,
   stateClause,
 } from './bottleneck';
-import { MAX_HOP_DEPTH } from '../sim/engine';
+import { MAX_HOP_DEPTH, MAX_LIVE_REQUESTS } from '../sim/engine';
 import { listParts, loopsOf } from '../components/loops';
 
 /**
@@ -153,6 +153,8 @@ export class Timeline {
   private loops: readonly (readonly string[])[] = [];
   /** Each part's stop count at the last snapshot, so only new stops count. */
   private stopsWere = new Map<string, number>();
+  /** True once the engine's own request ceiling has been named. */
+  private ceilingNamed = false;
 
   /** Lines in time order, oldest first. */
   events(): readonly TimelineEvent[] {
@@ -194,6 +196,7 @@ export class Timeline {
       this.watchParts(topology, snapshot, t);
       this.watchSystem(snapshot, t);
       this.watchLoops(topology, snapshot, t);
+      this.watchCeiling(snapshot, t);
       this.lastMs = t;
     }
     return this.seq !== before;
@@ -218,6 +221,7 @@ export class Timeline {
     this.slowClearSince = null;
     this.loopsNamed.clear();
     this.stopsWere.clear();
+    this.ceilingNamed = false;
     this.seq += 1;
     this.remember(topology);
   }
@@ -587,6 +591,22 @@ export class Timeline {
     }
     were.clear();
     for (const [id, n] of Object.entries(stops)) were.set(id, n);
+  }
+
+  /**
+   * One line the first time the engine turns requests away because it
+   * already holds as many as it can. No part of the design did that, so
+   * without this line the failures read as a mystery.
+   */
+  private watchCeiling(snapshot: SimSnapshot, t: number): void {
+    if (this.ceilingNamed || (snapshot.ceilingSheds ?? 0) === 0) return;
+    this.ceilingNamed = true;
+    this.push(
+      t,
+      `This design reached ${formatCount(MAX_LIVE_REQUESTS)} calls in flight, the most the simulator can track. New requests are turned away and counted as failed until some finish.`,
+      'trouble',
+      true,
+    );
   }
 
   /* ---------------- the whole system ---------------- */
