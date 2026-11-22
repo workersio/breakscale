@@ -731,12 +731,25 @@ function packFault(
   }
 }
 
+/**
+ * Farthest a node is sent from the origin, in pixels. Zigzag doubles a
+ * coordinate before it becomes a varint, so anything at 2^52 or past it
+ * would not fit and the link could not be built. Only a hand-written file
+ * puts a node out there, and it lands at the edge instead.
+ */
+const MAX_COORD = 2 ** 52 - 1;
+
+function coord(v: number): number {
+  const n = Math.round(v);
+  return n > MAX_COORD ? MAX_COORD : n < -MAX_COORD ? -MAX_COORD : n;
+}
+
 function packNode(w: Writer, node: SimNode): void {
   const kind = KINDS.indexOf(node.kind);
   if (kind < 0) throw new WireError(`unknown kind ${node.kind}`);
   w.varint(kind);
-  w.sint(Math.round(node.x));
-  w.sint(Math.round(node.y));
+  w.sint(coord(node.x));
+  w.sint(coord(node.y));
   // 0 means "the kind's default label"; anything else is length + 1, so
   // an explicitly empty label survives as its own thing.
   if (node.label === LABELS[node.kind]) w.varint(0);

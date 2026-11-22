@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { formatElapsed, formatPct, formatShareDown, NA } from './components/format';
 import { parseDesignFile } from './designFile';
-import { decodeTopology, encodeTopology } from './share';
+import { buildShareUrl, decodeTopology, encodeTopology } from './share';
 import { packTopology, unpackTopology } from './share/wire';
 import { sanitizeAnnotations } from './sim/annotations';
 import { Engine } from './sim/engine';
@@ -38,6 +38,7 @@ function nonFinite(value: unknown, path = 'snapshot', out: string[] = []): strin
   }
   return out;
 }
+
 describe('#122: huge service settings draw finite times', () => {
   it('serviceTime stays finite for a huge spread or mean', () => {
     expect(new Rng(1).serviceTime(100, 1.3407807929942598e153)).toBeGreaterThanOrEqual(
@@ -238,5 +239,31 @@ describe('#126: an all-blank note after the length limit', () => {
     expect(once).toHaveLength(1);
     expect(once[0].kind === 'note' && once[0].text.length).toBe(2000);
     expect(sanitizeAnnotations(once)).toEqual(once);
+  });
+});
+
+describe('#127: a node placed far out still shares', () => {
+  const at = (x: number, y = 0): Topology => ({
+    nodes: [{ ...makeNode('service', x, y), id: 'a' }],
+    edges: [],
+  });
+
+  it.each([2 ** 52, -(2 ** 52), 5e15, 1e300, -1e300])(
+    'builds a link at x = %s',
+    async (x) => {
+      const url = await buildShareUrl(at(x, x), 'https://breakscale.tech/');
+      const r = await decodeTopology(new URL(url).hash.slice(1));
+      expect(r.status).toBe('ok');
+      if (r.status !== 'ok') return;
+      const { x: bx, y: by } = r.topology.nodes[0];
+      expect(Math.abs(bx)).toBe(2 ** 52 - 1);
+      expect(Math.sign(bx)).toBe(Math.sign(x));
+      expect(by).toBe(bx);
+    },
+  );
+
+  it('keeps a coordinate in range exactly', () => {
+    const back = unpackTopology(packTopology(at(2 ** 51, -(2 ** 51) + 3)));
+    expect(back?.nodes[0]).toMatchObject({ x: 2 ** 51, y: -(2 ** 51) + 3 });
   });
 });
