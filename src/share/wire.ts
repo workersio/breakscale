@@ -1034,7 +1034,9 @@ function unpackFault(
   if (bits & FAULT_RATE) opts.rate = r.num();
   if (bits & FAULT_EDGES) {
     const count = r.varint();
-    if (count > edges.length) throw new WireError('too many fault edges');
+    // Not edges.length: links built before sanitizeFaults dropped repeats
+    // can list one edge twice, and every id still costs a byte.
+    if (count > MAX_ITEMS) throw new WireError('too many fault edges');
     const ids: string[] = [];
     for (let i = 0; i < count; i++) ids.push(edgeId());
     opts.edgeIds = ids;

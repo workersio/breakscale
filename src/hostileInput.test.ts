@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { parseDesignFile } from './designFile';
+import { decodeTopology, encodeTopology } from './share';
 import { Engine } from './sim/engine';
+import { sanitizeFaults } from './sim/faults';
 import { makeNode } from './sim/presets';
 import { Rng } from './sim/random';
 import type { NodeKind, Topology } from './sim/types';
@@ -100,5 +102,52 @@ describe('#122: huge service settings draw finite times', () => {
     const config = makeNode('client', 0, 0).config;
     expect(trafficPeriodMs({ ...config, trafficPeriodS: 1.8e305 })).toBe(0);
     expect(trafficPeriodMs({ ...config, trafficPeriodS: 30 })).toBe(30_000);
+  });
+});
+
+describe('#123: a partition that lists one connection twice', () => {
+  const t: Topology = {
+    nodes: [
+      { ...makeNode('client', 0, 0), id: 'n0' },
+      { ...makeNode('lb', 200, 0), id: 'n1' },
+    ],
+    edges: [{ id: 'e0', from: 'n0', to: 'n1', weight: 1 }],
+    faults: [
+      {
+        atMs: 0,
+        action: 'inject',
+        nodeId: 'n0',
+        kind: 'partition',
+        opts: { edgeIds: ['e0', 'e0'] },
+      },
+    ],
+  };
+
+  it('sanitizeFaults keeps each connection once', () => {
+    const [f] = sanitizeFaults(t.faults, t);
+    expect(f.action === 'inject' && f.opts?.edgeIds).toEqual(['e0']);
+  });
+
+  it('builds a link that opens with the partition intact', async () => {
+    const r = await decodeTopology(await encodeTopology(t));
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    expect(r.topology.faults).toEqual([
+      {
+        atMs: 0,
+        action: 'inject',
+        nodeId: 'client-1',
+        kind: 'partition',
+        opts: { edgeIds: ['client-1->lb-1'] },
+      },
+    ]);
+  });
+
+  it('opens the link from the issue, built before repeats were dropped', async () => {
+    const r = await decodeTopology('d3.AWNiZAADxgnMIIqJiVGGgYGJgQEA');
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    const [f] = r.topology.faults ?? [];
+    expect(f.action === 'inject' && f.opts?.edgeIds).toEqual(['client-1->lb-1']);
   });
 });
