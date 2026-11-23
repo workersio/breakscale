@@ -72,6 +72,13 @@ export interface VendorMapping {
   note?: string;
   /** Sizes worth offering. Absent where the vendor does not expose sizing. */
   sizes?: VendorSize[];
+  /**
+   * Another kind whose `sizes` this one sells, for a product that is the same
+   * hardware in a different role: an AWS worker is an EC2 instance, exactly
+   * like a service. Pointing at the list instead of copying it keeps the two
+   * from drifting. Read sizes through `sizesFor`, which follows this.
+   */
+  sizesFrom?: NodeKind;
 }
 
 export interface Vendor {

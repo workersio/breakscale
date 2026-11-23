@@ -2,6 +2,7 @@ import { memo, useMemo } from 'react';
 import type { SimNode } from '../sim/types';
 import { useVendor } from '../content/vendors/useVendor';
 import { sizeKey, useSizes } from '../content/vendors/sizing';
+import { sizesFor } from '../content/vendors/lookup';
 import { COST_NOTE, costDesign, formatMoney } from '../content/vendors/cost';
 import './Cost.css';
 
@@ -32,7 +33,7 @@ export const Cost = memo(function Cost({ nodes }: CostProps) {
         if (!vendor) return null;
         const name = sizes[sizeKey(vendor.id, node.id)];
         if (!name) return null;
-        return vendor.kinds[node.kind]?.sizes?.find((s) => s.name === name) ?? null;
+        return sizesFor(node.kind, vendor).find((s) => s.name === name) ?? null;
       }),
     [nodes, vendor, sizes],
   );

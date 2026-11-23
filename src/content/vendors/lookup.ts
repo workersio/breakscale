@@ -1,6 +1,6 @@
 import type { NodeKind } from '../../sim/types';
 import { KIND_NAME } from '../../components/nodeVisuals';
-import type { Vendor, VendorId, VendorMapping } from './types';
+import type { Vendor, VendorId, VendorMapping, VendorSize } from './types';
 
 /* ------------------------------------------------------------------ *
  * Reading the vendor registry.
@@ -44,6 +44,18 @@ export function peekVendor(id: VendorId): Vendor | null {
 /** What this kind is called, at this vendor, falling back to the plain name. */
 export function nameFor(kind: NodeKind, vendor: Vendor | null): string {
   return vendor?.kinds[kind]?.product ?? KIND_NAME[kind];
+}
+
+/**
+ * The sizes on offer for a kind: its own, or the ones it shares through
+ * `sizesFrom`. The size picker and the cost total both read this, so a kind
+ * that can be sized is also a kind that can be priced.
+ */
+export function sizesFor(kind: NodeKind, vendor: Vendor | null): VendorSize[] {
+  const mapping = vendor?.kinds[kind];
+  if (!mapping) return [];
+  if (mapping.sizes) return mapping.sizes;
+  return mapping.sizesFrom ? (vendor?.kinds[mapping.sizesFrom]?.sizes ?? []) : [];
 }
 
 /** The mapping for a kind, if the vendor has one. */
