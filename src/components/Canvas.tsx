@@ -1,3 +1,4 @@
+import { dialogOpen } from '../present';
 import {
   createElement,
   memo,
@@ -646,8 +647,13 @@ const nodeRect = (n: SimNode) => ({ x: n.x, y: n.y, w: NODE_W, h: NODE_H });
 
 const EMPTY_SELECTION: ReadonlySet<string> = new Set<string>();
 
-/** True when the event should not be intercepted by a canvas key handler. */
+/**
+ * True when the event should not be intercepted by a canvas key handler: the
+ * reader is typing in a field, or a dialog is open and owns the keys, so
+ * Delete in Share cannot remove the box selected behind it.
+ */
 function isTypingTarget(t: EventTarget | null): boolean {
+  if (dialogOpen()) return true;
   const el = t as HTMLElement | null;
   if (!el || typeof el.tagName !== 'string') return false;
   const tag = el.tagName;

@@ -24,6 +24,15 @@ export function isTypingTarget(t: EventTarget | null): boolean {
   );
 }
 
+/**
+ * Whether a dialog (Share, Settings, the palette, the glossary...) is open.
+ * It owns the keyboard then: a letter, Space or Delete pressed in it must
+ * not reach the diagram behind it.
+ */
+export function dialogOpen(): boolean {
+  return document.querySelector('[aria-modal="true"]') !== null;
+}
+
 /** What a key press means here, or null for a key this mode leaves alone. */
 export function presentKeyAction(
   e: Pick<
@@ -130,7 +139,7 @@ export function usePresenting(
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // A dialog (the palette, the shortcuts, a picker) owns the keys.
-      if (document.querySelector('[aria-modal="true"]')) return;
+      if (dialogOpen()) return;
       const act = presentKeyAction(e, live.current);
       if (act === null) return;
       e.preventDefault();
