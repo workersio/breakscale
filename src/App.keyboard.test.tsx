@@ -320,3 +320,46 @@ describe('one rail at a time on a tablet held upright', () => {
     expect(saved.library).not.toBe(false);
   });
 });
+
+describe('keys while a dialog is open', () => {
+  const share = () =>
+    document.querySelector<HTMLElement>('button[aria-label="Share"]')!;
+  const dialog = () => document.querySelector('[aria-modal="true"]');
+  const playLabel = () =>
+    document
+      .querySelector<HTMLElement>(
+        'button[aria-label="Pause"], button[aria-label="Play"]',
+      )
+      ?.getAttribute('aria-label');
+
+  it('leaves the diagram and the panels alone behind it', () => {
+    mount();
+    press(node('mine-cache'));
+    press(share());
+    expect(dialog()).not.toBeNull();
+    const panels = body().value;
+    const running = playLabel();
+
+    key('Delete');
+    key('Backspace');
+    key('c');
+    key('m');
+    key(' ', { code: 'Space' } as KeyboardEventInit);
+    key('s');
+
+    expect(node('mine-cache')).not.toBeNull();
+    expect(body().value).toBe(panels);
+    expect(playLabel()).toBe(running);
+
+    key('Escape');
+    // It closes with a short animation.
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(dialog()).toBeNull();
+    // With it closed, the same key reaches the diagram again.
+    press(node('mine-cache'));
+    key('Delete');
+    expect(node('mine-cache')).toBeNull();
+  });
+});

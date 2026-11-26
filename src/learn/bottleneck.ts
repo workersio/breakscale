@@ -327,6 +327,11 @@ export function findBottleneck(topology: Topology, snapshot: SimSnapshot): Verdi
 
 /* ---------------- the sentences ---------------- */
 
+/** "all 6 slots", or "its only slot" when there is one: "all 1 slots" is not English. */
+function allOf(n: number, one: string, many: string): string {
+  return n === 1 ? `its only ${one}` : `all ${formatCount(n)} ${many}`;
+}
+
 /** "all 6 slots busy, 34 waiting in line", or the closest honest phrase for the kind. */
 export function stateClause(
   r: Reading,
@@ -341,18 +346,20 @@ export function stateClause(
       // Full only because calls hold slots: the box reads busy as the working
       // share alone, so a bare "all busy" would contradict it.
       parts.push(
-        `all ${formatCount(slots)} slots taken, ${formatCount(r.s.inFlight)} working and ${formatCount(held)} waiting on its calls`,
+        `${allOf(slots, 'slot', 'slots')} taken, ${formatCount(r.s.inFlight)} working and ${formatCount(held)} waiting on its calls`,
       );
     } else if (slots !== null) {
-      parts.push(`all ${formatCount(slots)} slots busy`);
+      parts.push(`${allOf(slots, 'slot', 'slots')} busy`);
     } else if (r.node.kind === 'shard') {
       parts.push(`its busiest partition is at ${formatPct(r.fill)}`);
     } else if (r.node.kind === 'lambda') {
       parts.push(
-        `all ${formatCount(r.node.config.maxConcurrency ?? 0)} copies running`,
+        `${allOf(r.node.config.maxConcurrency ?? 0, 'copy', 'copies')} running`,
       );
     } else if (r.node.kind === 'websocket') {
-      parts.push(`all ${formatCount(r.s.maxConnections ?? 0)} connections in use`);
+      parts.push(
+        `${allOf(r.s.maxConnections ?? 0, 'connection', 'connections')} in use`,
+      );
     } else {
       parts.push(`${formatPct(r.fill)} busy`);
     }

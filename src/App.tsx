@@ -110,6 +110,7 @@ import { buildCommands, type CommandActions, type CommandFacts } from './appComm
 import { loadRecent, pushRecent, saveRecent, type Command } from './commands';
 import {
   canFullscreen,
+  dialogOpen,
   toggleFullscreen,
   useFocusedPart,
   useFullscreen,
@@ -4465,6 +4466,17 @@ export default function App() {
         }
       }
 
+      // An open dialog owns the keys: Space on one of its buttons presses
+      // the button, not play, and C does not fold a panel behind it. The
+      // two keys that toggle a dialog still close their own.
+      if (dialogOpen()) {
+        const plain = !e.metaKey && !e.ctrlKey && !e.altKey;
+        const closesOwn =
+          (e.key === '?' && plain && glossaryOpen) ||
+          ((e.ctrlKey || e.metaKey) && e.code === 'Slash' && shortcutsOpen);
+        if (!closesOwn) return;
+      }
+
       /*
        * Undo / redo. Bound by e.code, not e.key: KeyZ is the physical key in
        * the Z position, so the chord works on layouts (Cyrillic, Greek) where
@@ -4631,6 +4643,7 @@ export default function App() {
     handleDuplicate,
     setSpeed,
     glossaryOpen,
+    shortcutsOpen,
     openGlossary,
     closeGlossary,
     toggleLibrary,
