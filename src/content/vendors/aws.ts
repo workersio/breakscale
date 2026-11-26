@@ -339,6 +339,7 @@ export const AWS: Vendor = {
     worker: {
       product: 'Amazon EC2',
       note: 'A worker is a server that reads from a queue instead of from a socket, so it is the same EC2 hardware as a service. Sizes are shared with `service` rather than repeated, because repeating them would let the two drift.',
+      sizesFrom: 'service',
     },
 
     cdn: {

@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { NodeConfig, NodeKind } from '../sim/types';
 import { useVendor } from '../content/vendors/useVendor';
-import { mappingFor } from '../content/vendors/lookup';
+import { mappingFor, sizesFor } from '../content/vendors/lookup';
 import { DERIVED_NOTE, applySize, isSizedKind } from '../content/vendors/derive';
 import { setSize, sizeKey, useSizes } from '../content/vendors/sizing';
 import './VendorPanel.css';
@@ -35,7 +35,7 @@ export function VendorPanel({ nodeId, kind, config, onChange }: VendorPanelProps
 
   if (!vendor || !mapping) return null;
 
-  const sizes = mapping.sizes ?? [];
+  const sizes = sizesFor(kind, vendor);
   const sizeable = isSizedKind(kind) && sizes.length > 0;
 
   return (

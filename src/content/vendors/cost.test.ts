@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { COST_NOTE, HOURS_PER_MONTH, costDesign, fleetSize, formatMoney } from './cost';
 import { AWS } from './aws';
+import { GCP } from './gcp';
+import { sizesFor } from './lookup';
 import type { VendorSize } from './types';
 import type { NodeConfig, SimNode } from '../../sim/types';
 import { defaultConfig } from '../../sim/presets';
@@ -131,5 +133,40 @@ describe('presentation', () => {
   it('says the figure is compute only', () => {
     expect(COST_NOTE).toMatch(/compute only/i);
     expect(COST_NOTE).toMatch(/storage/i);
+  });
+});
+
+describe("a kind that shares another kind's sizes", () => {
+  // The AWS file says a worker is the same EC2 hardware as a service and
+  // shares its sizes. Nothing read that, so a worker had no size picker and
+  // every design with one reported a monthly total that left the workers out.
+  const m6i = AWS.kinds.service!.sizes!.find((s) => s.name === 'm6i.large')!;
+  const fleetOf4 = (id: string, kind: SimNode['kind'], label: string) =>
+    node({ id, kind, label, config: { ...defaultConfig(kind), instances: 4 } });
+
+  it('offers a worker on AWS the service sizes', () => {
+    expect(sizesFor('worker', AWS)).toBe(AWS.kinds.service!.sizes);
+  });
+
+  it('prices a worker on AWS into the monthly total', () => {
+    const nodes = [
+      fleetOf4('api', 'service', 'API'),
+      fleetOf4('w', 'worker', 'Worker'),
+    ];
+    const cost = costDesign(
+      nodes,
+      AWS,
+      (n) => sizesFor(n.kind, AWS).find((s) => s.name === m6i.name) ?? null,
+    );
+    expect(cost.unpriced).toEqual([]);
+    expect(cost.nodes.map((n) => n.label).sort()).toEqual(['API', 'Worker']);
+    expect(cost.perMonth).toBeCloseTo(2 * 4 * m6i.pricePerHour! * HOURS_PER_MONTH);
+  });
+
+  it('leaves a kind with no sizes of its own and nothing to share unsized', () => {
+    // GCP runs a worker as Cloud Run jobs, which are not sold as machine
+    // sizes, so there is nothing honest to offer and it stays unpriced.
+    expect(GCP.kinds.worker?.sizesFrom).toBeUndefined();
+    expect(sizesFor('worker', GCP)).toEqual([]);
   });
 });
