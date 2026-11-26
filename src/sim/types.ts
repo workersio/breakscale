@@ -122,6 +122,22 @@ export interface NodeConfig {
    */
   keySkew?: number;
   /**
+   * Cache and CDN only: how many of the 64 keys it holds, 1..64. Absent or 0
+   * keeps the old model, where every request rolls `hitRate` on its own.
+   * Set, the cache fills a key when the call behind it answers a read, evicts
+   * the key used least recently when full, and forgets everything when it
+   * crashes or restarts, so its hit rate comes from the traffic's keys
+   * instead of a setting, and a second cache behind it sees only the keys
+   * the first one could not keep. A write passing through forgets its key.
+   */
+  cacheKeys?: number;
+  /**
+   * Cache and CDN with `cacheKeys` only: ms a filled key stays good before
+   * the next read of it goes to the store again, 0..60000. Absent or 0 keeps
+   * a key until it is evicted.
+   */
+  cacheTtlMs?: number;
+  /**
    * Client only, `bursty` traffic: the average number of requests that arrive
    * together in one clump, 1..50. Clumps are spaced so the average rate stays
    * `rps`; only how unevenly it arrives changes. Defaults to 10.
@@ -1044,6 +1060,11 @@ export interface NodeStats {
    * fraction is reported in the shared `hitRate` field above.
    */
   originFetchRate?: number;
+  /**
+   * Cache and CDN with `cacheKeys` only: keys it holds right now, out of
+   * `cacheKeys`. Absent on a cache that rolls `hitRate`.
+   */
+  cachedKeys?: number;
 
   /* ---- ratelimiter readouts ---------------------------------------- */
 

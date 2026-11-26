@@ -28,6 +28,7 @@ import type {
 import type { BehaviourCtx, ReqLike, NodeStateLike } from './engine-types';
 import { DATA_BEHAVIOURS } from './behaviour-data';
 import { EDGE_BEHAVIOURS } from './behaviour-edge';
+import { cacheHit, KEYED_CACHE_HOOKS } from './behaviour-cache';
 import { CONTROL_BEHAVIOURS } from './behaviour-control';
 import { STORE_BEHAVIOURS } from './behaviour-store';
 import { MESSAGING_BEHAVIOURS } from './behaviour-messaging';
@@ -275,6 +276,12 @@ export interface ComponentBehaviour {
     ok: boolean,
     reason: FailureReason,
   ): void;
+  /**
+   * The node went down and lost what it held in memory: a crash or a restart
+   * of the whole node. Called before its in-flight work is failed. A cache
+   * that tracks keys empties here, so it comes back cold.
+   */
+  onMemoryLost?(state: NodeStateLike): void;
   /** A behaviour-owned timer for a request it held during admission. */
   onWake?(ctx: BehaviourCtx, state: NodeStateLike, req: ReqLike): void;
   /**
@@ -424,8 +431,9 @@ const cache: ComponentBehaviour = {
   buffersForConsumers: false,
   pump: 'own',
   creditsJoinCompletion: true,
-  onServiceComplete: (ctx, state, _req) => {
-    if (ctx.roll() < clamp01(state.config.hitRate)) {
+  ...KEYED_CACHE_HOOKS,
+  onServiceComplete: (ctx, state, req) => {
+    if (cacheHit(ctx, state, req)) {
       ctx.countHit(state);
       return 'complete';
     }

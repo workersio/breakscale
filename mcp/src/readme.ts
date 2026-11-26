@@ -134,7 +134,10 @@ as real queueing, latency and failures, measured from simulated requests.
   finishes when they all answer. So a service wired to a cache and a
   database calls both. To model "cache first, database on a miss", wire
   service to cache and cache to database: a \`cache\` answers hits itself
-  and only passes misses on (\`hitRate\`).
+  and only passes misses on (\`hitRate\`). Two caches in a row with only
+  \`hitRate\` set multiply their misses; set \`cacheKeys\` on both (how many
+  of the 64 keys each holds) for a hit rate measured from the clients'
+  keys, where the second cache sees only what the first could not keep.
 - A node with no outgoing edge answers the request itself.
 - A \`queue\` acknowledges at once and buffers; \`worker\` nodes wired from it
   drain it. Always draw queue to worker. A worker wired to a queue drains

@@ -22,7 +22,12 @@ import {
   canPause,
   takesCorrectness,
 } from '../sim/behaviour';
-import { hottestKeyShare, MAX_KEY_SKEW } from '../sim/keys';
+import { hottestKeyShare, KEYSPACE, MAX_KEY_SKEW } from '../sim/keys';
+import {
+  DEFAULT_CACHE_KEYS,
+  effectiveCacheKeys,
+  MAX_CACHE_TTL_MS,
+} from '../sim/cacheKeys';
 import { DEFAULT_TRAFFIC_PERIOD_S } from '../sim/types';
 import {
   DEFAULT_BURST_SIZE,
@@ -145,7 +150,9 @@ type Field =
   | 'trafficPeriodS'
   | 'burstSize'
   | 'herdSize'
-  | 'herdSpreadMs';
+  | 'herdSpreadMs'
+  | 'cacheKeys'
+  | 'cacheTtlMs';
 
 const FIELDS_BY_KIND: Record<NodeKind, Field[]> = {
   // The client generates load and decides how long to wait for an answer.
@@ -178,7 +185,18 @@ const FIELDS_BY_KIND: Record<NodeKind, Field[]> = {
     'retries',
   ],
   // Only the cache has a hit rate. That single knob is the interesting one.
-  cache: ['hitRate', 'instances', 'capacity', 'serviceMs', 'serviceCv', 'queueLimit'],
+  // With keys tracked, the hit rate is measured, so the slider gives way to
+  // how many keys it holds and how long one stays; see shownFields.
+  cache: [
+    'hitRate',
+    'cacheKeys',
+    'cacheTtlMs',
+    'instances',
+    'capacity',
+    'serviceMs',
+    'serviceCv',
+    'queueLimit',
+  ],
   // A database is slots, service time, and the write lock: the read/write
   // mix and the per-writer lock wait are what make it more than a service.
   db: [
@@ -231,7 +249,15 @@ const FIELDS_BY_KIND: Record<NodeKind, Field[]> = {
   // A CDN is a cache whose whole story is the hit rate: how much load never
   // reaches you. Capacity and service time are shown because a saturated
   // edge is still a real failure mode.
-  cdn: ['hitRate', 'instances', 'capacity', 'serviceMs', 'queueLimit'],
+  cdn: [
+    'hitRate',
+    'cacheKeys',
+    'cacheTtlMs',
+    'instances',
+    'capacity',
+    'serviceMs',
+    'queueLimit',
+  ],
   // A limiter has exactly two knobs, and the pair is the lesson: sustained
   // rate, and how much burst you forgive on top of it.
   ratelimiter: ['rateLimitRps', 'burst'],
@@ -625,6 +651,13 @@ const SHAPE_FIELDS: Partial<Record<Field, ReadonlySet<string>>> = {
 /** This kind's fields, less the ones the node's traffic shape does not read. */
 function shownFields(kind: NodeKind, config: NodeConfig): readonly Field[] {
   const fields = FIELDS_BY_KIND[kind];
+  if (kind === 'cache' || kind === 'cdn') {
+    // A cache that tracks keys measures its hit rate instead of taking one.
+    const keyed = effectiveCacheKeys(config) > 0;
+    return fields.filter((f) =>
+      f === 'hitRate' ? !keyed : f === 'cacheKeys' || f === 'cacheTtlMs' ? keyed : true,
+    );
+  }
   if (kind !== 'client') return fields;
   const shape = config.traffic ?? 'steady';
   return fields.filter((f) => SHAPE_FIELDS[f]?.has(shape) ?? true);
@@ -654,6 +687,8 @@ const ABSENT_FIELD: Partial<Record<Field, number>> = {
   burstSize: DEFAULT_BURST_SIZE,
   herdSize: DEFAULT_HERD_SIZE,
   herdSpreadMs: 0,
+  cacheKeys: DEFAULT_CACHE_KEYS,
+  cacheTtlMs: 0,
 };
 
 /** A choice field's value, or its first option when absent. */
@@ -729,7 +764,7 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
     term: 'hit-rate',
     label: 'Hit rate',
     unit: 'percent',
-    hint: 'Each cache or CDN rolls this chance on its own. Two at 80% leave about 4% of traffic for whatever is behind them, because the chances multiply.',
+    hint: 'Each cache or CDN rolls this chance on its own. Two at 80% leave about 4% of traffic for whatever is behind them, because the chances multiply. Turn on Remember which keys it holds for a hit rate that comes from the traffic instead.',
     min: 0,
     max: 1,
     step: 0.01,
@@ -827,6 +862,26 @@ const FIELD_SPECS: Record<Field, FieldSpec> = {
       v <= 0
         ? 'Every one of the 64 keys is equally likely, about 1.6% of requests each.'
         : `The hottest of the 64 keys gets ${formatPct(hottestKeyShare(v))} of requests, and a sharded store sends all of them to one partition.`,
+  },
+  cacheKeys: {
+    control: 'number',
+    label: 'Keys it holds',
+    unit: `of the ${KEYSPACE} keys`,
+    hint: 'When it is full, the key used least recently makes room. Hot keys stay, so the hotter the traffic, the more it hits.',
+    min: 1,
+    max: KEYSPACE,
+    step: 1,
+  },
+  cacheTtlMs: {
+    control: 'slider',
+    term: 'ttl',
+    label: 'Forget a key after',
+    unit: 'milliseconds, 0 keeps it until it is pushed out',
+    hint: 'Once a key is this old, the next read of it goes to the store again. Every key expiring at once is a stampede.',
+    min: 0,
+    max: MAX_CACHE_TTL_MS,
+    step: 500,
+    display: (v) => (v <= 0 ? 'never' : formatMs(v)),
   },
   traffic: {
     control: 'choice',
@@ -1406,6 +1461,8 @@ const FIELD_GROUPS: { title: string; fields: ReadonlySet<Field> }[] = [
       'herdSpreadMs',
       'keySkew',
       'hitRate',
+      'cacheKeys',
+      'cacheTtlMs',
       'replicaCount',
       'replicationLagMs',
       'readFraction',
@@ -2271,11 +2328,19 @@ function KindStatRows({
   switch (kind) {
     case 'cache':
       return (
-        <StatRow
-          label="Hit rate right now"
-          term="hit-rate"
-          value={formatPct(stats.hitRate)}
-        />
+        <>
+          <StatRow
+            label="Hit rate right now"
+            term="hit-rate"
+            value={formatPct(stats.hitRate)}
+          />
+          {stats.cachedKeys !== undefined && (
+            <StatRow
+              label="Keys held"
+              value={`${stats.cachedKeys} of ${effectiveCacheKeys(config)}`}
+            />
+          )}
+        </>
       );
 
     case 'cdn':
@@ -2290,6 +2355,12 @@ function KindStatRows({
             label="Fetched from origin"
             value={formatRate(stats.originFetchRate)}
           />
+          {stats.cachedKeys !== undefined && (
+            <StatRow
+              label="Keys held"
+              value={`${stats.cachedKeys} of ${effectiveCacheKeys(config)}`}
+            />
+          )}
         </>
       );
 
@@ -3586,9 +3657,24 @@ function SingleInspector({
           </Section>
         )}
 
-        {grouped.map((group) => (
+        {grouped.map((group, gi) => (
           <Section key={group.title} title={group.title}>
             <div className="ins-fields">
+              {gi === 0 && (node.kind === 'cache' || node.kind === 'cdn') && (
+                <ToggleRow
+                  label="Remember which keys it holds"
+                  about="remembering keys"
+                  hint={`Hits only on keys it really holds, so hot keys raise its hit rate. Off, every request rolls the hit rate on its own. On, it holds real keys out of the ${KEYSPACE} the clients ask for, fills one when the store behind it answers a read, and loses them all if it crashes or restarts. Its hit rate then comes from how hot the keys are, and a second cache behind it only sees the keys this one could not keep.`}
+                  checked={effectiveCacheKeys(cfg) > 0}
+                  locked={lockedFields?.includes('cacheKeys') ? lockNote : undefined}
+                  onChange={(on) =>
+                    onChange(node.id, {
+                      cacheKeys: on ? DEFAULT_CACHE_KEYS : undefined,
+                      cacheTtlMs: undefined,
+                    })
+                  }
+                />
+              )}
               {group.fields.map((field) => {
                 const spec = specFor(node.kind, field);
                 const locked = lockedFields?.includes(field) ?? false;

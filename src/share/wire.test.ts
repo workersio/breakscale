@@ -160,6 +160,8 @@ describe('protocol tables', () => {
       burstSize: true,
       herdSize: true,
       herdSpreadMs: true,
+      cacheKeys: true,
+      cacheTtlMs: true,
     };
     for (const field of Object.keys(every)) expect(WIRE_FIELDS).toContain(field);
   });

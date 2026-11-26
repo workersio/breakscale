@@ -23,6 +23,7 @@ import type { NodeStats } from './types';
 import type { BehaviourCtx, NodeStateLike, ReqLike } from './engine-types';
 import type { ComponentBehaviour } from './behaviour';
 import { clamp01 } from './behaviour';
+import { cacheHit, KEYED_CACHE_HOOKS } from './behaviour-cache';
 
 /* ------------------------------------------------------------------ *
  * cdn
@@ -54,10 +55,12 @@ const cdn: ComponentBehaviour = {
   pump: 'own',
   creditsJoinCompletion: true,
 
-  onServiceComplete: (ctx, state, _req) => {
-    // One RNG draw, unconditionally, in a fixed position. Drawing only on
-    // some paths would make the stream depend on config and break replay.
-    if (ctx.roll() < clamp01(state.config.hitRate)) {
+  ...KEYED_CACHE_HOOKS,
+
+  onServiceComplete: (ctx, state, req) => {
+    // One RNG draw, unconditionally, in a fixed position, inside cacheHit.
+    // Drawing only on some paths would make the stream depend on config.
+    if (cacheHit(ctx, state, req)) {
       ctx.countHit(state);
       return 'complete';
     }
@@ -73,6 +76,7 @@ const cdn: ComponentBehaviour = {
 
   decorateStats: (ctx, state, stats: NodeStats) => {
     stats.originFetchRate = ctx.counterRate(state, 'originFetch');
+    KEYED_CACHE_HOOKS.decorateStats(ctx, state, stats);
   },
 };
 
