@@ -7,8 +7,8 @@
       "dependencies": {
         "@vercel/analytics": "^2.0.1",
         "@vercel/speed-insights": "^2.1.0",
-        "lucide": "^1.70.0",
-        "lucide-react": "^1.70.0",
+        "lucide": "^1.77.0",
+        "lucide-react": "^1.77.0",
         "react": "^19.3.1",
         "react-dom": "^19.3.1",
       },
@@ -277,9 +277,9 @@
 
     "lru-cache": ["lru-cache@11.5.3", "", {}, "sha512-U4N8FgzmWxc8k1VH8Kr6lQg18U7Fjvby6wXHVRX/ZZ7IwWbRMgrRbP0Wrb5q5NVinryp4SQampHKdvtecItxUg=="],
 
-    "lucide": ["lucide@1.73.0", "", {}, "sha512-qiNin5j7qEflnAdLG/9Yb4d5N9qnnP8TOMdn6e66399fgX25Y0eYEPS3PUPWGIPLloOj4X+xLTdF2lk9gSgWpA=="],
+    "lucide": ["lucide@1.77.0", "", {}, "sha512-DqoScWUEDcTC0KXPKKlZIIdOE++crPcGAQ60KfBNiT+Aq0sgQtxY/1sBCKBzLLo2yLLhYUperyUGHV5PwlBaIQ=="],
 
-    "lucide-react": ["lucide-react@1.73.0", "", { "peerDependencies": { "@types/react": "*", "react": "^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0" }, "optionalPeers": ["@types/react"] }, "sha512-fVOzGviL9mTfHenG1PbCfIceavyGlnpYNSYr+aGZHLRymAJ7DTP6KHuqt0uBkCKAoenr1UVkwSbDIYt2xIesEQ=="],
+    "lucide-react": ["lucide-react@1.77.0", "", { "peerDependencies": { "@types/react": "*", "react": "^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0" }, "optionalPeers": ["@types/react"] }, "sha512-VS6sOi8ZUH1qm6swBL/tpI4xAhB6pFTdHvw3pfCJD+DaTJwpyynVzfOS6mdyMZ+OCdY/GMSQbqinOMOPbNSrQA=="],
 
     "magic-string": ["magic-string@1.4.5", "", { "dependencies": { "@jridgewell/sourcemap-codec": "^1.6.0" } }, "sha512-oLLC2+YvQUfAa+vxoufE/yc1icb87M9iXIRqAoR/2EhE/8cb3SF/+Gi0c2By1B+5Vz2e2vQtUvHiu1+63Znh+w=="],
 
