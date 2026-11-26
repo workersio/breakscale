@@ -235,6 +235,8 @@ const FIELDS = [
   'burstSize',
   'herdSize',
   'herdSpreadMs',
+  'cacheKeys',
+  'cacheTtlMs',
 ] as const satisfies readonly ConfigField[];
 
 /** Every field the wire can carry; exported so a test can prove it is complete. */
@@ -295,7 +297,13 @@ const SCHEMA: Record<NodeKind, readonly ConfigField[]> = {
   ],
   lb: [...COMMON, ...CORRECTNESS],
   service: [...COMMON, ...CORRECTNESS],
-  cache: ['hitRate', ...COMMON.filter((f) => f !== 'hitRate'), ...CORRECTNESS],
+  cache: [
+    'hitRate',
+    ...COMMON.filter((f) => f !== 'hitRate'),
+    ...CORRECTNESS,
+    'cacheKeys',
+    'cacheTtlMs',
+  ],
   db: ['readFraction', 'lockMs', ...COMMON, ...CORRECTNESS, 'flushEveryMs'],
   queue: COMMON,
   worker: [...COMMON, ...CORRECTNESS],
@@ -309,7 +317,13 @@ const SCHEMA: Record<NodeKind, readonly ConfigField[]> = {
     ...COMMON,
   ],
   region: ['regions', 'activeRegion', 'failoverMs', ...COMMON, ...CORRECTNESS],
-  cdn: ['hitRate', ...COMMON.filter((f) => f !== 'hitRate'), ...CORRECTNESS],
+  cdn: [
+    'hitRate',
+    ...COMMON.filter((f) => f !== 'hitRate'),
+    ...CORRECTNESS,
+    'cacheKeys',
+    'cacheTtlMs',
+  ],
   ratelimiter: ['rateLimitRps', 'burst', ...COMMON, ...CORRECTNESS],
   breaker: [
     'errorThreshold',

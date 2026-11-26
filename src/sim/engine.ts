@@ -2057,6 +2057,10 @@ export class Engine implements BehaviourCtx {
       state.lostInLastCrash = memory.crash(this.now, this.landWrite, this.loseWrite);
     }
 
+    // What the process held in memory is gone with it: a cache comes back
+    // cold, and every read it would have answered goes to the store.
+    state.behaviour.onMemoryLost?.(state);
+
     const waiting: Req[] = [];
     for (let i = state.waitHead; i < state.waiting.length; i++) {
       const req = state.waiting[i];
