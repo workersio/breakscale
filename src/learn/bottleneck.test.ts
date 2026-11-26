@@ -77,6 +77,21 @@ describe('findBottleneck', () => {
     expect(wrong).toEqual([]);
   }, 60_000);
 
+  it('says "its only slot" for a part with one slot, not "all 1 slots"', () => {
+    const t = preset('single-server');
+    const db = idOf(t, 'Database');
+    const one: Topology = {
+      ...t,
+      nodes: t.nodes.map((n) =>
+        n.id === db ? { ...n, config: { ...n.config, capacity: 1, instances: 1 } } : n,
+      ),
+    };
+    const run = runFor(one, 10);
+    expect(problemAt(run)).toBe(db);
+    expect(run.verdict.text).toContain('Database: its only slot busy');
+    expect(run.verdict.text).not.toContain('all 1 ');
+  });
+
   it('names the database in the single server example at 270 a second', () => {
     const run = runFor(scaled(preset('single-server'), 5.4), 10);
     const db = idOf(run.topology, 'Database');
